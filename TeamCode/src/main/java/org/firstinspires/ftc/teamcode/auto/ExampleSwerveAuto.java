@@ -9,7 +9,7 @@ import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 
-@Autonomous(name = "Example Swerve Auto", group = "Auto")
+@Autonomous(name = "ExampleSwerveAuto", group = "Auto")
 public class ExampleSwerveAuto extends OpMode {
     private static final Pose START_POSE = new Pose(72.0, 72.0, 0.0);
     private static final Pose END_POSE = new Pose(96.0, 72.0, 0.0);
