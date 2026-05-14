@@ -1,2 +1,4 @@
 include ':FtcRobotController'
 include ':TeamCode'
+
+includeBuild 'third_party/PedroPathing'
