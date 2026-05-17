@@ -19,7 +19,7 @@
   } from "../types";
   import * as browserFileStore from "../utils/browserFileStore";
   import { currentFilePath, isUnsaved, dualPathMode, secondFilePath } from "../stores";
-  import { getRandomColor } from "../utils";
+  import { getRandomColor, mirrorPathData } from "../utils";
   import {
     saveAutoPathsDirectory,
     getSavedAutoPathsDirectory,
@@ -73,6 +73,25 @@
     return String(error);
   }
 
+  function normalizeEventMarkers(markers: Line["eventMarkers"] = []) {
+    return (markers || []).map((marker, index) => {
+      const position = Number(marker.position ?? 0.5);
+      const durationMs = Number(marker.durationMs ?? 0);
+
+      return {
+        ...marker,
+        id: marker.id || `event-${Math.random().toString(36).slice(2)}`,
+        name: (marker.name || "").trim() || `Event ${index + 1}`,
+        position: Number.isFinite(position)
+          ? Math.max(0, Math.min(1, position))
+          : 0.5,
+        durationMs: Number.isFinite(durationMs)
+          ? Math.max(0, Math.round(durationMs))
+          : 0,
+      };
+    });
+  }
+
   // Normalize lines to ensure ids and wait fields exist
   function normalizeLines(input: Line[] = []): Line[] {
     return (input || []).map((line) => ({
@@ -90,6 +109,7 @@
       waitBeforeName:
         line.waitBeforeName ?? (line as any).waitBefore?.name ?? "",
       waitAfterName: line.waitAfterName ?? (line as any).waitAfter?.name ?? "",
+      eventMarkers: normalizeEventMarkers(line.eventMarkers),
     }));
   }
 
@@ -138,13 +158,40 @@
   }
 
   function bindPointToPoseVariable(point: Point, variable: PoseVariable): Point {
-    return {
+    const targetHeading = Number.isFinite(Number(variable.heading))
+      ? Number(variable.heading)
+      : 0;
+    const basePoint = {
       x: Number(variable.x) || 0,
       y: Number(variable.y) || 0,
       locked: point.locked,
       poseVariableId: variable.id,
+    };
+
+    if (point.heading === "linear") {
+      return {
+        ...basePoint,
+        heading: "linear",
+        startDeg: Number.isFinite(Number(point.startDeg))
+          ? Number(point.startDeg)
+          : targetHeading,
+        endDeg: targetHeading,
+        headingCurve: point.headingCurve ?? 1,
+      };
+    }
+
+    if (point.heading === "tangential") {
+      return {
+        ...basePoint,
+        heading: "tangential",
+        reverse: point.reverse ?? false,
+      };
+    }
+
+    return {
+      ...basePoint,
       heading: "constant",
-      degrees: Number(variable.heading) || 0,
+      degrees: targetHeading,
     };
   }
 
@@ -732,76 +779,6 @@
   function handleMirrorNameCancel() {
     pendingMirrorData = null;
     nameDialogOpen = false;
-  }
-
-  function mirrorPointHeading(point: Point): Point {
-    // For linear heading, mirror both start and end degrees
-    if (point.heading === "linear") {
-      return {
-        ...point,
-        startDeg: 180 - point.startDeg,
-        endDeg: 180 - point.endDeg,
-      };
-    }
-
-    // For constant heading, mirror the constant degree
-    if (point.heading === "constant") {
-      return {
-        ...point,
-        degrees: 180 - point.degrees,
-      };
-    }
-
-    // For tangential heading, toggle the reverse flag to maintain the same visual direction
-    if (point.heading === "tangential") {
-      return {
-        ...point,
-        reverse: !point.reverse,
-      };
-    }
-
-    return point;
-  }
-
-  function mirrorPathData(data: any) {
-    const mirrored = JSON.parse(JSON.stringify(data)); // Deep clone
-
-    // Mirror start point
-    if (mirrored.startPoint) {
-      mirrored.startPoint.x = 141.5 - mirrored.startPoint.x;
-      mirrored.startPoint = mirrorPointHeading(mirrored.startPoint);
-    }
-
-    // Mirror lines
-    if (mirrored.lines && Array.isArray(mirrored.lines)) {
-      mirrored.lines.forEach((line: Line) => {
-        // Mirror end point
-        if (line.endPoint) {
-          line.endPoint.x = 141.5 - line.endPoint.x;
-          line.endPoint = mirrorPointHeading(line.endPoint);
-        }
-
-        // Mirror control points
-        if (line.controlPoints && Array.isArray(line.controlPoints)) {
-          line.controlPoints.forEach((controlPoint: any) => {
-            controlPoint.x = 141.5 - controlPoint.x;
-          });
-        }
-      });
-    }
-
-    if (Array.isArray(mirrored.poseVariables)) {
-      mirrored.poseVariables = mirrored.poseVariables.map((variable: PoseVariable) => ({
-        ...variable,
-        x: 141.5 - variable.x,
-        heading: 180 - variable.heading,
-      }));
-    }
-
-    // Don't mirror shapes/obstacles - they should remain in their original positions
-    // (removed mirroring logic for shapes)
-
-    return mirrored;
   }
 
   // Toast notification system

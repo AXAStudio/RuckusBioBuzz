@@ -10,15 +10,19 @@
     PoseVariable,
   } from "../types";
   import _ from "lodash";
-  import { getRandomColor } from "../utils";
+  import {
+    calculatePathTime,
+    getRandomColor,
+    mirrorPathData,
+    type MirrorAxis,
+  } from "../utils";
   import ObstaclesSection from "./components/ObstaclesSection.svelte";
-  import RobotPositionDisplay from "./components/RobotPositionDisplay.svelte";
+  import TelemetryPanel from "./components/TelemetryPanel.svelte";
   import StartingPointSection from "./components/StartingPointSection.svelte";
   import PathLineSection from "./components/PathLineSection.svelte";
   import PoseVariablesSection from "./components/PoseVariablesSection.svelte";
   import PlaybackControls from "./components/PlaybackControls.svelte";
   import WaitRow from "./components/WaitRow.svelte";
-  import { calculatePathTime } from "../utils";
 
   export let percent: number;
   export let playing: boolean;
@@ -313,6 +317,7 @@
 
     timePrediction.timeline.forEach((ev) => {
       if ((ev as any).type === "travel") {
+        const start = (ev as any).startTime as number;
         const end = (ev as any).endTime as number;
         const pct = (end / timePrediction.totalTime) * 100;
         const lineIndex = (ev as any).lineIndex as number;
@@ -320,6 +325,21 @@
         const color = line?.color || "#ffffff";
         const name = line?.name || `Path ${lineIndex + 1}`;
         _markers.push({ percent: pct, color, name });
+
+        (line?.eventMarkers || []).forEach((marker, markerIndex) => {
+          const rawPosition = Number(marker.position ?? 0.5);
+          const position = Number.isFinite(rawPosition)
+            ? Math.max(0, Math.min(1, rawPosition))
+            : 0.5;
+          const markerPct =
+            ((start + (end - start) * position) / timePrediction.totalTime) *
+            100;
+          _markers.push({
+            percent: markerPct,
+            color: "#a855f7",
+            name: `${marker.name || `Event ${markerIndex + 1}`} on ${name}`,
+          });
+        });
       }
     });
 
@@ -368,6 +388,14 @@
     return 0;
   }
 
+  function firstFinite(...values: unknown[]): number {
+    for (const value of values) {
+      const numeric = Number(value);
+      if (Number.isFinite(numeric)) return numeric;
+    }
+    return 0;
+  }
+
   function makePoseVariableName(): string {
     const usedNames = new Set(poseVariables.map((variable) => variable.name.trim()));
     let index = poseVariables.length + 1;
@@ -381,14 +409,44 @@
     return name;
   }
 
-  function bindPointToPoseVariable(point: Point, variable: PoseVariable): Point {
-    return {
+  function bindPointToPoseVariable(
+    point: Point,
+    variable: PoseVariable,
+    forcePoseHeading = false,
+    preferLinear = false,
+  ): Point {
+    const targetHeading = Number.isFinite(Number(variable.heading))
+      ? Number(variable.heading)
+      : 0;
+    const basePoint = {
       x: Number(variable.x) || 0,
       y: Number(variable.y) || 0,
       locked: point.locked,
       poseVariableId: variable.id,
+    };
+
+    if (preferLinear || point.heading === "linear") {
+      return {
+        ...basePoint,
+        heading: "linear",
+        startDeg: firstFinite(point.startDeg, point.degrees, point.endDeg, targetHeading),
+        endDeg: targetHeading,
+        headingCurve: point.headingCurve ?? 1,
+      };
+    }
+
+    if (!forcePoseHeading && point.heading === "tangential") {
+      return {
+        ...basePoint,
+        heading: "tangential",
+        reverse: point.reverse ?? false,
+      };
+    }
+
+    return {
+      ...basePoint,
       heading: "constant",
-      degrees: Number(variable.heading) || 0,
+      degrees: targetHeading,
     };
   }
 
@@ -462,7 +520,7 @@
     const variable = poseVariables.find((item) => item.id === poseVariableId);
     if (!variable) return;
 
-    startPoint = bindPointToPoseVariable(startPoint, variable);
+    startPoint = bindPointToPoseVariable(startPoint, variable, true);
     recordChange?.();
   }
 
@@ -475,10 +533,81 @@
       return {
         ...line,
         endPoint: variable
-          ? bindPointToPoseVariable(line.endPoint, variable)
+          ? bindPointToPoseVariable(line.endPoint, variable, false, true)
           : clearPointPoseVariable(line.endPoint),
       };
     });
+    recordChange?.();
+  }
+
+  function buildPointWithHeadingMode(point: Point, mode: string): Point {
+    const variable = point.poseVariableId
+      ? poseVariables.find((item) => item.id === point.poseVariableId)
+      : null;
+    const targetHeading = variable ? Number(variable.heading) || 0 : null;
+    const previousHeading = firstFinite(
+      point.startDeg,
+      point.degrees,
+      point.endDeg,
+      targetHeading,
+    );
+    const basePoint = {
+      x: Number(point.x) || 0,
+      y: Number(point.y) || 0,
+      locked: point.locked,
+      poseVariableId: point.poseVariableId,
+    };
+
+    if (mode === "linear") {
+      return {
+        ...basePoint,
+        heading: "linear",
+        startDeg: firstFinite(point.startDeg, previousHeading),
+        endDeg: targetHeading ?? firstFinite(point.endDeg, previousHeading),
+        headingCurve: point.headingCurve ?? 1,
+      };
+    }
+
+    if (mode === "tangential") {
+      return {
+        ...basePoint,
+        heading: "tangential",
+        reverse: point.reverse ?? false,
+      };
+    }
+
+    return {
+      ...basePoint,
+      heading: "constant",
+      degrees: targetHeading ?? previousHeading,
+    };
+  }
+
+  function handleLineHeadingModeChange(lineId: string, mode: string) {
+    if (!lineId) return;
+
+    lines = lines.map((line) =>
+      line.id === lineId
+        ? { ...line, endPoint: buildPointWithHeadingMode(line.endPoint, mode) }
+        : line,
+    );
+    recordChange?.();
+  }
+
+  function mirrorCurrentPath(axis: MirrorAxis) {
+    const mirrored = mirrorPathData(
+      {
+        startPoint,
+        lines,
+        poseVariables,
+      },
+      axis,
+    );
+
+    startPoint = mirrored.startPoint || startPoint;
+    lines = mirrored.lines || [];
+    poseVariables = mirrored.poseVariables || [];
+    percent = 0;
     recordChange?.();
   }
 
@@ -920,7 +1049,15 @@
   >
     <ObstaclesSection bind:shapes bind:collapsedObstacles />
 
-    <RobotPositionDisplay {robotXY} {robotHeading} {x} {y} />
+    <TelemetryPanel
+      {percent}
+      {timePrediction}
+      {lines}
+      {robotXY}
+      {robotHeading}
+      {x}
+      {y}
+    />
 
     <PoseVariablesSection
       bind:poseVariables
@@ -938,6 +1075,26 @@
       {addWaitAtStart}
       {addEventAtStart}
     />
+
+    <div class="w-full rounded-md border border-neutral-200 dark:border-neutral-700 p-3 bg-white dark:bg-neutral-800">
+      <div class="flex items-center gap-2">
+        <p class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-300">Mirror</p>
+        <button
+          on:click={() => mirrorCurrentPath("x")}
+          class="px-2.5 py-1.5 text-xs font-semibold rounded bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-200"
+          title="Mirror X coordinates across the field centerline"
+        >
+          X
+        </button>
+        <button
+          on:click={() => mirrorCurrentPath("y")}
+          class="px-2.5 py-1.5 text-xs font-semibold rounded bg-teal-100 text-teal-700 dark:bg-teal-900 dark:text-teal-200"
+          title="Mirror Y coordinates across the field centerline"
+        >
+          Y
+        </button>
+      </div>
+    </div>
 
     <div class="w-full rounded-md border border-neutral-200 dark:border-neutral-700 p-3 bg-white dark:bg-neutral-800">
       <div class="flex items-center gap-2 mb-2">
@@ -1021,6 +1178,7 @@
               onChainChange={(chainId) => assignLineToChain(ln.id || "", chainId)}
               {poseVariables}
               onPoseVariableChange={handleLinePoseVariableChange}
+              onHeadingModeChange={handleLineHeadingModeChange}
               {recordChange}
             />
           {/each}

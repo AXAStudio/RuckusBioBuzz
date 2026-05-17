@@ -2,7 +2,22 @@
   import { createEventDispatcher } from "svelte";
   export let endPoint: any;
   export let locked: boolean = false;
+  export let boundEndHeading: number | null = null;
+  export let onHeadingModeChange: (mode: string) => void = () => {};
   const dispatch = createEventDispatcher();
+
+  $: poseTargetHeading =
+    boundEndHeading !== null && Number.isFinite(Number(boundEndHeading))
+      ? Number(boundEndHeading)
+      : null;
+
+  $: if (poseTargetHeading !== null && endPoint.heading === "constant") {
+    endPoint.degrees = poseTargetHeading;
+  }
+
+  $: if (poseTargetHeading !== null && endPoint.heading === "linear") {
+    endPoint.endDeg = poseTargetHeading;
+  }
 
   function handleConstantInput(event: Event) {
     const target = event.currentTarget as HTMLInputElement;
@@ -24,23 +39,15 @@
     }
     dispatch("commit");
   }
+
+  function handleHeadingModeChange(event: Event) {
+    onHeadingModeChange((event.currentTarget as HTMLSelectElement).value);
+  }
 </script>
 
 <select
-  bind:value={endPoint.heading}
-  on:change={() => {
-    // Initialize missing properties based on the selected heading type
-    if (endPoint.heading === "constant" && endPoint.degrees === undefined) {
-      endPoint.degrees = 0;
-    } else if (endPoint.heading === "linear") {
-      if (endPoint.startDeg === undefined) endPoint.startDeg = 0;
-      if (endPoint.endDeg === undefined) endPoint.endDeg = 0;
-      if (endPoint.headingCurve === undefined) endPoint.headingCurve = 1;
-    } else if (endPoint.heading === "tangential") {
-      if (endPoint.reverse === undefined) endPoint.reverse = false;
-    }
-    dispatch("change");
-  }}
+  value={endPoint.heading}
+  on:change={handleHeadingModeChange}
   class=" rounded-md bg-neutral-100 dark:bg-neutral-950 dark:border-neutral-700 border-[0.5px] focus:outline-none w-28 text-sm"
   title="The heading style of the robot. 
 With constant heading, the robot maintains the same heading throughout the line. 
@@ -79,8 +86,10 @@ With tangential heading, the heading follows the direction of the line."
       bind:value={endPoint.endDeg}
       on:input={() => dispatch("change")}
       on:blur={() => dispatch("commit")}
-      title="The heading the robot ends this line at (in degrees)"
-      disabled={locked}
+      title={poseTargetHeading !== null
+        ? "The ending heading comes from the selected pose"
+        : "The heading the robot ends this line at (in degrees)"}
+      disabled={locked || poseTargetHeading !== null}
     />
   </div>
 {:else if endPoint.heading === "constant"}
@@ -95,8 +104,10 @@ With tangential heading, the heading follows the direction of the line."
       value={endPoint.degrees || 0}
       on:input={handleConstantInput}
       on:blur={handleConstantBlur}
-      title="The constant heading the robot maintains throughout this line (in degrees)"
-      disabled={locked}
+      title={poseTargetHeading !== null
+        ? "The heading comes from the selected pose"
+        : "The constant heading the robot maintains throughout this line (in degrees)"}
+      disabled={locked || poseTargetHeading !== null}
     />
   </div>
 {:else if endPoint.heading === "tangential"}

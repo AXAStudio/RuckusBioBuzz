@@ -51,8 +51,10 @@ export interface WaitSegment {
 }
 
 export interface EventMarker {
+  id?: string;
   name: string;
   position: number;
+  durationMs?: number;
 }
 
 export interface Line {

@@ -204,10 +204,11 @@ interface FPASettings {
 }
 
 interface EventMarker {
-  id: string;
+  id?: string;
   name: string;
   position: number; // 0-1 within the path segment
-  lineIndex: number;
+  lineIndex?: number;
+  durationMs?: number;
   parameters?: Record<string, any>; // Optional parameters for the command
 }
 

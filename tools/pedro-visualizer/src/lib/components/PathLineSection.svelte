@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Line, PoseVariable } from "../../types";
+  import type { EventMarker, Line, PoseVariable } from "../../types";
   import { snapToGrid, showGrid, gridSize } from "../../stores";
   import ControlPointsSection from "./ControlPointsSection.svelte";
   import HeadingControls from "./HeadingControls.svelte";
@@ -27,12 +27,22 @@
   export let onChainChange: (chainId: string) => void;
   export let poseVariables: PoseVariable[] = [];
   export let onPoseVariableChange: (lineId: string, poseVariableId: string) => void = () => {};
+  export let onHeadingModeChange: (lineId: string, mode: string) => void = () => {};
 
 
   $: snapToGridTitle =
     $snapToGrid && $showGrid ? `Snapping to ${$gridSize} grid` : "No snapping";
   $: isEndPointBoundToPoseVariable = Boolean(line.endPoint?.poseVariableId);
+  $: boundPoseVariableHeading = (() => {
+    const poseVariableId = line.endPoint?.poseVariableId;
+    if (!poseVariableId) return null;
+    const variable = poseVariables.find((item) => item.id === poseVariableId);
+    if (!variable) return null;
+    const heading = Number(variable.heading);
+    return Number.isFinite(heading) ? heading : 0;
+  })();
   $: pathSpeedValue = clampPathSpeed(line?.speed);
+  $: eventMarkers = line.eventMarkers || [];
 
   function toggleCollapsed() {
     collapsed = !collapsed;
@@ -66,6 +76,93 @@
   function handlePoseVariableSelect(event: Event) {
     onPoseVariableChange(line.id || "", (event.currentTarget as HTMLSelectElement).value);
   }
+
+  function makeEventMarkerId() {
+    return `event-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  function clampEventPosition(value: number | undefined): number {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0.5;
+    return Math.max(0, Math.min(1, numeric));
+  }
+
+  function clampEventDuration(value: number | undefined): number {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    return Math.max(0, Math.round(numeric));
+  }
+
+  function normalizeEventMarker(marker: EventMarker, index: number): EventMarker {
+    return {
+      ...marker,
+      id: marker.id || makeEventMarkerId(),
+      name: marker.name || `Event ${index + 1}`,
+      position: clampEventPosition(marker.position),
+      durationMs: clampEventDuration(marker.durationMs),
+    };
+  }
+
+  function setEventMarkers(nextMarkers: EventMarker[], commit = false) {
+    line.eventMarkers = nextMarkers.map(normalizeEventMarker);
+    lines = [...lines];
+    if (commit) recordChange?.();
+  }
+
+  function addEventMarker() {
+    const nextIndex = eventMarkers.length;
+    setEventMarkers(
+      [
+        ...eventMarkers,
+        {
+          id: makeEventMarkerId(),
+          name: `Event ${nextIndex + 1}`,
+          position: 0.5,
+          durationMs: 0,
+        },
+      ],
+      true,
+    );
+  }
+
+  function updateEventMarker(index: number, patch: Partial<EventMarker>, commit = false) {
+    const nextMarkers = eventMarkers.map((marker, markerIndex) =>
+      markerIndex === index ? { ...marker, ...patch } : marker,
+    );
+    setEventMarkers(nextMarkers, commit);
+  }
+
+  function handleEventNameInput(index: number, event: Event) {
+    updateEventMarker(index, {
+      name: (event.currentTarget as HTMLInputElement).value,
+    });
+  }
+
+  function handleEventPositionInput(index: number, event: Event) {
+    updateEventMarker(index, {
+      position: Number((event.currentTarget as HTMLInputElement).value),
+    });
+  }
+
+  function handleEventPercentInput(index: number, event: Event) {
+    updateEventMarker(index, {
+      position: Number((event.currentTarget as HTMLInputElement).value) / 100,
+    });
+  }
+
+  function handleEventDurationInput(index: number, event: Event) {
+    updateEventMarker(index, {
+      durationMs: Number((event.currentTarget as HTMLInputElement).value),
+    });
+  }
+
+  function removeEventMarker(index: number) {
+    setEventMarkers(
+      eventMarkers.filter((_, markerIndex) => markerIndex !== index),
+      true,
+    );
+  }
+
 </script>
 
 <div class="flex flex-col w-full justify-start items-start gap-1 rounded-md p-1">
@@ -420,7 +517,9 @@
 
         <HeadingControls
           endPoint={line.endPoint}
-          locked={line.locked || isEndPointBoundToPoseVariable}
+          locked={line.locked}
+          boundEndHeading={boundPoseVariableHeading}
+          onHeadingModeChange={(mode) => onHeadingModeChange(line.id || "", mode)}
           on:change={() => {
             // Force reactivity so timeline recalculates immediately
             lines = [...lines];
@@ -437,7 +536,7 @@
         <div class="mt-2 w-full">
           <HeadingCurveEditor
             endPoint={line.endPoint}
-            locked={line.locked || isEndPointBoundToPoseVariable}
+            locked={line.locked}
             on:change={() => {
               lines = [...lines];
             }}
@@ -448,6 +547,104 @@
           />
         </div>
       {/if}
+
+      <div class="mt-3 w-full border-t border-neutral-200 dark:border-neutral-800 pt-2">
+        <div class="flex flex-row items-center gap-2 mb-2">
+          <div class="font-light">Parallel Events:</div>
+          <button
+            title={line.locked ? "Path locked" : "Add parallel event"}
+            on:click={addEventMarker}
+            disabled={line.locked}
+            class="p-1 rounded text-purple-600 hover:text-purple-700 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              class="size-5"
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14M5 12h14" />
+            </svg>
+          </button>
+        </div>
+
+        {#if eventMarkers.length > 0}
+          <div class="flex flex-col gap-2 w-full">
+            {#each eventMarkers as marker, eventIdx (marker.id || `${line.id}-event-${eventIdx}`)}
+              <div
+                class="flex flex-row items-center gap-2 flex-wrap w-full rounded border border-neutral-200 dark:border-neutral-800 bg-neutral-50 dark:bg-neutral-950 p-2"
+              >
+                <div class="font-extralight">Name:</div>
+                <input
+                  class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-700 border-[0.5px] focus:outline-none w-36"
+                  value={marker.name}
+                  disabled={line.locked}
+                  on:input={(event) => handleEventNameInput(eventIdx, event)}
+                  on:blur={() => updateEventMarker(eventIdx, {}, true)}
+                />
+
+                <div class="font-extralight">Trigger:</div>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={clampEventPosition(marker.position)}
+                  disabled={line.locked}
+                  on:input={(event) => handleEventPositionInput(eventIdx, event)}
+                  on:change={() => updateEventMarker(eventIdx, {}, true)}
+                  class="w-32"
+                />
+                <input
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="1"
+                  value={Math.round(clampEventPosition(marker.position) * 100)}
+                  disabled={line.locked}
+                  on:input={(event) => handleEventPercentInput(eventIdx, event)}
+                  on:blur={() => updateEventMarker(eventIdx, {}, true)}
+                  class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-700 border-[0.5px] focus:outline-none w-16"
+                />
+                <div class="font-extralight">%</div>
+
+                <div class="font-extralight">Duration ms:</div>
+                <input
+                  type="number"
+                  min="0"
+                  step="50"
+                  value={clampEventDuration(marker.durationMs)}
+                  disabled={line.locked}
+                  title="0 keeps the event active until auto end"
+                  on:input={(event) => handleEventDurationInput(eventIdx, event)}
+                  on:blur={() => updateEventMarker(eventIdx, {}, true)}
+                  class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-700 border-[0.5px] focus:outline-none w-24"
+                />
+
+                <button
+                  title={line.locked ? "Path locked" : "Remove parallel event"}
+                  on:click={() => removeEventMarker(eventIdx)}
+                  disabled={line.locked}
+                  class="ml-auto p-1 rounded text-red-500 hover:text-red-600 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    class="size-5"
+                  >
+                    <path stroke-linecap="round" stroke-linejoin="round" d="M6 12h12" />
+                  </svg>
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
     </div>
 
     <ControlPointsSection

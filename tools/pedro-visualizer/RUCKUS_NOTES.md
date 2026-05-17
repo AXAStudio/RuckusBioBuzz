@@ -11,8 +11,12 @@ Local customization:
 - Generated autos use this repo's `PathStep` helper for the start and endpoint poses.
 - The sequence editor supports `Path`, `Wait`, and `Event` items. `Add Event` creates a timed `Shoot` event by default.
 - The control panel supports named pose variables that can be assigned to the start pose or path endpoints.
+- Endpoints assigned to pose variables still allow editable heading mode, linear start heading, and heading curve while the pose controls the final position/heading.
 - Each path has a `Path Speed` scale from `0.05` to `1.0`; TeamCode export passes it to PedroPathing as the per-path max power.
+- Each path can define parallel event markers. TeamCode export turns them into PedroPathing parametric callbacks so mechanisms can start while the path is still running, with optional timed finish handling.
+- The control panel has a telemetry readout that follows playback, showing the current path state, pose, path progress, path speed, active parallel events, and the next queued event marker.
 - Linear heading paths include an editable heading curve graph. Values above `1.0` shift more of the turn toward the end of the path.
+- The control panel includes `Mirror X` and `Mirror Y` actions for switching alliances by flipping path coordinates and headings on either field axis.
 - The TeamCode exporter validates generated autos, can download a `.java` file, and can save directly to `TeamCode/src/main/java/org/firstinspires/ftc/teamcode/auto/` while running from Vite.
 
 Run locally:

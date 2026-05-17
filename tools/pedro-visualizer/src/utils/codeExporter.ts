@@ -1,5 +1,13 @@
 import prettier from "prettier";
-import type { Point, Line, BasePoint, PathChain, SequenceItem, PoseVariable } from "../types";
+import type {
+  Point,
+  Line,
+  BasePoint,
+  PathChain,
+  SequenceItem,
+  PoseVariable,
+  EventMarker,
+} from "../types";
 import { getCurvePoint } from "./math";
 
 // Lazy-load Prettier's Java plugin; fall back gracefully if unavailable
@@ -68,6 +76,20 @@ function pathSpeed(line: Line | undefined): number {
   const speed = Number(line?.speed ?? 1);
   if (!Number.isFinite(speed)) return 1;
   return Math.max(0.05, Math.min(1, speed));
+}
+
+function normalizeEventMarkers(line: Line, pathIndex = 0): Required<EventMarker>[] {
+  return (line.eventMarkers || []).map((marker, markerIndex) => {
+    const position = Number(marker.position);
+    const durationMs = Number(marker.durationMs ?? 0);
+
+    return {
+      id: marker.id || `path-${pathIndex + 1}-event-${markerIndex + 1}`,
+      name: marker.name?.trim() || `Path ${pathIndex + 1} Event ${markerIndex + 1}`,
+      position: Number.isFinite(position) ? Math.max(0, Math.min(1, position)) : 0.5,
+      durationMs: Number.isFinite(durationMs) ? Math.max(0, Math.round(durationMs)) : 0,
+    };
+  });
 }
 
 function headingCurve(line: Line): number {
@@ -139,6 +161,7 @@ function buildTeamCodePathSegmentCode(
   line: Line,
   startExpression: string,
   endExpression: string,
+  pathIndex = 0,
 ): string {
   const controlPoints = line.controlPoints
     .map((point) => `new Pose(${fixed(point.x)}, ${fixed(point.y)})`)
@@ -159,13 +182,19 @@ function buildTeamCodePathSegmentCode(
           : `.setTangentHeadingInterpolation()`;
 
   const reverseConfig = line.endPoint.reverse ? "\n          .setReversed()" : "";
+  const callbackConfig = normalizeEventMarkers(line, pathIndex)
+    .map(
+      (marker) =>
+        `\n          .addParametricCallback(${fixed(marker.position)}, () -> startParallelEvent(${javaStringLiteral(marker.name)}, ${marker.durationMs}L))`,
+    )
+    .join("");
 
   return `.addPath(
             new ${curveType}(
               ${allPoints}
             )
           )
-          ${headingCall}${reverseConfig}`;
+          ${headingCall}${reverseConfig}${callbackConfig}`;
 }
 
 function javaStringLiteral(value: string): string {
@@ -271,7 +300,12 @@ export async function generateTeamCodeAutoCode(
           ? pointStepExpression(startPoint, "START_STEP")
           : pointStepExpression(linesWithIds[idx - 1].endPoint, `POINT_${idx}`);
       const endExpression = pointStepExpression(line.endPoint, `POINT_${idx + 1}`);
-      const segmentSnippet = buildTeamCodePathSegmentCode(line, startExpression, endExpression);
+      const segmentSnippet = buildTeamCodePathSegmentCode(
+        line,
+        startExpression,
+        endExpression,
+        idx,
+      );
 
       return `path${idx + 1} = follower.pathBuilder()
           ${segmentSnippet}
@@ -285,14 +319,17 @@ export async function generateTeamCodeAutoCode(
       : linesWithIds.map((line) => ({ kind: "path", lineId: line.id! }) as SequenceItem);
   const eventItems = sequenceItems.filter((item) => item.kind === "event");
   const eventMethods = new Map<string, { name: string; suffix: string }>();
+  const pathEventMarkers = linesWithIds.flatMap((line, lineIndex) =>
+    normalizeEventMarkers(line, lineIndex),
+  );
+  const parallelEventCapacity = Math.max(1, pathEventMarkers.length);
 
-  eventItems.forEach((item, idx) => {
-    const eventName = item.name?.trim() || `Event ${idx + 1}`;
+  function registerEventMethod(eventName: string, fallbackSuffix: string) {
     if (eventMethods.has(eventName)) {
       return;
     }
 
-    const baseSuffix = sanitizeJavaMethodSuffix(eventName, `Event${idx + 1}`);
+    const baseSuffix = sanitizeJavaMethodSuffix(eventName, fallbackSuffix);
     let suffix = baseSuffix;
     let duplicateIndex = 2;
     while ([...eventMethods.values()].some((event) => event.suffix === suffix)) {
@@ -300,6 +337,15 @@ export async function generateTeamCodeAutoCode(
       duplicateIndex++;
     }
     eventMethods.set(eventName, { name: eventName, suffix });
+  }
+
+  eventItems.forEach((item, idx) => {
+    const eventName = item.name?.trim() || `Event ${idx + 1}`;
+    registerEventMethod(eventName, `Event${idx + 1}`);
+  });
+
+  pathEventMarkers.forEach((marker, idx) => {
+    registerEventMethod(marker.name, `PathEvent${idx + 1}`);
   });
 
   const sequenceCases = sequenceItems
@@ -373,6 +419,10 @@ public class ${autoClassName} extends OpMode {
     private long stepStartTime;
     private boolean stepStarted;
     private boolean pathFinished;
+    private static final int PARALLEL_EVENT_CAPACITY = ${parallelEventCapacity};
+    private final String[] activeParallelEventNames = new String[PARALLEL_EVENT_CAPACITY];
+    private final long[] activeParallelEventStartTimes = new long[PARALLEL_EVENT_CAPACITY];
+    private final long[] activeParallelEventDurations = new long[PARALLEL_EVENT_CAPACITY];
 
     @Override
     public void init() {
@@ -394,6 +444,7 @@ public class ${autoClassName} extends OpMode {
         sequenceIndex = 0;
         stepStarted = false;
         pathFinished = false;
+        resetParallelEvents();
 
         follower.setStartingPose(${pointStepExpression(startPoint, "START_STEP")});
     }
@@ -401,6 +452,7 @@ public class ${autoClassName} extends OpMode {
     @Override
     public void loop() {
         follower.update();
+        updateParallelEvents();
 
         runSequence();
 
@@ -409,6 +461,8 @@ public class ${autoClassName} extends OpMode {
 
     @Override
     public void stop() {
+        finishAllParallelEvents();
+
         if (follower == null) {
             return;
         }
@@ -431,6 +485,7 @@ public class ${autoClassName} extends OpMode {
       ${sequenceCases}
             default:
                 pathFinished = true;
+                finishAllParallelEvents();
                 follower.startTeleopDrive(true);
                 follower.setTeleOpDrive(0.0, 0.0, 0.0, true);
                 break;
@@ -497,6 +552,76 @@ public class ${autoClassName} extends OpMode {
             finishEvent(eventName);
             advanceSequence();
         }
+    }
+
+    private void startParallelEvent(String eventName, long durationMs) {
+        startEvent(eventName);
+
+        long clampedDurationMs = Math.max(0L, durationMs);
+        long now = System.currentTimeMillis();
+        int slot = -1;
+
+        for (int i = 0; i < activeParallelEventNames.length; i++) {
+            if (eventName.equals(activeParallelEventNames[i])) {
+                slot = i;
+                break;
+            }
+        }
+
+        if (slot < 0) {
+            for (int i = 0; i < activeParallelEventNames.length; i++) {
+                if (activeParallelEventNames[i] == null) {
+                    slot = i;
+                    break;
+                }
+            }
+        }
+
+        if (slot < 0) {
+            return;
+        }
+
+        activeParallelEventNames[slot] = eventName;
+        activeParallelEventStartTimes[slot] = now;
+        activeParallelEventDurations[slot] = clampedDurationMs;
+    }
+
+    private void updateParallelEvents() {
+        long now = System.currentTimeMillis();
+
+        for (int i = 0; i < activeParallelEventNames.length; i++) {
+            String eventName = activeParallelEventNames[i];
+            if (eventName == null || activeParallelEventDurations[i] <= 0L) {
+                continue;
+            }
+
+            if (now - activeParallelEventStartTimes[i] >= activeParallelEventDurations[i]) {
+                finishEvent(eventName);
+                clearParallelEvent(i);
+            }
+        }
+    }
+
+    private void finishAllParallelEvents() {
+        for (int i = 0; i < activeParallelEventNames.length; i++) {
+            String eventName = activeParallelEventNames[i];
+            if (eventName != null) {
+                finishEvent(eventName);
+                clearParallelEvent(i);
+            }
+        }
+    }
+
+    private void resetParallelEvents() {
+        for (int i = 0; i < activeParallelEventNames.length; i++) {
+            clearParallelEvent(i);
+        }
+    }
+
+    private void clearParallelEvent(int index) {
+        activeParallelEventNames[index] = null;
+        activeParallelEventStartTimes[index] = 0L;
+        activeParallelEventDurations[index] = 0L;
     }
 
     private void startEvent(String eventName) {
