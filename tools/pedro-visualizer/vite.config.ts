@@ -5,6 +5,7 @@ import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { validateTeamCodeAutoSource } from "./src/utils/javaValidation";
 
 const visualizerDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(visualizerDir, "..", "..");
@@ -41,18 +42,14 @@ function teamCodeAutoWriter(): Plugin {
             const payload = JSON.parse(body || "{}");
             const className = String(payload.className || "");
             const content = String(payload.content || "");
-
-            if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(className)) {
-              res.statusCode = 400;
-              res.end(JSON.stringify({ error: "Invalid Java class name." }));
-              return;
-            }
-
-            if (!content.includes(`public class ${className}`)) {
+            const validationIssues = validateTeamCodeAutoSource(content, className);
+            const validationError = validationIssues.find((issue) => issue.level === "error");
+            if (validationError) {
               res.statusCode = 400;
               res.end(
                 JSON.stringify({
-                  error: "Generated code does not match the requested class name.",
+                  error: validationError.message,
+                  validationIssues,
                 }),
               );
               return;

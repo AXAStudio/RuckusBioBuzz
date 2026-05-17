@@ -13,6 +13,7 @@
     generateSequentialCommandCode,
     generateTeamCodeAutoCode,
   } from "../../utils/codeExporter";
+  import { validateJavaDelimiters } from "../../utils/javaValidation";
 
   export let isOpen = false;
   export let startPoint: Point;
@@ -188,6 +189,11 @@
         level: "warning",
         message: `Class name will be exported as ${className}.`,
       });
+    }
+
+    const javaSyntaxIssue = validateJavaDelimiters(exportedCode);
+    if (javaSyntaxIssue) {
+      messages.push(javaSyntaxIssue);
     }
 
     if (!lines.length) {

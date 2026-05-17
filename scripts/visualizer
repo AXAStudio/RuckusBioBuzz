@@ -1,7 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VISUALIZER_DIR="/Users/andres.alonso29/StudioProjects/RuckusBioBuzz/tools/pedro-visualizer"
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [ -L "${SCRIPT_PATH}" ]; do
+  SCRIPT_DIR="$(cd -P "$(dirname "${SCRIPT_PATH}")" && pwd)"
+  SCRIPT_PATH="$(readlink "${SCRIPT_PATH}")"
+  [[ "${SCRIPT_PATH}" != /* ]] && SCRIPT_PATH="${SCRIPT_DIR}/${SCRIPT_PATH}"
+done
+SCRIPT_DIR="$(cd -P "$(dirname "${SCRIPT_PATH}")" && pwd)"
+VISUALIZER_DIR="$(cd "${SCRIPT_DIR}/../tools/pedro-visualizer" && pwd)"
 HOST="127.0.0.1"
 PORT="5173"
 URL="http://${HOST}:${PORT}/"
@@ -20,7 +27,7 @@ open_url() {
 
 if curl -fsS "${URL}" >/dev/null 2>&1; then
   echo "Pedro visualizer is already running at ${URL}"
-  open_url
+  open_url || true
   exit 0
 fi
 
