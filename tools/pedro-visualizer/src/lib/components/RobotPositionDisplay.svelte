@@ -1,8 +1,11 @@
 <script lang="ts">
+  import type { BasePoint } from "../../types";
+  import type { ScaleLinear } from "d3";
+
   export let robotXY: BasePoint;
   export let robotHeading: number;
-  export let x: d3.ScaleLinear<number, number, number>;
-  export let y: d3.ScaleLinear<number, number, number>;
+  export let x: ScaleLinear<number, number, number>;
+  export let y: ScaleLinear<number, number, number>;
 </script>
 
 <div class="flex flex-col w-full justify-start items-start gap-0.5 text-sm">

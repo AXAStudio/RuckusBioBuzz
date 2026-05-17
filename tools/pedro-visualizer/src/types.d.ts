@@ -2,6 +2,15 @@ interface BasePoint {
   x: number;
   y: number;
   locked?: boolean;
+  poseVariableId?: string;
+}
+
+interface PoseVariable {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  heading: number;
 }
 
 interface WaitSegment {
@@ -42,6 +51,7 @@ type Point = BasePoint &
         heading: "linear";
         startDeg: number;
         endDeg: number;
+        headingCurve?: number;
         degrees?: never;
         reverse?: never;
       }
@@ -69,6 +79,7 @@ interface Line {
   controlPoints: ControlPoint[];
   color: string;
   name?: string;
+  speed?: number;
   locked?: boolean;
   waitBefore?: WaitSegment;
   waitAfter?: WaitSegment;

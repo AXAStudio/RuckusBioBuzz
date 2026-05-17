@@ -70,6 +70,12 @@ function calculateMotionProfileTime(
   }
 }
 
+function getPathSpeed(line: Line): number {
+  const speed = Number(line.speed ?? 1);
+  if (!Number.isFinite(speed)) return 1;
+  return Math.max(0.05, Math.min(1, speed));
+}
+
 export function calculatePathTime(
   startPoint: Point,
   lines: Line[],
@@ -185,15 +191,18 @@ export function calculatePathTime(
     );
     segmentLengths.push(length);
     let segmentTime = 0;
+    const pathSpeed = getPathSpeed(line);
     if (useMotionProfile) {
       segmentTime = calculateMotionProfileTime(
         length,
-        settings.maxVelocity!,
-        settings.maxAcceleration!,
-        settings.maxDeceleration,
+        settings.maxVelocity! * pathSpeed,
+        settings.maxAcceleration! * pathSpeed,
+        settings.maxDeceleration !== undefined
+          ? settings.maxDeceleration * pathSpeed
+          : undefined,
       );
     } else {
-      const avgVelocity = (settings.xVelocity + settings.yVelocity) / 2;
+      const avgVelocity = ((settings.xVelocity + settings.yVelocity) / 2) * pathSpeed;
       segmentTime = length / avgVelocity;
     }
     segmentTimes.push(segmentTime);

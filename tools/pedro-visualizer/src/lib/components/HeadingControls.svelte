@@ -3,6 +3,27 @@
   export let endPoint: any;
   export let locked: boolean = false;
   const dispatch = createEventDispatcher();
+
+  function handleConstantInput(event: Event) {
+    const target = event.currentTarget as HTMLInputElement;
+    const value = parseFloat(target.value);
+    if (!isNaN(value)) {
+      endPoint.degrees = value;
+    } else {
+      endPoint.degrees = 0;
+      target.value = "0";
+    }
+    dispatch("change");
+  }
+
+  function handleConstantBlur(event: Event) {
+    const target = event.currentTarget as HTMLInputElement;
+    if (target.value === "" || isNaN(parseFloat(target.value))) {
+      endPoint.degrees = 0;
+      target.value = "0";
+    }
+    dispatch("commit");
+  }
 </script>
 
 <select
@@ -14,6 +35,7 @@
     } else if (endPoint.heading === "linear") {
       if (endPoint.startDeg === undefined) endPoint.startDeg = 0;
       if (endPoint.endDeg === undefined) endPoint.endDeg = 0;
+      if (endPoint.headingCurve === undefined) endPoint.headingCurve = 1;
     } else if (endPoint.heading === "tangential") {
       if (endPoint.reverse === undefined) endPoint.reverse = false;
     }
@@ -71,24 +93,8 @@ With tangential heading, the heading follows the direction of the line."
       min="-180"
       max="180"
       value={endPoint.degrees || 0}
-      on:input={(e) => {
-        const value = parseFloat(e.target.value);
-        if (!isNaN(value)) {
-          endPoint.degrees = value;
-        } else {
-          // If empty or invalid, set to 0
-          endPoint.degrees = 0;
-          e.target.value = "0";
-        }
-        dispatch("change");
-      }}
-      on:blur={(e) => {
-        if (e.target.value === "" || isNaN(parseFloat(e.target.value))) {
-          endPoint.degrees = 0;
-          e.target.value = "0";
-        }
-        dispatch("commit");
-      }}
+      on:input={handleConstantInput}
+      on:blur={handleConstantBlur}
       title="The constant heading the robot maintains throughout this line (in degrees)"
       disabled={locked}
     />

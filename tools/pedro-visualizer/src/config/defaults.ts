@@ -78,6 +78,7 @@ export function getDefaultLines(): Line[] {
       endPoint: { x: 56, y: 36, heading: "linear", startDeg: 90, endDeg: 180 },
       controlPoints: [],
       color: "#ffc516",
+      speed: 1,
       locked: false,
       waitBeforeMs: 0,
       waitAfterMs: 0,

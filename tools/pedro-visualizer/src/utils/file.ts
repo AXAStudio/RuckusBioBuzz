@@ -1,4 +1,12 @@
-import type { Point, Line, Shape, SequenceItem, PathChain } from "../types";
+import type {
+  Point,
+  Line,
+  Shape,
+  SequenceItem,
+  PathChain,
+  PoseVariable,
+  Settings,
+} from "../types";
 
 /**
  * File save/load utilities for the visualizer
@@ -8,9 +16,12 @@ export interface SaveData {
   startPoint: Point;
   lines: Line[];
   shapes?: Shape[];
-  settings?: any;
+  settings?: Settings;
   sequence?: SequenceItem[];
   pathChains?: PathChain[];
+  poseVariables?: PoseVariable[];
+  version?: string;
+  timestamp?: string;
 }
 
 /**
@@ -22,8 +33,20 @@ export function downloadTrajectory(
   shapes: Shape[],
   sequence?: SequenceItem[],
   pathChains?: PathChain[],
+  poseVariables?: PoseVariable[],
+  settings?: Settings,
 ): void {
-  const jsonString = JSON.stringify({ startPoint, lines, shapes, sequence, pathChains });
+  const jsonString = JSON.stringify({
+    startPoint,
+    lines,
+    shapes,
+    sequence,
+    pathChains,
+    poseVariables,
+    settings,
+    version: "1.2.1",
+    timestamp: new Date().toISOString(),
+  });
   const blob = new Blob([jsonString], { type: "application/json" });
   const linkObj = document.createElement("a");
   const url = URL.createObjectURL(blob);

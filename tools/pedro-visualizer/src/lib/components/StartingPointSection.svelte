@@ -1,8 +1,18 @@
 <script lang="ts">
+  import type { Point, PoseVariable } from "../../types";
+
   export let startPoint: Point;
+  export let poseVariables: PoseVariable[] = [];
+  export let onPoseVariableChange: (poseVariableId: string) => void = () => {};
   export let addPathAtStart: () => void;
   export let addWaitAtStart: () => void;
   export let addEventAtStart: () => void;
+
+  $: isBoundToPoseVariable = Boolean(startPoint.poseVariableId);
+
+  function handlePoseVariableSelect(event: Event) {
+    onPoseVariableChange((event.currentTarget as HTMLSelectElement).value);
+  }
 </script>
 
 <div class="flex flex-col w-full justify-start items-start gap-0.5">
@@ -54,6 +64,20 @@
     </div>
   </div>
   <div class="flex flex-row justify-start items-center gap-2">
+    <span class="font-extralight">Pose:</span>
+    <select
+      value={startPoint.poseVariableId || ""}
+      on:change={handlePoseVariableSelect}
+      class="px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-neutral-100 dark:bg-neutral-900"
+      disabled={startPoint.locked}
+    >
+      <option value="">Custom</option>
+      {#each poseVariables as variable (variable.id)}
+        <option value={variable.id}>{variable.name || "Unnamed Pose"}</option>
+      {/each}
+    </select>
+  </div>
+  <div class="flex flex-row justify-start items-center gap-2">
     <span class="font-extralight">X:</span>
     <input
       bind:value={startPoint.x}
@@ -62,7 +86,7 @@
       type="number"
       class="pl-1.5 rounded-md bg-neutral-100 border-[0.5px] focus:outline-none w-28 dark:bg-neutral-950 dark:border-neutral-700"
       step="0.1"
-      disabled={startPoint.locked}
+      disabled={startPoint.locked || isBoundToPoseVariable}
     />
     <span class="font-extralight">Y:</span>
     <input
@@ -72,7 +96,7 @@
       type="number"
       class="pl-1.5 rounded-md bg-neutral-100 border-[0.5px] focus:outline-none w-28 dark:bg-neutral-950 dark:border-neutral-700"
       step="0.1"
-      disabled={startPoint.locked}
+      disabled={startPoint.locked || isBoundToPoseVariable}
     />
     <div class="flex items-center gap-2 ml-2">
       <button

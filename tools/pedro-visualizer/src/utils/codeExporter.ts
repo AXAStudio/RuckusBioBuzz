@@ -1,5 +1,5 @@
 import prettier from "prettier";
-import type { Point, Line, BasePoint, PathChain, SequenceItem } from "../types";
+import type { Point, Line, BasePoint, PathChain, SequenceItem, PoseVariable } from "../types";
 import { getCurvePoint } from "./math";
 
 // Lazy-load Prettier's Java plugin; fall back gracefully if unavailable
@@ -30,6 +30,31 @@ function sanitizeIdentifier(input: string | undefined, fallback: string): string
   return cleaned;
 }
 
+function sanitizeJavaConstantName(input: string | undefined, fallback: string): string {
+  const cleaned = (input || "")
+    .replace(/([a-z])([A-Z])/g, "$1_$2")
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .toUpperCase();
+
+  if (!cleaned) return fallback;
+  if (/^[0-9]/.test(cleaned)) return `${fallback}_${cleaned}`;
+  return cleaned;
+}
+
+function uniqueJavaConstantName(baseName: string, usedNames: Set<string>): string {
+  let candidate = baseName;
+  let duplicateIndex = 2;
+
+  while (usedNames.has(candidate)) {
+    candidate = `${baseName}_${duplicateIndex}`;
+    duplicateIndex++;
+  }
+
+  usedNames.add(candidate);
+  return candidate;
+}
+
 function sanitizeClassName(input: string | undefined, fallback: string): string {
   const cleaned = sanitizeIdentifier(input, fallback);
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
@@ -37,6 +62,23 @@ function sanitizeClassName(input: string | undefined, fallback: string): string 
 
 function fixed(value: number): string {
   return value.toFixed(3);
+}
+
+function pathSpeed(line: Line | undefined): number {
+  const speed = Number(line?.speed ?? 1);
+  if (!Number.isFinite(speed)) return 1;
+  return Math.max(0.05, Math.min(1, speed));
+}
+
+function headingCurve(line: Line): number {
+  if (line.endPoint.heading !== "linear") return 1;
+  const curve = Number(line.endPoint.headingCurve ?? 1);
+  if (!Number.isFinite(curve)) return 1;
+  return Math.max(0.25, Math.min(4, curve));
+}
+
+function usesCurvedHeading(line: Line): boolean {
+  return line.endPoint.heading === "linear" && Math.abs(headingCurve(line) - 1) > 0.001;
 }
 
 function pathStepHeadingDegrees(point: Point, pointRole: "start" | "end"): number {
@@ -53,6 +95,10 @@ function pathStepHeadingDegrees(point: Point, pointRole: "start" | "end"): numbe
 
 function buildPathStepCode(name: string, point: Point, pointRole: "start" | "end"): string {
   return `private static final PathStep ${name} = new PathStep(${fixed(point.x)}, ${fixed(point.y)}, ${fixed(pathStepHeadingDegrees(point, pointRole))});`;
+}
+
+function buildPoseVariablePathStepCode(name: string, variable: PoseVariable): string {
+  return `private static final PathStep ${name} = new PathStep(${fixed(Number(variable.x) || 0)}, ${fixed(Number(variable.y) || 0)}, ${fixed(Number(variable.heading) || 0)});`;
 }
 
 function buildPathSegmentCode(line: Line, startExpression: string): string {
@@ -94,12 +140,6 @@ function buildTeamCodePathSegmentCode(
   startExpression: string,
   endExpression: string,
 ): string {
-  const headingTypeToFunctionName = {
-    constant: "setConstantHeadingInterpolation",
-    linear: "setLinearHeadingInterpolation",
-    tangential: "setTangentHeadingInterpolation",
-  };
-
   const controlPoints = line.controlPoints
     .map((point) => `new Pose(${fixed(point.x)}, ${fixed(point.y)})`)
     .join(",\n              ");
@@ -109,12 +149,14 @@ function buildTeamCodePathSegmentCode(
     ? `${startExpression},\n              ${controlPoints},\n              ${endExpression}`
     : `${startExpression},\n              ${endExpression}`;
 
-  const headingConfig =
+  const headingCall =
     line.endPoint.heading === "constant"
-      ? `Math.toRadians(${fixed(line.endPoint.degrees ?? 0)})`
-      : line.endPoint.heading === "linear"
-        ? `Math.toRadians(${fixed(line.endPoint.startDeg ?? 0)}), Math.toRadians(${fixed(line.endPoint.endDeg ?? 0)})`
-        : "";
+      ? `.setConstantHeadingInterpolation(Math.toRadians(${fixed(line.endPoint.degrees ?? 0)}))`
+      : usesCurvedHeading(line)
+        ? `.setHeadingInterpolation(closestPoint -> interpolateHeading(Math.toRadians(${fixed(line.endPoint.startDeg ?? 0)}), Math.toRadians(${fixed(line.endPoint.endDeg ?? 0)}), closestPoint.getTValue(), ${fixed(headingCurve(line))}))`
+        : line.endPoint.heading === "linear"
+          ? `.setLinearHeadingInterpolation(Math.toRadians(${fixed(line.endPoint.startDeg ?? 0)}), Math.toRadians(${fixed(line.endPoint.endDeg ?? 0)}))`
+          : `.setTangentHeadingInterpolation()`;
 
   const reverseConfig = line.endPoint.reverse ? "\n          .setReversed()" : "";
 
@@ -123,11 +165,27 @@ function buildTeamCodePathSegmentCode(
               ${allPoints}
             )
           )
-          .${headingTypeToFunctionName[line.endPoint.heading]}(${headingConfig})${reverseConfig}`;
+          ${headingCall}${reverseConfig}`;
 }
 
 function javaStringLiteral(value: string): string {
   return JSON.stringify(value);
+}
+
+function sanitizeJavaMethodSuffix(input: string, fallback: string): string {
+  const words = (input || "")
+    .replace(/[^a-zA-Z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+
+  const suffix = words
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join("");
+
+  const cleaned = suffix.replace(/[^a-zA-Z0-9]/g, "");
+  if (!cleaned) return fallback;
+  return /^[0-9]/.test(cleaned) ? `${fallback}${cleaned}` : cleaned;
 }
 
 export async function generateTeamCodeAutoCode(
@@ -136,6 +194,7 @@ export async function generateTeamCodeAutoCode(
   pathChains: PathChain[] = [],
   className = "GeneratedSwerveAuto",
   sequence: SequenceItem[] = [],
+  poseVariables: PoseVariable[] = [],
 ): Promise<string> {
   const autoClassName = sanitizeClassName(className, "GeneratedSwerveAuto");
   const linesWithIds = lines.map((line, idx) => ({
@@ -145,9 +204,58 @@ export async function generateTeamCodeAutoCode(
   const lineById = new Map(linesWithIds.map((line) => [line.id!, line]));
   void pathChains;
 
-  const endpointDeclarations = linesWithIds
-    .map((line, idx) => buildPathStepCode(`POINT_${idx + 1}`, line.endPoint, "end"))
-    .join("\n    ");
+  const poseVariablesById = new Map(poseVariables.map((variable) => [variable.id, variable]));
+  const usedPoseVariableIds = new Set<string>();
+  if (startPoint.poseVariableId) usedPoseVariableIds.add(startPoint.poseVariableId);
+  linesWithIds.forEach((line) => {
+    if (line.endPoint.poseVariableId) usedPoseVariableIds.add(line.endPoint.poseVariableId);
+  });
+
+  const usedConstantNames = new Set<string>();
+  const poseVariableConstantById = new Map<string, string>();
+
+  [...usedPoseVariableIds].forEach((poseVariableId, idx) => {
+    const variable = poseVariablesById.get(poseVariableId);
+    if (!variable) return;
+
+    const baseName = `POSE_${sanitizeJavaConstantName(
+      variable.name,
+      `VARIABLE_${idx + 1}`,
+    )}_STEP`;
+    poseVariableConstantById.set(
+      poseVariableId,
+      uniqueJavaConstantName(baseName, usedConstantNames),
+    );
+  });
+
+  const pointStepName = (point: Point, fallbackName: string) =>
+    point.poseVariableId
+      ? poseVariableConstantById.get(point.poseVariableId) || fallbackName
+      : fallbackName;
+
+  const pointStepExpression = (point: Point, fallbackName: string) =>
+    `${pointStepName(point, fallbackName)}.toPose()`;
+
+  const pathStepDeclarations: string[] = [];
+  poseVariableConstantById.forEach((constantName, poseVariableId) => {
+    const variable = poseVariablesById.get(poseVariableId);
+    if (variable) {
+      pathStepDeclarations.push(buildPoseVariablePathStepCode(constantName, variable));
+    }
+  });
+
+  if (pointStepName(startPoint, "START_STEP") === "START_STEP") {
+    pathStepDeclarations.push(buildPathStepCode("START_STEP", startPoint, "start"));
+  }
+
+  linesWithIds.forEach((line, idx) => {
+    const fallbackName = `POINT_${idx + 1}`;
+    if (pointStepName(line.endPoint, fallbackName) === fallbackName) {
+      pathStepDeclarations.push(buildPathStepCode(fallbackName, line.endPoint, "end"));
+    }
+  });
+
+  const pathStepDeclarationBlock = pathStepDeclarations.join("\n    ");
 
   const pathVariableByLineId = new Map(
     linesWithIds.map((line, idx) => [line.id!, `path${idx + 1}`]),
@@ -158,8 +266,11 @@ export async function generateTeamCodeAutoCode(
 
   const chainAssignments = linesWithIds
     .map((line, idx) => {
-      const startExpression = idx <= 0 ? "START_STEP.toPose()" : `POINT_${idx}.toPose()`;
-      const endExpression = `POINT_${idx + 1}.toPose()`;
+      const startExpression =
+        idx <= 0
+          ? pointStepExpression(startPoint, "START_STEP")
+          : pointStepExpression(linesWithIds[idx - 1].endPoint, `POINT_${idx}`);
+      const endExpression = pointStepExpression(line.endPoint, `POINT_${idx + 1}`);
       const segmentSnippet = buildTeamCodePathSegmentCode(line, startExpression, endExpression);
 
       return `path${idx + 1} = follower.pathBuilder()
@@ -172,6 +283,24 @@ export async function generateTeamCodeAutoCode(
     sequence.length > 0
       ? sequence
       : linesWithIds.map((line) => ({ kind: "path", lineId: line.id! }) as SequenceItem);
+  const eventItems = sequenceItems.filter((item) => item.kind === "event");
+  const eventMethods = new Map<string, { name: string; suffix: string }>();
+
+  eventItems.forEach((item, idx) => {
+    const eventName = item.name?.trim() || `Event ${idx + 1}`;
+    if (eventMethods.has(eventName)) {
+      return;
+    }
+
+    const baseSuffix = sanitizeJavaMethodSuffix(eventName, `Event${idx + 1}`);
+    let suffix = baseSuffix;
+    let duplicateIndex = 2;
+    while ([...eventMethods.values()].some((event) => event.suffix === suffix)) {
+      suffix = `${baseSuffix}${duplicateIndex}`;
+      duplicateIndex++;
+    }
+    eventMethods.set(eventName, { name: eventName, suffix });
+  });
 
   const sequenceCases = sequenceItems
     .map((item, idx) => {
@@ -184,16 +313,43 @@ export async function generateTeamCodeAutoCode(
         }
 
         return `case ${idx}:
-        followPathStep(${pathVariable});
+        followPathStep(${pathVariable}, ${fixed(pathSpeed(lineById.get(item.lineId)))});
         break;`;
       }
 
       const durationMs = Math.max(0, Number(item.durationMs) || 0);
+      if (item.kind === "wait") {
+        return `case ${idx}:
+        runWaitStep(${durationMs}L);
+        break;`;
+      }
+
       return `case ${idx}:
-        runTimedStep(${javaStringLiteral(item.name || item.kind)}, ${durationMs}L);
+        runTimedEventStep(${javaStringLiteral(item.name || item.kind)}, ${durationMs}L);
         break;`;
     })
     .join("\n      ");
+  const startEventCases = [...eventMethods.values()]
+    .map((event) => `case ${javaStringLiteral(event.name)}:
+        start${event.suffix}();
+        break;`)
+    .join("\n      ");
+  const finishEventCases = [...eventMethods.values()]
+    .map((event) => `case ${javaStringLiteral(event.name)}:
+        finish${event.suffix}();
+        break;`)
+    .join("\n      ");
+  const eventMethodStubs = [...eventMethods.values()]
+    .map(
+      (event) => `private void start${event.suffix}() {
+        // TODO: start ${event.name} mechanism here.
+    }
+
+    private void finish${event.suffix}() {
+        // TODO: stop ${event.name} mechanism here.
+    }`,
+    )
+    .join("\n\n    ");
 
   const file = `package org.firstinspires.ftc.teamcode.auto;
 
@@ -209,8 +365,7 @@ import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 
 @Autonomous(name = "${autoClassName}", group = "Auto")
 public class ${autoClassName} extends OpMode {
-    ${buildPathStepCode("START_STEP", startPoint, "start")}
-    ${endpointDeclarations}
+    ${pathStepDeclarationBlock}
 
     private Follower follower;
     ${chainFieldDeclarations}
@@ -222,7 +377,7 @@ public class ${autoClassName} extends OpMode {
     @Override
     public void init() {
         follower = Constants.createFollower(hardwareMap);
-        follower.setStartingPose(START_STEP.toPose());
+        follower.setStartingPose(${pointStepExpression(startPoint, "START_STEP")});
 
         buildPaths();
         updateTelemetry("Initialized");
@@ -240,7 +395,7 @@ public class ${autoClassName} extends OpMode {
         stepStarted = false;
         pathFinished = false;
 
-        follower.setStartingPose(START_STEP.toPose());
+        follower.setStartingPose(${pointStepExpression(startPoint, "START_STEP")});
     }
 
     @Override
@@ -282,9 +437,32 @@ public class ${autoClassName} extends OpMode {
         }
     }
 
-    private void followPathStep(PathChain path) {
+    private static double interpolateHeading(
+        double startHeading,
+        double endHeading,
+        double tValue,
+        double curve
+    ) {
+        double clampedT = Math.max(0.0, Math.min(1.0, tValue));
+        double clampedCurve = Math.max(0.25, Math.min(4.0, curve));
+        double shapedT = Math.pow(clampedT, clampedCurve);
+        double deltaHeading = normalizeRadians(endHeading - startHeading);
+        return normalizeRadians(startHeading + deltaHeading * shapedT);
+    }
+
+    private static double normalizeRadians(double angle) {
+        while (angle <= -Math.PI) {
+            angle += 2.0 * Math.PI;
+        }
+        while (angle > Math.PI) {
+            angle -= 2.0 * Math.PI;
+        }
+        return angle;
+    }
+
+    private void followPathStep(PathChain path, double pathSpeed) {
         if (!stepStarted) {
-            follower.followPath(path, true);
+            follower.followPath(path, clampPathSpeed(pathSpeed), true);
             stepStarted = true;
         }
 
@@ -293,7 +471,22 @@ public class ${autoClassName} extends OpMode {
         }
     }
 
-    private void runTimedStep(String eventName, long durationMs) {
+    private double clampPathSpeed(double pathSpeed) {
+        return Math.max(0.05, Math.min(1.0, pathSpeed));
+    }
+
+    private void runWaitStep(long durationMs) {
+        if (!stepStarted) {
+            stepStartTime = System.currentTimeMillis();
+            stepStarted = true;
+        }
+
+        if (System.currentTimeMillis() - stepStartTime >= durationMs) {
+            advanceSequence();
+        }
+    }
+
+    private void runTimedEventStep(String eventName, long durationMs) {
         if (!stepStarted) {
             stepStartTime = System.currentTimeMillis();
             startEvent(eventName);
@@ -307,16 +500,22 @@ public class ${autoClassName} extends OpMode {
     }
 
     private void startEvent(String eventName) {
-        if ("Shoot".equalsIgnoreCase(eventName)) {
-            // TODO: start shooter/trigger mechanism here.
+        switch (eventName) {
+      ${startEventCases}
+            default:
+                break;
         }
     }
 
     private void finishEvent(String eventName) {
-        if ("Shoot".equalsIgnoreCase(eventName)) {
-            // TODO: stop shooter/trigger mechanism here.
+        switch (eventName) {
+      ${finishEventCases}
+            default:
+                break;
         }
     }
+
+    ${eventMethodStubs}
 
     private void advanceSequence() {
         sequenceIndex++;

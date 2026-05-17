@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Point, Line, SequenceItem, PathChain } from "../../types";
+  import type { Point, Line, SequenceItem, PathChain, PoseVariable } from "../../types";
   import Highlight from "svelte-highlight";
   import { java } from "svelte-highlight/languages";
   import plaintext from "svelte-highlight/languages/plaintext";
@@ -19,6 +19,7 @@
   export let lines: Line[];
   export let sequence: SequenceItem[];
   export let pathChains: PathChain[] = [];
+  export let poseVariables: PoseVariable[] = [];
 
   let exportMode: "full" | "class" | "coordinates" = "class";
   let exportFormat: "java" | "points" | "sequential" | "teamcode" = "java";
@@ -27,6 +28,9 @@
   let exportedCode = "";
   let currentLanguage: typeof java | typeof plaintext = java;
   let copied = false;
+  let saveStatus = "";
+  type ValidationMessage = { level: "error" | "warning"; message: string };
+  let validationMessages: ValidationMessage[] = [];
 
   // Update sequential class name when file changes
   $: if ($currentFilePath) {
@@ -48,6 +52,8 @@
     format: "java" | "points" | "sequential" | "teamcode",
   ) {
     exportFormat = format;
+    saveStatus = "";
+    validationMessages = [];
 
     try {
       if (format === "java") {
@@ -95,8 +101,12 @@
           pathChains,
           teamCodeClassName,
           sequence,
+          poseVariables,
         );
         currentLanguage = java;
+        validationMessages = validateTeamCodeExport();
+      } else {
+        validationMessages = [];
       }
       isOpen = true;
     } catch (error) {
@@ -129,13 +139,16 @@
   async function refreshTeamCodeAutoCode() {
     if (exportFormat === "teamcode" && isOpen) {
       try {
+        saveStatus = "";
         exportedCode = await generateTeamCodeAutoCode(
           startPoint,
           lines,
           pathChains,
           teamCodeClassName,
           sequence,
+          poseVariables,
         );
+        validationMessages = validateTeamCodeExport();
       } catch (error) {
         console.error("Refresh failed:", error);
         exportedCode =
@@ -147,6 +160,148 @@
   async function handleExportModeChange() {
     if (exportFormat === "java") {
       exportedCode = await generateJavaCode(startPoint, lines, exportMode, pathChains);
+    }
+  }
+
+  function generatedClassName(): string {
+    const match = exportedCode.match(/public\s+class\s+([A-Za-z][A-Za-z0-9_]*)/);
+    return match?.[1] ?? "GeneratedSwerveAuto";
+  }
+
+  function isOutsideField(point: { x: number; y: number }) {
+    return point.x < 0 || point.x > 141.5 || point.y < 0 || point.y > 141.5;
+  }
+
+  function validateTeamCodeExport(): ValidationMessage[] {
+    const messages: ValidationMessage[] = [];
+    const className = generatedClassName();
+
+    if (!/^[A-Za-z][A-Za-z0-9_]*$/.test(className)) {
+      messages.push({
+        level: "error",
+        message: "Generated class name is not a valid Java identifier.",
+      });
+    }
+
+    if (teamCodeClassName && teamCodeClassName !== className) {
+      messages.push({
+        level: "warning",
+        message: `Class name will be exported as ${className}.`,
+      });
+    }
+
+    if (!lines.length) {
+      messages.push({ level: "error", message: "Add at least one path before exporting." });
+    }
+
+    if (isOutsideField(startPoint)) {
+      messages.push({ level: "warning", message: "Starting point is outside the field bounds." });
+    }
+
+    lines.forEach((line, index) => {
+      const previousPoint = index === 0 ? startPoint : lines[index - 1].endPoint;
+      if (isOutsideField(line.endPoint)) {
+        messages.push({
+          level: "warning",
+          message: `Path ${index + 1} endpoint is outside the field bounds.`,
+        });
+      }
+
+      line.controlPoints.forEach((point, controlIndex) => {
+        if (isOutsideField(point)) {
+          messages.push({
+            level: "warning",
+            message: `Path ${index + 1} control point ${controlIndex + 1} is outside the field bounds.`,
+          });
+        }
+      });
+
+      if (
+        line.controlPoints.length === 0 &&
+        Number(previousPoint.x) === Number(line.endPoint.x) &&
+        Number(previousPoint.y) === Number(line.endPoint.y)
+      ) {
+        messages.push({
+          level: "warning",
+          message: `Path ${index + 1} has zero distance.`,
+        });
+      }
+    });
+
+    const firstPathIndex = sequence.findIndex((item) => item.kind === "path");
+    if (firstPathIndex > 0) {
+      messages.push({
+        level: "warning",
+        message: "The sequence starts with a wait/event before the first path.",
+      });
+    }
+
+    sequence.forEach((item, index) => {
+      if (item.kind === "wait" || item.kind === "event") {
+        if (item.kind === "event" && !item.name.trim()) {
+          messages.push({
+            level: "error",
+            message: `Event at sequence step ${index + 1} needs a name.`,
+          });
+        }
+
+        if (Number(item.durationMs) <= 0) {
+          messages.push({
+            level: "warning",
+            message: `${item.kind === "event" ? "Event" : "Wait"} "${item.name}" has a zero duration.`,
+          });
+        }
+      }
+    });
+
+    return messages;
+  }
+
+  function hasValidationErrors() {
+    return validationMessages.some((message) => message.level === "error");
+  }
+
+  function downloadJavaFile() {
+    const className = generatedClassName();
+    const blob = new Blob([exportedCode], { type: "text/x-java-source" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${className}.java`;
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function saveTeamCodeAuto() {
+    if (hasValidationErrors()) {
+      saveStatus = "Fix validation errors before saving.";
+      return;
+    }
+
+    try {
+      saveStatus = "Saving...";
+      const response = await fetch("/api/teamcode-autos", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          className: generatedClassName(),
+          content: exportedCode,
+        }),
+      });
+      const result = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(result.error || "Save failed.");
+      }
+
+      saveStatus = result.overwritten
+        ? `Updated ${generatedClassName()}.java in TeamCode.`
+        : `Saved ${generatedClassName()}.java in TeamCode.`;
+    } catch (error) {
+      saveStatus =
+        error instanceof Error
+          ? error.message
+          : "Unable to save to TeamCode from this server.";
     }
   }
 </script>
@@ -232,6 +387,21 @@
               />
             </div>
           {/if}
+          {#if exportFormat === "teamcode"}
+            <button
+              on:click={downloadJavaFile}
+              class="px-2 py-1 text-sm rounded-md bg-neutral-100 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600"
+            >
+              Download .java
+            </button>
+            <button
+              on:click={saveTeamCodeAuto}
+              disabled={hasValidationErrors()}
+              class="px-2 py-1 text-sm rounded-md bg-blue-600 text-white disabled:bg-neutral-400 disabled:cursor-not-allowed"
+            >
+              Save to TeamCode
+            </button>
+          {/if}
           <button
             on:click={() => (isOpen = false)}
             aria-label="Close export dialog"
@@ -253,6 +423,25 @@
           </button>
         </div>
       </div>
+
+      {#if exportFormat === "teamcode" && (validationMessages.length || saveStatus)}
+        <div class="w-full flex flex-col gap-1 text-sm">
+          {#each validationMessages as message}
+            <div
+              class={message.level === "error"
+                ? "px-2 py-1 rounded bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-200"
+                : "px-2 py-1 rounded bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-200"}
+            >
+              {message.message}
+            </div>
+          {/each}
+          {#if saveStatus}
+            <div class="px-2 py-1 rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
+              {saveStatus}
+            </div>
+          {/if}
+        </div>
+      {/if}
 
       <div class="relative w-full flex-1 overflow-auto">
         <Highlight

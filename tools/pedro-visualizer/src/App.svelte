@@ -7,6 +7,7 @@
     SequenceItem,
     PathChain,
     Shape,
+    PoseVariable,
   } from "./types";
   import * as d3 from "d3";
   import {
@@ -77,6 +78,7 @@
       controlPoints: line.controlPoints || [],
       color: line.color || getRandomColor(),
       name: line.name || "",
+      speed: Math.max(0.05, Math.min(1, Number(line.speed ?? 1) || 1)),
       waitBeforeMs: Math.max(
         0,
         Number(line.waitBeforeMs ?? line.waitBefore?.durationMs ?? 0),
@@ -88,6 +90,61 @@
       waitBeforeName: line.waitBeforeName ?? line.waitBefore?.name ?? "",
       waitAfterName: line.waitAfterName ?? line.waitAfter?.name ?? "",
     }));
+  }
+
+  function normalizePoseVariables(input: PoseVariable[] | undefined): PoseVariable[] {
+    if (!Array.isArray(input)) return [];
+
+    return input.map((variable, index) => ({
+      id: variable.id || `pose-${Math.random().toString(36).slice(2)}`,
+      name: (variable.name || "").trim() || `Pose ${index + 1}`,
+      x: Number.isFinite(Number(variable.x)) ? Number(variable.x) : 0,
+      y: Number.isFinite(Number(variable.y)) ? Number(variable.y) : 0,
+      heading: Number.isFinite(Number(variable.heading))
+        ? Number(variable.heading)
+        : 0,
+    }));
+  }
+
+  function bindPointToPoseVariable(point: Point, variable: PoseVariable): Point {
+    return {
+      x: Number(variable.x) || 0,
+      y: Number(variable.y) || 0,
+      locked: point.locked,
+      poseVariableId: variable.id,
+      heading: "constant",
+      degrees: Number(variable.heading) || 0,
+    };
+  }
+
+  function clearMissingPoseVariable(point: Point, variablesById: Map<string, PoseVariable>): Point {
+    if (!point.poseVariableId) return point;
+
+    const variable = variablesById.get(point.poseVariableId);
+    if (variable) {
+      return bindPointToPoseVariable(point, variable);
+    }
+
+    const { poseVariableId, ...nextPoint } = point;
+    return nextPoint as Point;
+  }
+
+  function applyPoseVariablesToPath(
+    sourceStartPoint: Point,
+    sourceLines: Line[],
+    sourcePoseVariables: PoseVariable[],
+  ): { startPoint: Point; lines: Line[] } {
+    const variablesById = new Map(
+      sourcePoseVariables.map((variable) => [variable.id, variable]),
+    );
+
+    return {
+      startPoint: clearMissingPoseVariable(sourceStartPoint, variablesById),
+      lines: sourceLines.map((line) => ({
+        ...line,
+        endPoint: clearMissingPoseVariable(line.endPoint, variablesById),
+      })),
+    };
   }
 
   // Canvas state
@@ -119,6 +176,7 @@
   let settings: Settings = { ...DEFAULT_SETTINGS };
   let startPoint: Point = getDefaultStartPoint();
   let lines: Line[] = normalizeLines(getDefaultLines());
+  let poseVariables: PoseVariable[] = [];
 
   function normalizeLegacyFieldMap(input: Settings): Settings {
     const next = { ...input };
@@ -176,6 +234,8 @@
     sequence: SequenceItem[];
     shapes: Shape[];
     settings: Settings;
+    pathChains?: PathChain[];
+    poseVariables?: PoseVariable[];
     color?: string; // Optional custom color for this path
   }
   let additionalPaths: AdditionalPathData[] = [];
@@ -192,6 +252,7 @@
       sequence,
       settings,
       pathChains,
+      poseVariables,
     };
   }
 
@@ -212,6 +273,7 @@
       sequence = prev.sequence;
       settings = prev.settings;
       pathChains = prev.pathChains;
+      poseVariables = prev.poseVariables || [];
       isUnsaved.set(true);
       two && two.update();
     }
@@ -228,6 +290,7 @@
       sequence = next.sequence;
       settings = next.settings;
       pathChains = next.pathChains;
+      poseVariables = next.poseVariables || [];
       isUnsaved.set(true);
       two && two.update();
     }
@@ -348,17 +411,25 @@
         const data = JSON.parse(content);
 
         if (data.startPoint && data.lines) {
+          const loadedPoseVariables = normalizePoseVariables(data.poseVariables);
           const normalizedLines = normalizeLines(data.lines || []);
+          const normalizedPath = applyPoseVariablesToPath(
+            data.startPoint,
+            normalizedLines,
+            loadedPoseVariables,
+          );
           newAdditionalPaths.push({
             filePath,
-            startPoint: data.startPoint,
-            lines: normalizedLines,
+            startPoint: normalizedPath.startPoint,
+            lines: normalizedPath.lines,
             shapes: data.shapes || [],
-            sequence: data.sequence || normalizedLines.map((ln: Line) => ({
+            sequence: data.sequence || normalizedPath.lines.map((ln: Line) => ({
               kind: "path",
               lineId: ln.id!,
             })),
             settings: data.settings || { ...DEFAULT_SETTINGS },
+            pathChains: normalizePathChains(data.pathChains, normalizedPath.lines),
+            poseVariables: loadedPoseVariables,
             color: colors[i],
           });
         }
@@ -1545,6 +1616,8 @@
         lines: pathData.lines,
         shapes: pathData.shapes,
         sequence: pathData.sequence,
+        pathChains: pathData.pathChains || [],
+        poseVariables: pathData.poseVariables || [],
         settings: pathData.settings,
         version: "1.2.1",
         timestamp: new Date().toISOString(),
@@ -1955,6 +2028,7 @@
         shapes,
         sequence,
         pathChains,
+        poseVariables,
         settings,
         version: "1.2.1",
         timestamp: new Date().toISOString(),
@@ -2046,7 +2120,15 @@
       console.error("Failed to save into app storage:", err);
       // As a last resort, download the file
       try {
-        downloadTrajectory(startPoint, lines, shapes, sequence, pathChains);
+        downloadTrajectory(
+          startPoint,
+          lines,
+          shapes,
+          sequence,
+          pathChains,
+          poseVariables,
+          settings,
+        );
       } catch (err2) {
         console.error("Save As fallback failed:", err2);
         alert(
@@ -2115,8 +2197,10 @@
       if (!id || !id.startsWith("point")) return false;
       const parts = id.split("-");
       const lineIdx = Number(parts[1]) - 1;
+      const pointIdx = Number(parts[2]);
       if (Number.isNaN(lineIdx)) return false;
-      if (lineIdx < 0) return false; // startPoint currently not lockable
+      if (lineIdx < 0) return !!startPoint.locked || !!startPoint.poseVariableId;
+      if (pointIdx === 0 && lines[lineIdx]?.endPoint?.poseVariableId) return true;
       return !!lines[lineIdx]?.locked;
     };
 
@@ -2233,11 +2317,12 @@
 
           if (line === -1) {
             // This is the starting point
-            if (startPoint.locked) return;
+            if (startPoint.locked || startPoint.poseVariableId) return;
             startPoint.x = inchX;
             startPoint.y = inchY;
           } else if (lines[line]) {
             if (point === 0 && lines[line].endPoint) {
+              if (lines[line].endPoint.poseVariableId) return;
               lines[line].endPoint.x = inchX;
               lines[line].endPoint.y = inchY;
             } else {
@@ -2405,6 +2490,7 @@
         },
         controlPoints: [],
         color: getRandomColor(),
+        speed: 1,
         locked: false,
         waitBeforeMs: 0,
         waitAfterMs: 0,
@@ -2436,6 +2522,7 @@
           shapes,
           sequence,
           pathChains,
+          poseVariables,
           settings,
           version: "1.2.1",
           timestamp: new Date().toISOString(),
@@ -2479,8 +2566,10 @@
 
     // Parse and load the uploaded file, then cache it into the browser store.
     loadTrajectoryFromFile(evt, async (data) => {
+      const loadedPoseVariables = normalizePoseVariables(data.poseVariables);
+
       // Ensure startPoint has all required fields
-      startPoint = data.startPoint || {
+      const loadedStartPoint = data.startPoint || {
         x: 72,
         y: 72,
         heading: "tangential",
@@ -2489,7 +2578,14 @@
 
       // Normalize lines with all required fields
       const normalizedLines = normalizeLines(data.lines || []);
-      lines = normalizedLines;
+      const normalizedPath = applyPoseVariablesToPath(
+        loadedStartPoint,
+        normalizedLines,
+        loadedPoseVariables,
+      );
+      startPoint = normalizedPath.startPoint;
+      lines = normalizedPath.lines;
+      poseVariables = loadedPoseVariables;
 
       // Derive sequence from data or create default
       sequence = (
@@ -2500,7 +2596,7 @@
               lineId: ln.id!,
             }))
       ) as SequenceItem[];
-      pathChains = normalizePathChains(data.pathChains, normalizedLines);
+      pathChains = normalizePathChains(data.pathChains, normalizedPath.lines);
 
       // Load shapes with defaults
       shapes = data.shapes || [];
@@ -2533,8 +2629,10 @@
 
   // Helper function to load data into app state
   function loadData(data: any) {
+    const loadedPoseVariables = normalizePoseVariables(data.poseVariables);
+
     // Ensure startPoint has all required fields
-    startPoint = data.startPoint || {
+    const loadedStartPoint = data.startPoint || {
       x: 72,
       y: 72,
       heading: "tangential",
@@ -2543,7 +2641,14 @@
 
     // Normalize lines with all required fields
     const normalizedLines = normalizeLines(data.lines || []);
-    lines = normalizedLines;
+    const normalizedPath = applyPoseVariablesToPath(
+      loadedStartPoint,
+      normalizedLines,
+      loadedPoseVariables,
+    );
+    startPoint = normalizedPath.startPoint;
+    lines = normalizedPath.lines;
+    poseVariables = loadedPoseVariables;
 
     // Derive sequence from data or create default
     sequence = (
@@ -2554,7 +2659,7 @@
             lineId: ln.id!,
           }))
     ) as SequenceItem[];
-    pathChains = normalizePathChains(data.pathChains, normalizedLines);
+    pathChains = normalizePathChains(data.pathChains, normalizedPath.lines);
 
     // Load shapes with defaults
     shapes = data.shapes || [];
@@ -2747,6 +2852,7 @@
         } as Point,
         controlPoints: [],
         color: getRandomColor(),
+        speed: 1,
         locked: false,
         waitBeforeMs: 0,
         waitAfterMs: 0,
@@ -2882,6 +2988,7 @@
           shapes,
           sequence,
           pathChains,
+          poseVariables,
           settings,
         });
         
@@ -2913,6 +3020,7 @@
             shapes,
             sequence,
             pathChains,
+            poseVariables,
             settings,
             version: "1.2.1",
             timestamp: new Date().toISOString(),
@@ -2939,6 +3047,7 @@
               shapes,
               sequence,
               pathChains,
+              poseVariables,
               settings,
               version: "1.2.1",
               timestamp: new Date().toISOString(),
@@ -2991,6 +3100,7 @@
   bind:shapes
   bind:sequence
   bind:pathChains
+  bind:poseVariables
   bind:secondStartPoint
   bind:secondLines
   bind:secondShapes
@@ -3254,6 +3364,7 @@ pointer-events: none; opacity: ${1.0 - idx * 0.15};`}
     bind:lines
     bind:sequence
     bind:pathChains
+    bind:poseVariables
     bind:robotWidth
     bind:robotHeight
     bind:settings

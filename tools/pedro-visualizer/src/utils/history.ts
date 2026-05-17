@@ -1,4 +1,4 @@
-import type { Point, Line, Shape, SequenceItem, Settings, PathChain } from "../types";
+import type { Point, Line, Shape, SequenceItem, Settings, PathChain, PoseVariable } from "../types";
 import { writable } from "svelte/store";
 
 export type AppState = {
@@ -8,6 +8,7 @@ export type AppState = {
   sequence: SequenceItem[];
   settings: Settings;
   pathChains: PathChain[];
+  poseVariables: PoseVariable[];
 };
 
 function deepClone<T>(obj: T): T {

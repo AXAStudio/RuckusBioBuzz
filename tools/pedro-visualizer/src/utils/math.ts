@@ -69,6 +69,33 @@ export function shortestRotation(
   return startAngle + diff * percentage;
 }
 
+export function clampHeadingCurve(value: number | undefined): number {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 1;
+  return Math.max(0.25, Math.min(4, numeric));
+}
+
+export function shapeHeadingProgress(
+  percentage: number,
+  curve: number | undefined,
+): number {
+  const clampedPercentage = Math.max(0, Math.min(1, percentage));
+  return Math.pow(clampedPercentage, clampHeadingCurve(curve));
+}
+
+export function shapedShortestRotation(
+  startAngle: number,
+  endAngle: number,
+  percentage: number,
+  curve: number | undefined,
+): number {
+  return shortestRotation(
+    startAngle,
+    endAngle,
+    shapeHeadingProgress(percentage, curve),
+  );
+}
+
 export function radiansToDegrees(radians: number) {
   return radians * (180 / Math.PI);
 }

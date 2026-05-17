@@ -2,6 +2,7 @@ import {
   getCurvePoint,
   easeInOutQuad,
   shortestRotation,
+  shapedShortestRotation,
   radiansToDegrees,
 } from "./math";
 import { getRobotCorners } from "./geometry";
@@ -24,6 +25,12 @@ type AnimationState = {
   loop: boolean;
 };
 
+function getPathSpeed(line: Line): number {
+  const speed = Number(line.speed ?? 1);
+  if (!Number.isFinite(speed)) return 1;
+  return Math.max(0.05, Math.min(1, speed));
+}
+
 /**
  * Calculate the robot position and heading based on the Timeline
  */
@@ -33,8 +40,8 @@ export function calculateRobotState(
   lines: Line[],
   startPoint: Point,
   settings: Settings,
-  xScale: ScaleLinear<number, number>,
-  yScale: ScaleLinear<number, number>,
+  xScale: ScaleLinear<number, number, number>,
+  yScale: ScaleLinear<number, number, number>,
 ): RobotState {
   if (!timeline || timeline.length === 0) {
     return { x: xScale(startPoint.x), y: yScale(startPoint.y), heading: 0 };
@@ -108,9 +115,10 @@ export function calculateRobotState(
       settings.maxVelocity !== undefined &&
       settings.maxAcceleration !== undefined
     ) {
-      const maxV = settings.maxVelocity;
-      const maxA = settings.maxAcceleration;
-      const maxD = settings.maxDeceleration ?? settings.maxAcceleration;
+      const pathSpeed = getPathSpeed(currentLine);
+      const maxV = settings.maxVelocity * pathSpeed;
+      const maxA = settings.maxAcceleration * pathSpeed;
+      const maxD = (settings.maxDeceleration ?? settings.maxAcceleration) * pathSpeed;
 
       // Build profile parameters
       const accTime = maxV / maxA;
@@ -179,10 +187,11 @@ export function calculateRobotState(
     // Calculate Heading based on Line Type
     switch (currentLine.endPoint.heading) {
       case "linear":
-        robotHeading = -shortestRotation(
+        robotHeading = -shapedShortestRotation(
           currentLine.endPoint.startDeg,
           currentLine.endPoint.endDeg,
           linePercent,
+          currentLine.endPoint.headingCurve,
         );
         break;
       case "constant":
@@ -456,10 +465,11 @@ export function generateGhostPathPoints(
       // Calculate heading at this position
       let heading = 0;
       if (line.endPoint.heading === "linear") {
-        heading = shortestRotation(
+        heading = shapedShortestRotation(
           line.endPoint.startDeg,
           line.endPoint.endDeg,
           t,
+          line.endPoint.headingCurve,
         );
       } else if (line.endPoint.heading === "constant") {
         heading = line.endPoint.degrees;
@@ -600,6 +610,7 @@ export function generateOnionLayers(
     y: number;
     heading: number;
     corners: BasePoint[];
+    lineIndex: number;
   }> = [];
 
   // Calculate total path length
@@ -674,10 +685,11 @@ export function generateOnionLayers(
         // Calculate heading for this position
         let heading = 0;
         if (line.endPoint.heading === "linear") {
-          heading = shortestRotation(
+          heading = shapedShortestRotation(
             line.endPoint.startDeg,
             line.endPoint.endDeg,
             layerT,
+            line.endPoint.headingCurve,
           );
         } else if (line.endPoint.heading === "constant") {
           heading = -line.endPoint.degrees;

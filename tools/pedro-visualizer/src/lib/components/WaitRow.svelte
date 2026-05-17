@@ -40,10 +40,21 @@
       class="pl-1.5 rounded-md bg-neutral-50 dark:bg-neutral-950 dark:border-neutral-700 border-[0.5px] focus:outline-none w-40"
       type="text"
       placeholder="Name"
+      list={label === "Event" ? "event-presets" : undefined}
       bind:value={name}
       on:change={handleNameChange}
       disabled={locked}
     />
+    {#if label === "Event"}
+      <datalist id="event-presets">
+        <option value="Shoot" />
+        <option value="Intake" />
+        <option value="Intake On" />
+        <option value="Intake Off" />
+        <option value="Arm Up" />
+        <option value="Arm Down" />
+      </datalist>
+    {/if}
     <input
       class="pl-1.5 rounded-md bg-neutral-50 dark:bg-neutral-950 dark:border-neutral-700 border-[0.5px] focus:outline-none w-28"
       type="number"

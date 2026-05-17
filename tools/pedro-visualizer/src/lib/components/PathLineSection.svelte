@@ -1,8 +1,9 @@
 <script lang="ts">
-  import type { Line } from "../../types";
+  import type { Line, PoseVariable } from "../../types";
   import { snapToGrid, showGrid, gridSize } from "../../stores";
   import ControlPointsSection from "./ControlPointsSection.svelte";
   import HeadingControls from "./HeadingControls.svelte";
+  import HeadingCurveEditor from "./HeadingCurveEditor.svelte";
 
   export let line: Line;
   export let idx: number;
@@ -24,13 +25,35 @@
   export let chainOptions: Array<{ id: string; name: string; color: string }> = [];
   export let selectedChainId: string = "";
   export let onChainChange: (chainId: string) => void;
+  export let poseVariables: PoseVariable[] = [];
+  export let onPoseVariableChange: (lineId: string, poseVariableId: string) => void = () => {};
 
 
   $: snapToGridTitle =
     $snapToGrid && $showGrid ? `Snapping to ${$gridSize} grid` : "No snapping";
+  $: isEndPointBoundToPoseVariable = Boolean(line.endPoint?.poseVariableId);
+  $: pathSpeedValue = clampPathSpeed(line?.speed);
 
   function toggleCollapsed() {
     collapsed = !collapsed;
+  }
+
+  function clampPathSpeed(value: number | undefined): number {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 1;
+    return Math.max(0.05, Math.min(1, numeric));
+  }
+
+  function handlePathSpeedInput(event: Event) {
+    const target = event.currentTarget as HTMLInputElement;
+    line.speed = clampPathSpeed(Number(target.value));
+    lines = [...lines];
+  }
+
+  function commitPathSpeed() {
+    line.speed = clampPathSpeed(line.speed);
+    lines = [...lines];
+    recordChange?.();
   }
 
   function handleChainSelect(event: Event) {
@@ -38,6 +61,10 @@
     if (onChainChange) {
       onChainChange(target.value);
     }
+  }
+
+  function handlePoseVariableSelect(event: Event) {
+    onPoseVariableChange(line.id || "", (event.currentTarget as HTMLSelectElement).value);
   }
 </script>
 
@@ -327,8 +354,47 @@
     <div class={`h-[0.75px] w-full`} style={`background: ${line.color}`} />
 
     <div class="flex flex-col justify-start items-start w-full">
+      <div class="font-light">Path Speed:</div>
+      <div class="flex flex-row justify-start items-center gap-2 mb-2 w-full max-w-md">
+        <input
+          type="range"
+          min="0.05"
+          max="1"
+          step="0.05"
+          value={pathSpeedValue}
+          on:input={handlePathSpeedInput}
+          on:change={commitPathSpeed}
+          disabled={line.locked}
+          class="flex-1"
+        />
+        <input
+          type="number"
+          min="0.05"
+          max="1"
+          step="0.05"
+          value={pathSpeedValue}
+          on:input={handlePathSpeedInput}
+          on:blur={commitPathSpeed}
+          disabled={line.locked}
+          class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-950 dark:border-neutral-700 border-[0.5px] focus:outline-none w-20"
+        />
+      </div>
+
       <div class="font-light">Point Position:</div>
-      <div class="flex flex-row justify-start items-center gap-2">
+      <div class="flex flex-row justify-start items-center gap-2 flex-wrap">
+        <div class="font-extralight">Pose:</div>
+        <select
+          value={line.endPoint.poseVariableId || ""}
+          on:change={handlePoseVariableSelect}
+          class="px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-neutral-100 dark:bg-neutral-900"
+          disabled={line.locked}
+        >
+          <option value="">Custom</option>
+          {#each poseVariables as variable (variable.id)}
+            <option value={variable.id}>{variable.name || "Unnamed Pose"}</option>
+          {/each}
+        </select>
+
         <div class="font-extralight">X:</div>
         <input
           class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-950 dark:border-neutral-700 border-[0.5px] focus:outline-none w-28"
@@ -337,7 +403,7 @@
           min="0"
           max="141.5"
           bind:value={line.endPoint.x}
-          disabled={line.locked}
+          disabled={line.locked || isEndPointBoundToPoseVariable}
           title={snapToGridTitle}
         />
         <div class="font-extralight">Y:</div>
@@ -348,13 +414,13 @@
           max="141.5"
           type="number"
           bind:value={line.endPoint.y}
-          disabled={line.locked}
+          disabled={line.locked || isEndPointBoundToPoseVariable}
           title={snapToGridTitle}
         />
 
         <HeadingControls
           endPoint={line.endPoint}
-          locked={line.locked}
+          locked={line.locked || isEndPointBoundToPoseVariable}
           on:change={() => {
             // Force reactivity so timeline recalculates immediately
             lines = [...lines];
@@ -366,6 +432,22 @@
           }}
         />
       </div>
+
+      {#if line.endPoint.heading === "linear"}
+        <div class="mt-2 w-full">
+          <HeadingCurveEditor
+            endPoint={line.endPoint}
+            locked={line.locked || isEndPointBoundToPoseVariable}
+            on:change={() => {
+              lines = [...lines];
+            }}
+            on:commit={() => {
+              lines = [...lines];
+              recordChange();
+            }}
+          />
+        </div>
+      {/if}
     </div>
 
     <ControlPointsSection

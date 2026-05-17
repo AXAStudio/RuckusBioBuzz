@@ -7,6 +7,7 @@
     Shape,
     SequenceItem,
     PathChain,
+    PoseVariable,
   } from "../types";
   import _ from "lodash";
   import { getRandomColor } from "../utils";
@@ -14,6 +15,7 @@
   import RobotPositionDisplay from "./components/RobotPositionDisplay.svelte";
   import StartingPointSection from "./components/StartingPointSection.svelte";
   import PathLineSection from "./components/PathLineSection.svelte";
+  import PoseVariablesSection from "./components/PoseVariablesSection.svelte";
   import PlaybackControls from "./components/PlaybackControls.svelte";
   import WaitRow from "./components/WaitRow.svelte";
   import { calculatePathTime } from "../utils";
@@ -24,6 +26,7 @@
   export let pause: () => any;
   export let startPoint: Point;
   export let lines: Line[];
+  export let poseVariables: PoseVariable[] = [];
   export let sequence: SequenceItem[];
   export let pathChains: PathChain[] = [];
   export let robotWidth: number = 16;
@@ -357,6 +360,128 @@
 
   const makeId = () =>
     `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+
+  function pointHeadingDegrees(point: Point): number {
+    const currentPoint = point as any;
+    if (currentPoint.heading === "constant") return Number(currentPoint.degrees) || 0;
+    if (currentPoint.heading === "linear") return Number(currentPoint.endDeg ?? currentPoint.startDeg) || 0;
+    return 0;
+  }
+
+  function makePoseVariableName(): string {
+    const usedNames = new Set(poseVariables.map((variable) => variable.name.trim()));
+    let index = poseVariables.length + 1;
+    let name = `Pose ${index}`;
+
+    while (usedNames.has(name)) {
+      index++;
+      name = `Pose ${index}`;
+    }
+
+    return name;
+  }
+
+  function bindPointToPoseVariable(point: Point, variable: PoseVariable): Point {
+    return {
+      x: Number(variable.x) || 0,
+      y: Number(variable.y) || 0,
+      locked: point.locked,
+      poseVariableId: variable.id,
+      heading: "constant",
+      degrees: Number(variable.heading) || 0,
+    };
+  }
+
+  function clearPointPoseVariable(point: Point): Point {
+    const { poseVariableId, ...nextPoint } = point;
+    return nextPoint as Point;
+  }
+
+  function syncPoseVariableUsage(
+    poseVariableId: string,
+    sourceVariable?: PoseVariable,
+  ) {
+    const variable =
+      sourceVariable || poseVariables.find((item) => item.id === poseVariableId);
+    if (!variable) return;
+
+    if (startPoint.poseVariableId === poseVariableId) {
+      startPoint = bindPointToPoseVariable(startPoint, variable);
+    }
+
+    const nextLines = lines.map((line) =>
+      line.endPoint?.poseVariableId === poseVariableId
+        ? { ...line, endPoint: bindPointToPoseVariable(line.endPoint, variable) }
+        : line,
+    );
+
+    if (JSON.stringify(nextLines) !== JSON.stringify(lines)) {
+      lines = nextLines;
+    }
+  }
+
+  function addPoseVariable() {
+    const variable: PoseVariable = {
+      id: `pose-${makeId()}`,
+      name: makePoseVariableName(),
+      x: Number(startPoint.x) || 0,
+      y: Number(startPoint.y) || 0,
+      heading: pointHeadingDegrees(startPoint),
+    };
+
+    poseVariables = [...poseVariables, variable];
+    recordChange?.();
+  }
+
+  function removePoseVariable(poseVariableId: string) {
+    poseVariables = poseVariables.filter((variable) => variable.id !== poseVariableId);
+
+    if (startPoint.poseVariableId === poseVariableId) {
+      startPoint = clearPointPoseVariable(startPoint);
+    }
+
+    lines = lines.map((line) =>
+      line.endPoint?.poseVariableId === poseVariableId
+        ? { ...line, endPoint: clearPointPoseVariable(line.endPoint) }
+        : line,
+    );
+    recordChange?.();
+  }
+
+  function handlePoseVariableChange(variable: PoseVariable) {
+    syncPoseVariableUsage(variable.id, variable);
+  }
+
+  function handleStartPoseVariableChange(poseVariableId: string) {
+    if (!poseVariableId) {
+      startPoint = clearPointPoseVariable(startPoint);
+      recordChange?.();
+      return;
+    }
+
+    const variable = poseVariables.find((item) => item.id === poseVariableId);
+    if (!variable) return;
+
+    startPoint = bindPointToPoseVariable(startPoint, variable);
+    recordChange?.();
+  }
+
+  function handleLinePoseVariableChange(lineId: string, poseVariableId: string) {
+    if (!lineId) return;
+
+    const variable = poseVariables.find((item) => item.id === poseVariableId);
+    lines = lines.map((line) => {
+      if (line.id !== lineId) return line;
+      return {
+        ...line,
+        endPoint: variable
+          ? bindPointToPoseVariable(line.endPoint, variable)
+          : clearPointPoseVariable(line.endPoint),
+      };
+    });
+    recordChange?.();
+  }
+
   function getWait(i: any) {
     return i as any;
   }
@@ -442,6 +567,7 @@
       endPoint: newPoint,
       controlPoints: [],
       color: getRandomColor(),
+      speed: currentLine?.speed ?? 1,
       name: `Path ${lines.length + 1}`,
       waitBeforeMs: 0,
       waitAfterMs: 0,
@@ -506,6 +632,7 @@
       },
       controlPoints: [],
       color: getRandomColor(),
+      speed: currentLine?.speed ?? 1,
       name: `Path ${lines.length + 1}`,
       waitBeforeMs: 0,
       waitAfterMs: 0,
@@ -559,6 +686,7 @@
       },
       controlPoints: [],
       color: getRandomColor(),
+      speed: 1,
       waitBeforeMs: 0,
       waitAfterMs: 0,
       waitBeforeName: "",
@@ -654,6 +782,7 @@
       },
       controlPoints: [],
       color: getRandomColor(),
+      speed: 1,
       waitBeforeMs: 0,
       waitAfterMs: 0,
       waitBeforeName: "",
@@ -695,6 +824,7 @@
       },
       controlPoints: [],
       color: getRandomColor(),
+      speed: 1,
       waitBeforeMs: 0,
       waitAfterMs: 0,
       waitBeforeName: "",
@@ -792,8 +922,18 @@
 
     <RobotPositionDisplay {robotXY} {robotHeading} {x} {y} />
 
+    <PoseVariablesSection
+      bind:poseVariables
+      onAdd={addPoseVariable}
+      onRemove={removePoseVariable}
+      onChange={handlePoseVariableChange}
+      onCommit={recordChange}
+    />
+
     <StartingPointSection
       bind:startPoint
+      {poseVariables}
+      onPoseVariableChange={handleStartPoseVariableChange}
       {addPathAtStart}
       {addWaitAtStart}
       {addEventAtStart}
@@ -879,6 +1019,8 @@
               chainOptions={chainOptions}
               selectedChainId={getLinePrimaryChainId(ln.id || "")}
               onChainChange={(chainId) => assignLineToChain(ln.id || "", chainId)}
+              {poseVariables}
+              onPoseVariableChange={handleLinePoseVariableChange}
               {recordChange}
             />
           {/each}

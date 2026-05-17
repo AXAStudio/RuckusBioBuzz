@@ -4,6 +4,15 @@ export interface BasePoint {
   x: number;
   y: number;
   locked?: boolean;
+  poseVariableId?: string;
+}
+
+export interface PoseVariable {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  heading: number;
 }
 
 export type Point = BasePoint &
@@ -12,6 +21,7 @@ export type Point = BasePoint &
         heading: "linear";
         startDeg: number;
         endDeg: number;
+        headingCurve?: number;
         degrees?: never;
         reverse?: never;
       }
@@ -51,6 +61,7 @@ export interface Line {
   controlPoints: ControlPoint[];
   color: string;
   name?: string;
+  speed?: number;
   locked?: boolean;
   waitBefore?: WaitSegment;
   waitAfter?: WaitSegment;

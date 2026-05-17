@@ -7,7 +7,16 @@
 
   import { cubicInOut } from "svelte/easing";
   import { fade, fly } from "svelte/transition";
-  import type { FileInfo, Point, Line, Shape, SequenceItem, PathChain } from "../types";
+  import type {
+    FileInfo,
+    Point,
+    Line,
+    Shape,
+    SequenceItem,
+    PathChain,
+    PoseVariable,
+    Settings,
+  } from "../types";
   import * as browserFileStore from "../utils/browserFileStore";
   import { currentFilePath, isUnsaved, dualPathMode, secondFilePath } from "../stores";
   import { getRandomColor } from "../utils";
@@ -23,6 +32,8 @@
   export let shapes: Shape[];
   export let sequence: SequenceItem[];
   export let pathChains: PathChain[] = [];
+  export let poseVariables: PoseVariable[] = [];
+  export let settings: Settings;
   export let secondStartPoint: Point | null = null;
   export let secondLines: Line[] = [];
   export let secondShapes: Shape[] = [];
@@ -67,6 +78,7 @@
     return (input || []).map((line) => ({
       ...line,
       id: line.id || `line-${Math.random().toString(36).slice(2)}`,
+      speed: Math.max(0.05, Math.min(1, Number(line.speed ?? 1) || 1)),
       waitBeforeMs: Math.max(
         0,
         Number(line.waitBeforeMs ?? (line as any).waitBefore?.durationMs ?? 0),
@@ -91,6 +103,74 @@
       kind: "path",
       lineId: ln.id!,
     }));
+  }
+
+  function normalizePoseVariables(input: PoseVariable[] | undefined): PoseVariable[] {
+    if (!Array.isArray(input)) return [];
+
+    return input.map((variable, index) => ({
+      id: variable.id || `pose-${Math.random().toString(36).slice(2)}`,
+      name: (variable.name || "").trim() || `Pose ${index + 1}`,
+      x: Number.isFinite(Number(variable.x)) ? Number(variable.x) : 0,
+      y: Number.isFinite(Number(variable.y)) ? Number(variable.y) : 0,
+      heading: Number.isFinite(Number(variable.heading))
+        ? Number(variable.heading)
+        : 0,
+    }));
+  }
+
+  function createCurrentSaveData() {
+    return {
+      startPoint,
+      lines: normalizeLines(lines),
+      shapes,
+      sequence,
+      pathChains,
+      poseVariables,
+      settings,
+      version: "1.2.1",
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  function stringifyCurrentSaveData(pretty = false): string {
+    return JSON.stringify(createCurrentSaveData(), null, pretty ? 2 : 0);
+  }
+
+  function bindPointToPoseVariable(point: Point, variable: PoseVariable): Point {
+    return {
+      x: Number(variable.x) || 0,
+      y: Number(variable.y) || 0,
+      locked: point.locked,
+      poseVariableId: variable.id,
+      heading: "constant",
+      degrees: Number(variable.heading) || 0,
+    };
+  }
+
+  function applyPoseVariablesToLoadedPath(
+    sourceStartPoint: Point,
+    sourceLines: Line[],
+    sourcePoseVariables: PoseVariable[],
+  ): { startPoint: Point; lines: Line[] } {
+    const variablesById = new Map(
+      sourcePoseVariables.map((variable) => [variable.id, variable]),
+    );
+    const applyPoint = (point: Point): Point => {
+      if (!point.poseVariableId) return point;
+      const variable = variablesById.get(point.poseVariableId);
+      if (variable) return bindPointToPoseVariable(point, variable);
+      const { poseVariableId, ...nextPoint } = point;
+      return nextPoint as Point;
+    };
+
+    return {
+      startPoint: applyPoint(sourceStartPoint),
+      lines: sourceLines.map((line) => ({
+        ...line,
+        endPoint: applyPoint(line.endPoint),
+      })),
+    };
   }
 
   // Debug logging
@@ -243,13 +323,24 @@
         throw new Error("Invalid file format: missing required fields");
       }
 
+      const loadedPoseVariables = normalizePoseVariables(data.poseVariables);
+
       // Update the application state
-      startPoint = data.startPoint;
       const normalizedLines = normalizeLines(data.lines || []);
-      lines = normalizedLines;
+      const normalizedPath = applyPoseVariablesToLoadedPath(
+        data.startPoint,
+        normalizedLines,
+        loadedPoseVariables,
+      );
+      startPoint = normalizedPath.startPoint;
+      lines = normalizedPath.lines;
       shapes = data.shapes || [];
-      sequence = deriveSequence(data, normalizedLines);
+      sequence = deriveSequence(data, normalizedPath.lines);
       pathChains = data.pathChains || [];
+      poseVariables = loadedPoseVariables;
+      if (data.settings) {
+        settings = { ...settings, ...data.settings };
+      }
 
       // Update Global Store State
       currentFilePath.set(file.path);
@@ -315,15 +406,7 @@
     }
 
     try {
-      const content = JSON.stringify({
-        startPoint,
-        lines,
-        shapes,
-        sequence,
-        pathChains,
-        version: "1.2.1", // Add version for compatibility
-        timestamp: new Date().toISOString(),
-      });
+      const content = stringifyCurrentSaveData();
 
       await browserFileStore.writeFile(selectedFile.path, content);
       await refreshDirectory();
@@ -339,15 +422,7 @@
   // Download current project as a .pp file to the user's computer (Save As...)
   function downloadCurrentToDisk() {
     try {
-      const content = JSON.stringify({
-        startPoint,
-        lines,
-        shapes,
-        sequence,
-        pathChains,
-        version: "1.2.1",
-        timestamp: new Date().toISOString(),
-      }, null, 2);
+      const content = stringifyCurrentSaveData(true);
 
       const blob = new Blob([content], { type: "application/json" });
       const url = URL.createObjectURL(blob);
@@ -392,15 +467,7 @@
 
       const writable = await handle.createWritable();
 
-      const content = JSON.stringify({
-        startPoint,
-        lines,
-        shapes,
-        sequence,
-        pathChains,
-        version: "1.2.1",
-        timestamp: new Date().toISOString(),
-      }, null, 2);
+      const content = stringifyCurrentSaveData(true);
 
       await writable.write(content);
       await writable.close();
@@ -440,16 +507,7 @@
         }
       }
 
-      const normalizedLines = normalizeLines(lines);
-      const content = JSON.stringify({
-        startPoint,
-        lines: normalizedLines,
-        shapes,
-        sequence,
-        pathChains,
-        version: "1.2.1",
-        timestamp: new Date().toISOString(),
-      });
+      const content = stringifyCurrentSaveData();
 
       await browserFileStore.writeFile(filePath, content);
 
@@ -730,6 +788,14 @@
           });
         }
       });
+    }
+
+    if (Array.isArray(mirrored.poseVariables)) {
+      mirrored.poseVariables = mirrored.poseVariables.map((variable: PoseVariable) => ({
+        ...variable,
+        x: 141.5 - variable.x,
+        heading: 180 - variable.heading,
+      }));
     }
 
     // Don't mirror shapes/obstacles - they should remain in their original positions
