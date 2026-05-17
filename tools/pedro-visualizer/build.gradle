@@ -1,0 +1,50 @@
+plugins {
+    id 'base'
+    id 'java-base'
+    id 'idea'
+}
+
+def npmCommand = System.getProperty('os.name').toLowerCase().contains('windows') ? 'npm.cmd' : 'npm'
+
+sourceSets {
+    main {
+        java.srcDirs = ['src']
+        resources.srcDirs = ['public']
+    }
+}
+
+idea {
+    module {
+        sourceDirs += file('src')
+        resourceDirs += file('public')
+        excludeDirs += [
+            file('node_modules'),
+            file('dist'),
+            file('build'),
+            file('.svelte-kit')
+        ] as Set
+    }
+}
+
+tasks.register('npmInstall', Exec) {
+    group = 'pedro visualizer'
+    description = 'Install Pedro visualizer npm dependencies.'
+    commandLine npmCommand, 'ci'
+}
+
+tasks.register('npmBuild', Exec) {
+    group = 'pedro visualizer'
+    description = 'Build the Pedro visualizer web app.'
+    dependsOn 'npmInstall'
+    commandLine npmCommand, 'run', 'build'
+}
+
+tasks.register('npmDev', Exec) {
+    group = 'pedro visualizer'
+    description = 'Start the Pedro visualizer dev server at http://127.0.0.1:5173/.'
+    commandLine npmCommand, 'run', 'dev', '--', '--host', '127.0.0.1', '--port', '5173'
+}
+
+tasks.named('assemble') {
+    dependsOn 'npmBuild'
+}
