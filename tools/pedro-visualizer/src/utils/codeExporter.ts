@@ -7,6 +7,7 @@ import type {
   SequenceItem,
   PoseVariable,
   EventMarker,
+  NumberVariable,
 } from "../types";
 import { getCurvePoint } from "./math";
 
@@ -31,14 +32,20 @@ async function loadJavaPlugin() {
 /**
  * Generate Java code from path data
  */
-function sanitizeIdentifier(input: string | undefined, fallback: string): string {
+function sanitizeIdentifier(
+  input: string | undefined,
+  fallback: string,
+): string {
   const cleaned = (input || "").replace(/[^a-zA-Z0-9]/g, "");
   if (!cleaned) return fallback;
   if (/^[0-9]/.test(cleaned)) return `${fallback}${cleaned}`;
   return cleaned;
 }
 
-function sanitizeJavaConstantName(input: string | undefined, fallback: string): string {
+function sanitizeJavaConstantName(
+  input: string | undefined,
+  fallback: string,
+): string {
   const cleaned = (input || "")
     .replace(/([a-z])([A-Z])/g, "$1_$2")
     .replace(/[^a-zA-Z0-9]+/g, "_")
@@ -50,7 +57,10 @@ function sanitizeJavaConstantName(input: string | undefined, fallback: string): 
   return cleaned;
 }
 
-function uniqueJavaConstantName(baseName: string, usedNames: Set<string>): string {
+function uniqueJavaConstantName(
+  baseName: string,
+  usedNames: Set<string>,
+): string {
   let candidate = baseName;
   let duplicateIndex = 2;
 
@@ -63,7 +73,10 @@ function uniqueJavaConstantName(baseName: string, usedNames: Set<string>): strin
   return candidate;
 }
 
-function sanitizeClassName(input: string | undefined, fallback: string): string {
+function sanitizeClassName(
+  input: string | undefined,
+  fallback: string,
+): string {
   const cleaned = sanitizeIdentifier(input, fallback);
   return cleaned.charAt(0).toUpperCase() + cleaned.slice(1);
 }
@@ -72,24 +85,42 @@ function fixed(value: number): string {
   return value.toFixed(3);
 }
 
-function pathSpeed(line: Line | undefined): number {
+function pathSpeedValue(line: Line | undefined): number {
   const speed = Number(line?.speed ?? 1);
   if (!Number.isFinite(speed)) return 1;
   return Math.max(0.05, Math.min(1, speed));
 }
+
+function buildNumberVariableCode(
+  name: string,
+  variable: NumberVariable,
+): string {
+  const value = Number(variable.value);
+  return `private static final double ${name} = ${fixed(Number.isFinite(value) ? value : 0)};`;
+}
+
+type NumberExpressionType = "double" | "int" | "long" | "position";
 
 type NormalizedEventMarker = {
   id: string;
   name: string;
   triggerType: "parametric" | "temporal" | "pose";
   position: number;
+  positionVariableId?: string;
   triggerMs: number;
+  triggerMsVariableId?: string;
   poseX: number;
+  poseXVariableId?: string;
   poseY: number;
+  poseYVariableId?: string;
   durationMs: number;
+  durationVariableId?: string;
 };
 
-function normalizeEventMarkers(line: Line, pathIndex = 0): NormalizedEventMarker[] {
+function normalizeEventMarkers(
+  line: Line,
+  pathIndex = 0,
+): NormalizedEventMarker[] {
   return (line.eventMarkers || []).map((marker, markerIndex) => {
     const position = Number(marker.position);
     const triggerMs = Number(marker.triggerMs ?? 0);
@@ -101,33 +132,52 @@ function normalizeEventMarkers(line: Line, pathIndex = 0): NormalizedEventMarker
 
     return {
       id: marker.id || `path-${pathIndex + 1}-event-${markerIndex + 1}`,
-      name: marker.name?.trim() || `Path ${pathIndex + 1} Event ${markerIndex + 1}`,
+      name:
+        marker.name?.trim() || `Path ${pathIndex + 1} Event ${markerIndex + 1}`,
       triggerType,
-      position: Number.isFinite(position) ? Math.max(0, Math.min(1, position)) : 0.5,
-      triggerMs: Number.isFinite(triggerMs) ? Math.max(0, Math.round(triggerMs)) : 0,
+      position: Number.isFinite(position)
+        ? Math.max(0, Math.min(1, position))
+        : 0.5,
+      positionVariableId: marker.positionVariableId,
+      triggerMs: Number.isFinite(triggerMs)
+        ? Math.max(0, Math.round(triggerMs))
+        : 0,
+      triggerMsVariableId: marker.triggerMsVariableId,
       poseX: Number.isFinite(Number(marker.poseX))
         ? Number(marker.poseX)
         : Number(line.endPoint.x) || 0,
+      poseXVariableId: marker.poseXVariableId,
       poseY: Number.isFinite(Number(marker.poseY))
         ? Number(marker.poseY)
         : Number(line.endPoint.y) || 0,
-      durationMs: Number.isFinite(durationMs) ? Math.max(0, Math.round(durationMs)) : 0,
+      poseYVariableId: marker.poseYVariableId,
+      durationMs: Number.isFinite(durationMs)
+        ? Math.max(0, Math.round(durationMs))
+        : 0,
+      durationVariableId: marker.durationVariableId,
     };
   });
 }
 
-function buildTeamCodeCallback(marker: NormalizedEventMarker): string {
-  const action = `() -> startParallelEvent(${javaStringLiteral(marker.name)}, ${marker.durationMs}L)`;
+function buildTeamCodeCallback(
+  marker: NormalizedEventMarker,
+  numberExpression: (
+    variableId: string | undefined,
+    fallbackExpression: string,
+    expressionType: NumberExpressionType,
+  ) => string,
+): string {
+  const action = `() -> startParallelEvent(${javaStringLiteral(marker.name)}, ${numberExpression(marker.durationVariableId, `${marker.durationMs}L`, "long")})`;
 
   if (marker.triggerType === "temporal") {
-    return `.addTemporalCallback(${marker.triggerMs}L, ${action})`;
+    return `.addTemporalCallback(${numberExpression(marker.triggerMsVariableId, `${marker.triggerMs}L`, "long")}, ${action})`;
   }
 
   if (marker.triggerType === "pose") {
-    return `.addPoseCallback(new Pose(${fixed(marker.poseX)}, ${fixed(marker.poseY)}), ${action}, ${fixed(marker.position)})`;
+    return `.addPoseCallback(new Pose(${numberExpression(marker.poseXVariableId, fixed(marker.poseX), "double")}, ${numberExpression(marker.poseYVariableId, fixed(marker.poseY), "double")}), ${action}, ${numberExpression(marker.positionVariableId, fixed(marker.position), "position")})`;
   }
 
-  return `.addParametricCallback(${fixed(marker.position)}, ${action})`;
+  return `.addParametricCallback(${numberExpression(marker.positionVariableId, fixed(marker.position), "position")}, ${action})`;
 }
 
 function headingCurve(line: Line): number {
@@ -138,26 +188,39 @@ function headingCurve(line: Line): number {
 }
 
 function usesCurvedHeading(line: Line): boolean {
-  return line.endPoint.heading === "linear" && Math.abs(headingCurve(line) - 1) > 0.001;
+  return (
+    line.endPoint.heading === "linear" &&
+    Math.abs(headingCurve(line) - 1) > 0.001
+  );
 }
 
-function pathStepHeadingDegrees(point: Point, pointRole: "start" | "end"): number {
+function pathStepHeadingDegrees(
+  point: Point,
+  pointRole: "start" | "end",
+): number {
   if (point.heading === "constant") {
     return point.degrees ?? 0;
   }
 
   if (point.heading === "linear") {
-    return pointRole === "start" ? point.startDeg ?? 0 : point.endDeg ?? 0;
+    return pointRole === "start" ? (point.startDeg ?? 0) : (point.endDeg ?? 0);
   }
 
   return 0;
 }
 
-function buildPathStepCode(name: string, point: Point, pointRole: "start" | "end"): string {
+function buildPathStepCode(
+  name: string,
+  point: Point,
+  pointRole: "start" | "end",
+): string {
   return `private static final PathStep ${name} = new PathStep(${fixed(point.x)}, ${fixed(point.y)}, ${fixed(pathStepHeadingDegrees(point, pointRole))});`;
 }
 
-function buildPoseVariablePathStepCode(name: string, variable: PoseVariable): string {
+function buildPoseVariablePathStepCode(
+  name: string,
+  variable: PoseVariable,
+): string {
   return `private static final PathStep ${name} = new PathStep(${fixed(Number(variable.x) || 0)}, ${fixed(Number(variable.y) || 0)}, ${fixed(Number(variable.heading) || 0)});`;
 }
 
@@ -172,7 +235,8 @@ function buildPathSegmentCode(line: Line, startExpression: string): string {
     .map((point) => `new Pose(${point.x.toFixed(3)}, ${point.y.toFixed(3)})`)
     .join(",\n            ");
 
-  const curveType = line.controlPoints.length === 0 ? "BezierLine" : "BezierCurve";
+  const curveType =
+    line.controlPoints.length === 0 ? "BezierLine" : "BezierCurve";
 
   const allPoints = controlPoints
     ? `${startExpression},\n            ${controlPoints},\n            new Pose(${line.endPoint.x.toFixed(3)}, ${line.endPoint.y.toFixed(3)})`
@@ -185,7 +249,9 @@ function buildPathSegmentCode(line: Line, startExpression: string): string {
         ? `Math.toRadians(${line.endPoint.startDeg ?? 0}), Math.toRadians(${line.endPoint.endDeg ?? 0})`
         : "";
 
-  const reverseConfig = line.endPoint.reverse ? "\n          .setReversed()" : "";
+  const reverseConfig = line.endPoint.reverse
+    ? "\n          .setReversed()"
+    : "";
 
   return `.addPath(
             new ${curveType}(
@@ -200,12 +266,18 @@ function buildTeamCodePathSegmentCode(
   startExpression: string,
   endExpression: string,
   pathIndex = 0,
+  numberExpression: (
+    variableId: string | undefined,
+    fallbackExpression: string,
+    expressionType: NumberExpressionType,
+  ) => string,
 ): string {
   const controlPoints = line.controlPoints
     .map((point) => `new Pose(${fixed(point.x)}, ${fixed(point.y)})`)
     .join(",\n              ");
 
-  const curveType = line.controlPoints.length === 0 ? "BezierLine" : "BezierCurve";
+  const curveType =
+    line.controlPoints.length === 0 ? "BezierLine" : "BezierCurve";
   const allPoints = controlPoints
     ? `${startExpression},\n              ${controlPoints},\n              ${endExpression}`
     : `${startExpression},\n              ${endExpression}`;
@@ -219,9 +291,14 @@ function buildTeamCodePathSegmentCode(
           ? `.setLinearHeadingInterpolation(Math.toRadians(${fixed(line.endPoint.startDeg ?? 0)}), Math.toRadians(${fixed(line.endPoint.endDeg ?? 0)}))`
           : `.setTangentHeadingInterpolation()`;
 
-  const reverseConfig = line.endPoint.reverse ? "\n          .setReversed()" : "";
+  const reverseConfig = line.endPoint.reverse
+    ? "\n          .setReversed()"
+    : "";
   const callbackConfig = normalizeEventMarkers(line, pathIndex)
-    .map((marker) => `\n          ${buildTeamCodeCallback(marker)}`)
+    .map(
+      (marker) =>
+        `\n          ${buildTeamCodeCallback(marker, numberExpression)}`,
+    )
     .join("");
 
   return `.addPath(
@@ -259,6 +336,7 @@ export async function generateTeamCodeAutoCode(
   className = "GeneratedSwerveAuto",
   sequence: SequenceItem[] = [],
   poseVariables: PoseVariable[] = [],
+  numberVariables: NumberVariable[] = [],
 ): Promise<string> {
   const autoClassName = sanitizeClassName(className, "GeneratedSwerveAuto");
   const linesWithIds = lines.map((line, idx) => ({
@@ -268,15 +346,20 @@ export async function generateTeamCodeAutoCode(
   const lineById = new Map(linesWithIds.map((line) => [line.id!, line]));
   void pathChains;
 
-  const poseVariablesById = new Map(poseVariables.map((variable) => [variable.id, variable]));
+  const poseVariablesById = new Map(
+    poseVariables.map((variable) => [variable.id, variable]),
+  );
   const usedPoseVariableIds = new Set<string>();
-  if (startPoint.poseVariableId) usedPoseVariableIds.add(startPoint.poseVariableId);
+  if (startPoint.poseVariableId)
+    usedPoseVariableIds.add(startPoint.poseVariableId);
   linesWithIds.forEach((line) => {
-    if (line.endPoint.poseVariableId) usedPoseVariableIds.add(line.endPoint.poseVariableId);
+    if (line.endPoint.poseVariableId)
+      usedPoseVariableIds.add(line.endPoint.poseVariableId);
   });
 
   const usedConstantNames = new Set<string>();
   const poseVariableConstantById = new Map<string, string>();
+  const numberVariableConstantById = new Map<string, string>();
 
   [...usedPoseVariableIds].forEach((poseVariableId, idx) => {
     const variable = poseVariablesById.get(poseVariableId);
@@ -292,6 +375,46 @@ export async function generateTeamCodeAutoCode(
     );
   });
 
+  numberVariables.forEach((variable, idx) => {
+    const baseName = `NUMBER_${sanitizeJavaConstantName(
+      variable.name,
+      `VARIABLE_${idx + 1}`,
+    )}`;
+    numberVariableConstantById.set(
+      variable.id,
+      uniqueJavaConstantName(baseName, usedConstantNames),
+    );
+  });
+
+  const numberExpression = (
+    variableId: string | undefined,
+    fallbackExpression: string,
+    expressionType: NumberExpressionType,
+  ): string => {
+    const constantName = variableId
+      ? numberVariableConstantById.get(variableId)
+      : undefined;
+    if (!constantName) return fallbackExpression;
+    if (expressionType === "position") {
+      const value = Number(
+        numberVariables.find((variable) => variable.id === variableId)?.value,
+      );
+      return Number.isFinite(value) && value > 1
+        ? `(${constantName} / 100.0)`
+        : constantName;
+    }
+    if (expressionType === "int") return `(int) Math.round(${constantName})`;
+    if (expressionType === "long") return `Math.round(${constantName})`;
+    return constantName;
+  };
+
+  const pathSpeedExpression = (line: Line | undefined): string =>
+    numberExpression(
+      line?.speedVariableId,
+      fixed(pathSpeedValue(line)),
+      "double",
+    );
+
   const pointStepName = (point: Point, fallbackName: string) =>
     point.poseVariableId
       ? poseVariableConstantById.get(point.poseVariableId) || fallbackName
@@ -304,18 +427,33 @@ export async function generateTeamCodeAutoCode(
   poseVariableConstantById.forEach((constantName, poseVariableId) => {
     const variable = poseVariablesById.get(poseVariableId);
     if (variable) {
-      pathStepDeclarations.push(buildPoseVariablePathStepCode(constantName, variable));
+      pathStepDeclarations.push(
+        buildPoseVariablePathStepCode(constantName, variable),
+      );
+    }
+  });
+
+  numberVariableConstantById.forEach((constantName, variableId) => {
+    const variable = numberVariables.find((item) => item.id === variableId);
+    if (variable) {
+      pathStepDeclarations.push(
+        buildNumberVariableCode(constantName, variable),
+      );
     }
   });
 
   if (pointStepName(startPoint, "START_STEP") === "START_STEP") {
-    pathStepDeclarations.push(buildPathStepCode("START_STEP", startPoint, "start"));
+    pathStepDeclarations.push(
+      buildPathStepCode("START_STEP", startPoint, "start"),
+    );
   }
 
   linesWithIds.forEach((line, idx) => {
     const fallbackName = `POINT_${idx + 1}`;
     if (pointStepName(line.endPoint, fallbackName) === fallbackName) {
-      pathStepDeclarations.push(buildPathStepCode(fallbackName, line.endPoint, "end"));
+      pathStepDeclarations.push(
+        buildPathStepCode(fallbackName, line.endPoint, "end"),
+      );
     }
   });
 
@@ -334,12 +472,16 @@ export async function generateTeamCodeAutoCode(
         idx <= 0
           ? pointStepExpression(startPoint, "START_STEP")
           : pointStepExpression(linesWithIds[idx - 1].endPoint, `POINT_${idx}`);
-      const endExpression = pointStepExpression(line.endPoint, `POINT_${idx + 1}`);
+      const endExpression = pointStepExpression(
+        line.endPoint,
+        `POINT_${idx + 1}`,
+      );
       const segmentSnippet = buildTeamCodePathSegmentCode(
         line,
         startExpression,
         endExpression,
         idx,
+        numberExpression,
       );
 
       return `path${idx + 1} = follower.pathBuilder()
@@ -351,7 +493,48 @@ export async function generateTeamCodeAutoCode(
   const sequenceItems =
     sequence.length > 0
       ? sequence
-      : linesWithIds.map((line) => ({ kind: "path", lineId: line.id! }) as SequenceItem);
+      : linesWithIds.map(
+          (line) => ({ kind: "path", lineId: line.id! }) as SequenceItem,
+        );
+  const repeatItems = sequenceItems
+    .map((item, sequenceIndex) => ({ item, sequenceIndex }))
+    .filter(
+      (
+        entry,
+      ): entry is {
+        item: Extract<SequenceItem, { kind: "repeat" }>;
+        sequenceIndex: number;
+      } =>
+        entry.item.kind === "repeat" &&
+        (entry.item.lineIds || []).some((lineId) => lineById.has(lineId)),
+    );
+  const repeatSlotBySequenceIndex = new Map(
+    repeatItems.map((entry, repeatSlot) => [entry.sequenceIndex, repeatSlot]),
+  );
+  const repeatFieldDeclarations = repeatItems
+    .map((entry) => {
+      const fieldName = `repeat${entry.sequenceIndex + 1}`;
+      return `private PathChain[] ${fieldName}Paths;
+    private double[] ${fieldName}PathSpeeds;`;
+    })
+    .join("\n    ");
+  const repeatAssignments = repeatItems
+    .map((entry) => {
+      const fieldName = `repeat${entry.sequenceIndex + 1}`;
+      const validLineIds = (entry.item.lineIds || []).filter((lineId) =>
+        lineById.has(lineId),
+      );
+      const pathList = validLineIds
+        .map((lineId) => pathVariableByLineId.get(lineId))
+        .filter(Boolean)
+        .join(", ");
+      const speedList = validLineIds
+        .map((lineId) => pathSpeedExpression(lineById.get(lineId)))
+        .join(", ");
+      return `${fieldName}Paths = new PathChain[] { ${pathList} };
+      ${fieldName}PathSpeeds = new double[] { ${speedList} };`;
+    })
+    .join("\n\n      ");
   const eventItems = sequenceItems.filter((item) => item.kind === "event");
   const eventMethods = new Map<string, { name: string; suffix: string }>();
   const pathEventMarkers = linesWithIds.flatMap((line, lineIndex) =>
@@ -367,7 +550,9 @@ export async function generateTeamCodeAutoCode(
     const baseSuffix = sanitizeJavaMethodSuffix(eventName, fallbackSuffix);
     let suffix = baseSuffix;
     let duplicateIndex = 2;
-    while ([...eventMethods.values()].some((event) => event.suffix === suffix)) {
+    while (
+      [...eventMethods.values()].some((event) => event.suffix === suffix)
+    ) {
       suffix = `${baseSuffix}${duplicateIndex}`;
       duplicateIndex++;
     }
@@ -394,31 +579,47 @@ export async function generateTeamCodeAutoCode(
         }
 
         return `case ${idx}:
-        followPathStep(${pathVariable}, ${fixed(pathSpeed(lineById.get(item.lineId)))});
-        break;`;
+	        followPathStep(${pathVariable}, ${pathSpeedExpression(lineById.get(item.lineId))});
+	        break;`;
       }
 
-      const durationMs = Math.max(0, Number(item.durationMs) || 0);
       if (item.kind === "wait") {
         return `case ${idx}:
-        runWaitStep(${durationMs}L);
+	        runWaitStep(${numberExpression(item.durationVariableId, `${Math.max(0, Number(item.durationMs) || 0)}L`, "long")});
+	        break;`;
+      }
+
+      if (item.kind === "repeat") {
+        const repeatSlot = repeatSlotBySequenceIndex.get(idx);
+        if (repeatSlot === undefined) {
+          return `case ${idx}:
+        advanceSequence();
+        break;`;
+        }
+        const fieldName = `repeat${idx + 1}`;
+        return `case ${idx}:
+        followRepeatStep(${fieldName}Paths, ${fieldName}PathSpeeds, ${numberExpression(item.countVariableId, `${Math.max(1, Math.min(20, Math.round(Number(item.count) || 1)))}`, "int")}, ${repeatSlot});
         break;`;
       }
 
       return `case ${idx}:
-        runTimedEventStep(${javaStringLiteral(item.name || item.kind)}, ${durationMs}L);
-        break;`;
+	        runTimedEventStep(${javaStringLiteral(item.name || item.kind)}, ${numberExpression(item.durationVariableId, `${Math.max(0, Number(item.durationMs) || 0)}L`, "long")});
+	        break;`;
     })
     .join("\n      ");
   const startEventCases = [...eventMethods.values()]
-    .map((event) => `case ${javaStringLiteral(event.name)}:
+    .map(
+      (event) => `case ${javaStringLiteral(event.name)}:
         start${event.suffix}();
-        break;`)
+        break;`,
+    )
     .join("\n      ");
   const finishEventCases = [...eventMethods.values()]
-    .map((event) => `case ${javaStringLiteral(event.name)}:
+    .map(
+      (event) => `case ${javaStringLiteral(event.name)}:
         finish${event.suffix}();
-        break;`)
+        break;`,
+    )
     .join("\n      ");
   const eventMethodStubs = [...eventMethods.values()]
     .map(
@@ -448,13 +649,17 @@ import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 public class ${autoClassName} extends OpMode {
     ${pathStepDeclarationBlock}
 
-    private Follower follower;
-    ${chainFieldDeclarations}
-    private int sequenceIndex;
-    private long stepStartTime;
-    private boolean stepStarted;
-    private boolean pathFinished;
-    private static final int PARALLEL_EVENT_CAPACITY = ${parallelEventCapacity};
+	    private Follower follower;
+	    ${chainFieldDeclarations}
+	    ${repeatFieldDeclarations}
+	    private int sequenceIndex;
+	    private long stepStartTime;
+	    private boolean stepStarted;
+	    private boolean pathFinished;
+	    private static final int REPEAT_LOOP_CAPACITY = ${Math.max(1, repeatItems.length)};
+	    private final int[] repeatLoopIterations = new int[REPEAT_LOOP_CAPACITY];
+	    private final int[] repeatLoopPathIndexes = new int[REPEAT_LOOP_CAPACITY];
+	    private static final int PARALLEL_EVENT_CAPACITY = ${parallelEventCapacity};
     private final String[] activeParallelEventNames = new String[PARALLEL_EVENT_CAPACITY];
     private final long[] activeParallelEventStartTimes = new long[PARALLEL_EVENT_CAPACITY];
     private final long[] activeParallelEventDurations = new long[PARALLEL_EVENT_CAPACITY];
@@ -476,10 +681,11 @@ public class ${autoClassName} extends OpMode {
 
     @Override
     public void start() {
-        sequenceIndex = 0;
-        stepStarted = false;
-        pathFinished = false;
-        resetParallelEvents();
+	        sequenceIndex = 0;
+	        stepStarted = false;
+	        pathFinished = false;
+	        resetRepeatLoops();
+	        resetParallelEvents();
 
         follower.setStartingPose(${pointStepExpression(startPoint, "START_STEP")});
     }
@@ -507,9 +713,11 @@ public class ${autoClassName} extends OpMode {
         follower.update();
     }
 
-    private void buildPaths() {
-      ${chainAssignments}
-    }
+	    private void buildPaths() {
+	      ${chainAssignments}
+
+	      ${repeatAssignments}
+	    }
 
     private void runSequence() {
         if (pathFinished) {
@@ -550,20 +758,68 @@ public class ${autoClassName} extends OpMode {
         return angle;
     }
 
-    private void followPathStep(PathChain path, double pathSpeed) {
-        if (!stepStarted) {
-            follower.followPath(path, clampPathSpeed(pathSpeed), true);
-            stepStarted = true;
-        }
+	    private void followPathStep(PathChain path, double pathSpeed) {
+	        if (!stepStarted) {
+	            follower.followPath(path, clampPathSpeed(pathSpeed), true);
+	            stepStarted = true;
+	        }
 
         if (!follower.isBusy()) {
             advanceSequence();
-        }
-    }
+	        }
+	    }
 
-    private double clampPathSpeed(double pathSpeed) {
-        return Math.max(0.05, Math.min(1.0, pathSpeed));
-    }
+	    private void followRepeatStep(
+	        PathChain[] repeatPaths,
+	        double[] repeatPathSpeeds,
+	        int repeatCount,
+	        int repeatSlot
+	    ) {
+	        if (
+	            repeatSlot < 0 ||
+	            repeatSlot >= REPEAT_LOOP_CAPACITY ||
+	            repeatPaths == null ||
+	            repeatPaths.length == 0 ||
+	            repeatCount <= 0
+	        ) {
+	            advanceSequence();
+	            return;
+	        }
+
+	        int pathIndex = Math.max(0, Math.min(repeatPaths.length - 1, repeatLoopPathIndexes[repeatSlot]));
+	        PathChain path = repeatPaths[pathIndex];
+	        double pathSpeed =
+	            repeatPathSpeeds != null && pathIndex < repeatPathSpeeds.length
+	                ? repeatPathSpeeds[pathIndex]
+	                : 1.0;
+
+	        if (!stepStarted) {
+	            follower.followPath(path, clampPathSpeed(pathSpeed), true);
+	            stepStarted = true;
+	        }
+
+	        if (follower.isBusy()) {
+	            return;
+	        }
+
+	        stepStarted = false;
+	        repeatLoopPathIndexes[repeatSlot]++;
+
+	        if (repeatLoopPathIndexes[repeatSlot] >= repeatPaths.length) {
+	            repeatLoopPathIndexes[repeatSlot] = 0;
+	            repeatLoopIterations[repeatSlot]++;
+	        }
+
+	        if (repeatLoopIterations[repeatSlot] >= repeatCount) {
+	            repeatLoopIterations[repeatSlot] = 0;
+	            repeatLoopPathIndexes[repeatSlot] = 0;
+	            advanceSequence();
+	        }
+	    }
+
+	    private double clampPathSpeed(double pathSpeed) {
+	        return Math.max(0.05, Math.min(1.0, pathSpeed));
+	    }
 
     private void runWaitStep(long durationMs) {
         if (!stepStarted) {
@@ -647,11 +903,18 @@ public class ${autoClassName} extends OpMode {
         }
     }
 
-    private void resetParallelEvents() {
-        for (int i = 0; i < activeParallelEventNames.length; i++) {
-            clearParallelEvent(i);
-        }
-    }
+	    private void resetParallelEvents() {
+	        for (int i = 0; i < activeParallelEventNames.length; i++) {
+	            clearParallelEvent(i);
+	        }
+	    }
+
+	    private void resetRepeatLoops() {
+	        for (int i = 0; i < REPEAT_LOOP_CAPACITY; i++) {
+	            repeatLoopIterations[i] = 0;
+	            repeatLoopPathIndexes[i] = 0;
+	        }
+	    }
 
     private void clearParallelEvent(int index) {
         activeParallelEventNames[index] = null;
@@ -740,14 +1003,20 @@ export async function generateJavaCode(
 
   const fieldDeclarations = normalizedChains
     .map((chain, idx) => {
-      const variableName = sanitizeIdentifier(chain.name, `pathChain${idx + 1}`);
+      const variableName = sanitizeIdentifier(
+        chain.name,
+        `pathChain${idx + 1}`,
+      );
       return `public PathChain ${variableName};`;
     })
     .join("\n    ");
 
   const pathAssignments = normalizedChains
     .map((chain, chainIdx) => {
-      const variableName = sanitizeIdentifier(chain.name, `pathChain${chainIdx + 1}`);
+      const variableName = sanitizeIdentifier(
+        chain.name,
+        `pathChain${chainIdx + 1}`,
+      );
 
       const segmentSnippets = chain.lineIds
         .map((lineId) => {
@@ -980,7 +1249,23 @@ export async function generateSequentialCommandCode(
     kind: "path",
     lineId: ln.id || `line-${idx + 1}`,
   }));
-  const seq = sequence && sequence.length ? sequence : defaultSequence;
+  const rawSeq = sequence && sequence.length ? sequence : defaultSequence;
+  const seq: SequenceItem[] = [];
+  rawSeq.forEach((item) => {
+    if (item.kind !== "repeat") {
+      seq.push(item);
+      return;
+    }
+    const repeatCount = Math.max(
+      1,
+      Math.min(20, Math.round(Number(item.count) || 1)),
+    );
+    for (let repeatIndex = 0; repeatIndex < repeatCount; repeatIndex++) {
+      (item.lineIds || []).forEach((lineId) => {
+        seq.push({ kind: "path", lineId });
+      });
+    }
+  });
 
   seq.forEach((item, idx) => {
     if (item.kind === "wait" || item.kind === "event") {

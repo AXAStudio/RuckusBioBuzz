@@ -15,6 +15,8 @@
     SequenceItem,
     PathChain,
     PoseVariable,
+    PathVariable,
+    NumberVariable,
     Settings,
     EventTriggerType,
   } from "../types";
@@ -34,6 +36,8 @@
   export let sequence: SequenceItem[];
   export let pathChains: PathChain[] = [];
   export let poseVariables: PoseVariable[] = [];
+  export let pathVariables: PathVariable[] = [];
+  export let numberVariables: NumberVariable[] = [];
   export let settings: Settings;
   export let secondStartPoint: Point | null = null;
   export let secondLines: Line[] = [];
@@ -155,6 +159,171 @@
     }));
   }
 
+  function normalizeNumberVariables(input: NumberVariable[] | undefined): NumberVariable[] {
+    if (!Array.isArray(input)) return [];
+
+    return input.map((variable, index) => {
+      const value = Number(variable.value);
+      return {
+        id: variable.id || `number-${Math.random().toString(36).slice(2)}`,
+        name: (variable.name || "").trim() || `Number ${index + 1}`,
+        value: Number.isFinite(value) ? value : 0,
+      };
+    });
+  }
+
+  function numberVariableValue(
+    variableId: string | undefined,
+    variablesById: Map<string, NumberVariable>,
+    fallback: number,
+  ): number {
+    if (!variableId) return fallback;
+    const value = Number(variablesById.get(variableId)?.value);
+    return Number.isFinite(value) ? value : fallback;
+  }
+
+  function positionVariableValue(
+    variableId: string | undefined,
+    variablesById: Map<string, NumberVariable>,
+    fallback: number,
+  ): number {
+    const value = numberVariableValue(variableId, variablesById, fallback);
+    return Math.max(0, Math.min(1, value > 1 ? value / 100 : value));
+  }
+
+  function applyNumberVariablesToLines(
+    sourceLines: Line[],
+    sourceNumberVariables: NumberVariable[],
+  ): Line[] {
+    const variablesById = new Map(
+      sourceNumberVariables.map((variable) => [variable.id, variable]),
+    );
+
+    return sourceLines.map((line) => ({
+      ...line,
+      speed: Math.max(
+        0.05,
+        Math.min(
+          1,
+          numberVariableValue(
+            line.speedVariableId,
+            variablesById,
+            Number(line.speed ?? 1) || 1,
+          ),
+        ),
+      ),
+      eventMarkers: (line.eventMarkers || []).map((marker) => ({
+        ...marker,
+        position: positionVariableValue(
+          marker.positionVariableId,
+          variablesById,
+          Number(marker.position ?? 0.5) || 0.5,
+        ),
+        triggerMs: Math.max(
+          0,
+          Math.round(
+            numberVariableValue(
+              marker.triggerMsVariableId,
+              variablesById,
+              Number(marker.triggerMs ?? 0) || 0,
+            ),
+          ),
+        ),
+        poseX: numberVariableValue(
+          marker.poseXVariableId,
+          variablesById,
+          Number(marker.poseX ?? line.endPoint?.x ?? 0) || 0,
+        ),
+        poseY: numberVariableValue(
+          marker.poseYVariableId,
+          variablesById,
+          Number(marker.poseY ?? line.endPoint?.y ?? 0) || 0,
+        ),
+        durationMs: Math.max(
+          0,
+          Math.round(
+            numberVariableValue(
+              marker.durationVariableId,
+              variablesById,
+              Number(marker.durationMs ?? 0) || 0,
+            ),
+          ),
+        ),
+      })),
+    }));
+  }
+
+  function applyNumberVariablesToSequence(
+    sourceSequence: SequenceItem[],
+    sourceNumberVariables: NumberVariable[],
+  ): SequenceItem[] {
+    const variablesById = new Map(
+      sourceNumberVariables.map((variable) => [variable.id, variable]),
+    );
+
+    return sourceSequence.map((item) => {
+      if (item.kind === "repeat") {
+        return {
+          ...item,
+          count: Math.max(
+            1,
+            Math.min(
+              20,
+              Math.round(
+                numberVariableValue(item.countVariableId, variablesById, item.count),
+              ),
+            ),
+          ),
+        };
+      }
+
+      if (item.kind === "wait" || item.kind === "event") {
+        return {
+          ...item,
+          durationMs: Math.max(
+            0,
+            Math.round(
+              numberVariableValue(
+                item.durationVariableId,
+                variablesById,
+                item.durationMs,
+              ),
+            ),
+          ),
+        };
+      }
+
+      return item;
+    });
+  }
+
+  function normalizePathVariables(
+    input: PathVariable[] | undefined,
+    sourcePoseVariables: PoseVariable[] = [],
+    sourceNumberVariables: NumberVariable[] = [],
+  ): PathVariable[] {
+    if (!Array.isArray(input)) return [];
+
+    return input.map((variable, index) => {
+      const normalizedLines = applyNumberVariablesToLines(
+        normalizeLines(variable.lines || []),
+        sourceNumberVariables,
+      );
+      const normalizedPath = applyPoseVariablesToLoadedPath(
+        variable.startPoint || startPoint,
+        normalizedLines,
+        sourcePoseVariables,
+      );
+
+      return {
+        id: variable.id || `path-variable-${Math.random().toString(36).slice(2)}`,
+        name: (variable.name || "").trim() || `Path Variable ${index + 1}`,
+        startPoint: normalizedPath.startPoint,
+        lines: normalizedPath.lines,
+      };
+    });
+  }
+
   function createCurrentSaveData() {
     return {
       startPoint,
@@ -163,6 +332,8 @@
       sequence,
       pathChains,
       poseVariables,
+      pathVariables,
+      numberVariables,
       settings,
       version: "1.2.1",
       timestamp: new Date().toISOString(),
@@ -387,9 +558,13 @@
       }
 
       const loadedPoseVariables = normalizePoseVariables(data.poseVariables);
+      const loadedNumberVariables = normalizeNumberVariables(data.numberVariables);
 
       // Update the application state
-      const normalizedLines = normalizeLines(data.lines || []);
+      const normalizedLines = applyNumberVariablesToLines(
+        normalizeLines(data.lines || []),
+        loadedNumberVariables,
+      );
       const normalizedPath = applyPoseVariablesToLoadedPath(
         data.startPoint,
         normalizedLines,
@@ -398,9 +573,18 @@
       startPoint = normalizedPath.startPoint;
       lines = normalizedPath.lines;
       shapes = data.shapes || [];
-      sequence = deriveSequence(data, normalizedPath.lines);
+      sequence = applyNumberVariablesToSequence(
+        deriveSequence(data, normalizedPath.lines),
+        loadedNumberVariables,
+      );
       pathChains = data.pathChains || [];
       poseVariables = loadedPoseVariables;
+      numberVariables = loadedNumberVariables;
+      pathVariables = normalizePathVariables(
+        data.pathVariables,
+        loadedPoseVariables,
+        loadedNumberVariables,
+      );
       if (data.settings) {
         settings = { ...settings, ...data.settings };
       }

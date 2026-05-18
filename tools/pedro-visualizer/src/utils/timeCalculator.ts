@@ -252,9 +252,24 @@ export function calculatePathTime(
       ? sequence
       : lines.map((ln) => ({ kind: "path", lineId: ln.id! }));
 
+  const expandedSeq: SequenceItem[] = [];
+  seq.forEach((item) => {
+    if (item.kind !== "repeat") {
+      expandedSeq.push(item);
+      return;
+    }
+
+    const repeatCount = Math.max(1, Math.min(20, Math.round(Number(item.count) || 1)));
+    for (let repeatIndex = 0; repeatIndex < repeatCount; repeatIndex++) {
+      (item.lineIds || []).forEach((lineId) => {
+        expandedSeq.push({ kind: "path", lineId });
+      });
+    }
+  });
+
   let lastPoint: Point = startPoint;
 
-  seq.forEach((item, idx) => {
+  expandedSeq.forEach((item, idx) => {
     if (item.kind === "wait" || item.kind === "event") {
       const waitSeconds = msToSeconds(item.durationMs);
       if (waitSeconds > 0) {
@@ -270,6 +285,10 @@ export function calculatePathTime(
         });
         currentTime += waitSeconds;
       }
+      return;
+    }
+
+    if (item.kind !== "path") {
       return;
     }
 

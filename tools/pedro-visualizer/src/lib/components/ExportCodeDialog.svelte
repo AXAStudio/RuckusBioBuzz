@@ -1,5 +1,12 @@
 <script lang="ts">
-  import type { Point, Line, SequenceItem, PathChain, PoseVariable } from "../../types";
+  import type {
+    Point,
+    Line,
+    SequenceItem,
+    PathChain,
+    PoseVariable,
+    NumberVariable,
+  } from "../../types";
   import Highlight from "svelte-highlight";
   import { java } from "svelte-highlight/languages";
   import plaintext from "svelte-highlight/languages/plaintext";
@@ -21,6 +28,7 @@
   export let sequence: SequenceItem[];
   export let pathChains: PathChain[] = [];
   export let poseVariables: PoseVariable[] = [];
+  export let numberVariables: NumberVariable[] = [];
 
   let exportMode: "full" | "class" | "coordinates" = "class";
   let exportFormat: "java" | "points" | "sequential" | "teamcode" = "java";
@@ -106,6 +114,7 @@
           teamCodeClassName,
           sequence,
           poseVariables,
+          numberVariables,
         );
         currentLanguage = java;
         validationMessages = validateTeamCodeExport();
@@ -152,6 +161,7 @@
           teamCodeClassName,
           sequence,
           poseVariables,
+          numberVariables,
         );
         validationMessages = validateTeamCodeExport();
       } catch (error) {
@@ -238,7 +248,9 @@
       }
     });
 
-    const firstPathIndex = sequence.findIndex((item) => item.kind === "path");
+    const firstPathIndex = sequence.findIndex(
+      (item) => item.kind === "path" || (item.kind === "repeat" && item.lineIds.length > 0),
+    );
     if (firstPathIndex > 0) {
       messages.push({
         level: "warning",

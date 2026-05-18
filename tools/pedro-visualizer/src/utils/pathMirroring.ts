@@ -1,4 +1,11 @@
-import type { BasePoint, Line, Point, PoseVariable } from "../types";
+import type {
+  BasePoint,
+  Line,
+  Point,
+  PoseVariable,
+  PathVariable,
+  NumberVariable,
+} from "../types";
 
 export type MirrorAxis = "x" | "y";
 
@@ -6,6 +13,8 @@ type PathMirrorData = {
   startPoint?: Point;
   lines?: Line[];
   poseVariables?: PoseVariable[];
+  pathVariables?: PathVariable[];
+  numberVariables?: NumberVariable[];
 };
 
 const DEFAULT_FIELD_SIZE = 141.5;
@@ -109,6 +118,18 @@ export function mirrorLine(
   };
 }
 
+export function mirrorPathVariable(
+  variable: PathVariable,
+  axis: MirrorAxis,
+  fieldSize = DEFAULT_FIELD_SIZE,
+): PathVariable {
+  return {
+    ...variable,
+    startPoint: mirrorPoint(variable.startPoint, axis, fieldSize),
+    lines: variable.lines.map((line) => mirrorLine(line, axis, fieldSize)),
+  };
+}
+
 export function mirrorPathData<T extends PathMirrorData>(
   data: T,
   axis: MirrorAxis = "x",
@@ -127,5 +148,10 @@ export function mirrorPathData<T extends PathMirrorData>(
           mirrorPoseVariable(variable, axis, fieldSize),
         )
       : data.poseVariables,
+    pathVariables: Array.isArray(data.pathVariables)
+      ? data.pathVariables.map((variable) =>
+          mirrorPathVariable(variable, axis, fieldSize),
+        )
+      : data.pathVariables,
   };
 }

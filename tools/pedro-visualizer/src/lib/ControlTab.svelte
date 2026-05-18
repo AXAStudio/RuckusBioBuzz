@@ -8,6 +8,8 @@
     SequenceItem,
     PathChain,
     PoseVariable,
+    PathVariable,
+    NumberVariable,
   } from "../types";
   import _ from "lodash";
   import {
@@ -31,6 +33,8 @@
   export let startPoint: Point;
   export let lines: Line[];
   export let poseVariables: PoseVariable[] = [];
+  export let pathVariables: PathVariable[] = [];
+  export let numberVariables: NumberVariable[] = [];
   export let sequence: SequenceItem[];
   export let pathChains: PathChain[] = [];
   export let robotWidth: number = 16;
@@ -58,6 +62,7 @@
   let selectedChain: PathChain | null = null;
   let previousSelectedChainId = "";
   let chainOptions: Array<{ id: string; name: string; color: string }> = [];
+  let selectedLoopLineIds: string[] = [];
 
   const getChainById = (chainId: string): PathChain | null =>
     pathChains.find((chain) => chain.id === chainId) || null;
@@ -387,6 +392,439 @@
   const makeId = () =>
     `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
+  function cloneJson<T>(value: T): T {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function inputValue(event: Event): string {
+    return (event.currentTarget as HTMLInputElement).value;
+  }
+
+  function inputNumber(event: Event): number {
+    return Number(inputValue(event));
+  }
+
+  function makeNumberVariableName(): string {
+    const usedNames = new Set(numberVariables.map((variable) => variable.name.trim()));
+    let index = numberVariables.length + 1;
+    let name = `Number ${index}`;
+
+    while (usedNames.has(name)) {
+      index++;
+      name = `Number ${index}`;
+    }
+
+    return name;
+  }
+
+  function numberVariableValue(variableId: string | undefined, fallback: number): number {
+    if (!variableId) return fallback;
+    const variable = numberVariables.find((item) => item.id === variableId);
+    const value = Number(variable?.value);
+    return Number.isFinite(value) ? value : fallback;
+  }
+
+  function positionNumberValue(variableId: string | undefined, fallback: number): number {
+    const value = numberVariableValue(variableId, fallback);
+    return Math.max(0, Math.min(1, value > 1 ? value / 100 : value));
+  }
+
+  function addNumberVariable() {
+    numberVariables = [
+      ...numberVariables,
+      {
+        id: `number-${makeId()}`,
+        name: makeNumberVariableName(),
+        value: 1,
+      },
+    ];
+    recordChange?.();
+  }
+
+  function updateNumberVariable(
+    variableId: string,
+    patch: Partial<NumberVariable>,
+    commit = false,
+  ) {
+    let updatedVariable: NumberVariable | null = null;
+    numberVariables = numberVariables.map((variable) => {
+      if (variable.id !== variableId) return variable;
+      const next = {
+        ...variable,
+        ...patch,
+        value:
+          patch.value === undefined
+            ? variable.value
+            : Number.isFinite(Number(patch.value))
+              ? Number(patch.value)
+              : variable.value,
+      };
+      updatedVariable = next;
+      return next;
+    });
+
+    if (updatedVariable) {
+      syncNumberVariableUsage(updatedVariable);
+    }
+
+    if (commit) recordChange?.();
+  }
+
+  function duplicateNumberVariable(variableId: string) {
+    const variable = numberVariables.find((item) => item.id === variableId);
+    if (!variable) return;
+
+    numberVariables = [
+      ...numberVariables,
+      {
+        ...cloneJson(variable),
+        id: `number-${makeId()}`,
+        name: `${variable.name || "Number"} Copy`,
+      },
+    ];
+    recordChange?.();
+  }
+
+  function removeNumberVariable(variableId: string) {
+    numberVariables = numberVariables.filter((variable) => variable.id !== variableId);
+    lines = lines.map((line) => ({
+      ...line,
+      speedVariableId:
+        line.speedVariableId === variableId ? undefined : line.speedVariableId,
+      eventMarkers: (line.eventMarkers || []).map((marker) => ({
+        ...marker,
+        positionVariableId:
+          marker.positionVariableId === variableId ? undefined : marker.positionVariableId,
+        triggerMsVariableId:
+          marker.triggerMsVariableId === variableId ? undefined : marker.triggerMsVariableId,
+        poseXVariableId:
+          marker.poseXVariableId === variableId ? undefined : marker.poseXVariableId,
+        poseYVariableId:
+          marker.poseYVariableId === variableId ? undefined : marker.poseYVariableId,
+        durationVariableId:
+          marker.durationVariableId === variableId ? undefined : marker.durationVariableId,
+      })),
+    }));
+    sequence = sequence.map((item) => {
+      if (item.kind === "repeat") {
+        return {
+          ...item,
+          countVariableId:
+            item.countVariableId === variableId ? undefined : item.countVariableId,
+        };
+      }
+      if (item.kind === "wait" || item.kind === "event") {
+        return {
+          ...item,
+          durationVariableId:
+            item.durationVariableId === variableId ? undefined : item.durationVariableId,
+        };
+      }
+      return item;
+    });
+    recordChange?.();
+  }
+
+  function syncNumberVariableUsage(variable: NumberVariable) {
+    const value = Number(variable.value);
+    if (!Number.isFinite(value)) return;
+
+    lines = lines.map((line) => ({
+      ...line,
+      speed:
+        line.speedVariableId === variable.id
+          ? Math.max(0.05, Math.min(1, value))
+          : line.speed,
+      eventMarkers: (line.eventMarkers || []).map((marker) => ({
+        ...marker,
+        position:
+          marker.positionVariableId === variable.id
+            ? positionNumberValue(variable.id, marker.position)
+            : marker.position,
+        triggerMs:
+          marker.triggerMsVariableId === variable.id
+            ? Math.max(0, Math.round(value))
+            : marker.triggerMs,
+        poseX: marker.poseXVariableId === variable.id ? value : marker.poseX,
+        poseY: marker.poseYVariableId === variable.id ? value : marker.poseY,
+        durationMs:
+          marker.durationVariableId === variable.id
+            ? Math.max(0, Math.round(value))
+            : marker.durationMs,
+      })),
+    }));
+
+    sequence = sequence.map((item) => {
+      if (item.kind === "repeat" && item.countVariableId === variable.id) {
+        return {
+          ...item,
+          count: Math.max(1, Math.min(20, Math.round(value))),
+        };
+      }
+
+      if (
+        (item.kind === "wait" || item.kind === "event") &&
+        item.durationVariableId === variable.id
+      ) {
+        return {
+          ...item,
+          durationMs: Math.max(0, Math.round(value)),
+        };
+      }
+
+      return item;
+    });
+  }
+
+  function setLineSpeedVariable(lineId: string, variableId: string) {
+    lines = lines.map((line) =>
+      line.id === lineId
+        ? {
+            ...line,
+            speedVariableId: variableId || undefined,
+            speed: variableId
+              ? Math.max(0.05, Math.min(1, numberVariableValue(variableId, line.speed ?? 1)))
+              : line.speed,
+          }
+        : line,
+    );
+    recordChange?.();
+  }
+
+  function setSequenceDurationVariable(seqIndex: number, variableId: string) {
+    const item = sequence[seqIndex];
+    if (!item || (item.kind !== "wait" && item.kind !== "event")) return;
+
+    const newSeq = [...sequence];
+    newSeq[seqIndex] = {
+      ...item,
+      durationVariableId: variableId || undefined,
+      durationMs: variableId
+        ? Math.max(0, Math.round(numberVariableValue(variableId, item.durationMs)))
+        : item.durationMs,
+    } as SequenceItem;
+    sequence = newSeq;
+    recordChange?.();
+  }
+
+  function setRepeatCountVariable(seqIndex: number, variableId: string) {
+    const item = sequence[seqIndex];
+    if (!item || item.kind !== "repeat") return;
+
+    const newSeq = [...sequence];
+    newSeq[seqIndex] = {
+      ...item,
+      countVariableId: variableId || undefined,
+      count: variableId
+        ? Math.max(1, Math.min(20, Math.round(numberVariableValue(variableId, item.count))))
+        : item.count,
+    };
+    sequence = newSeq;
+    recordChange?.();
+  }
+
+  function sequencePathLineIds(sourceSequence: SequenceItem[] = sequence): string[] {
+    const ids: string[] = [];
+    sourceSequence.forEach((item) => {
+      if (item.kind === "path") {
+        ids.push(item.lineId);
+      } else if (item.kind === "repeat") {
+        ids.push(...(item.lineIds || []));
+      }
+    });
+    return ids;
+  }
+
+  function orderedLineIdsForSelection(sourceLineIds: string[]): string[] {
+    const sourceSet = new Set(sourceLineIds);
+    const ordered = sequencePathLineIds().filter((lineId) => sourceSet.has(lineId));
+    sourceLineIds.forEach((lineId) => {
+      if (!ordered.includes(lineId)) ordered.push(lineId);
+    });
+    return ordered;
+  }
+
+  function isLoopSelected(lineId: string): boolean {
+    return selectedLoopLineIds.includes(lineId);
+  }
+
+  function lineIsLocked(lineId: string): boolean {
+    return lines.find((line) => line.id === lineId)?.locked ?? false;
+  }
+
+  function toggleLoopSelection(lineId: string) {
+    if (!lineId || lineIsLocked(lineId)) return;
+    selectedLoopLineIds = isLoopSelected(lineId)
+      ? selectedLoopLineIds.filter((id) => id !== lineId)
+      : [...selectedLoopLineIds, lineId];
+  }
+
+  function clearLoopSelection() {
+    selectedLoopLineIds = [];
+  }
+
+  function wrapSelectedPathsInRepeat() {
+    const selectedSet = new Set(selectedLoopLineIds);
+    const orderedIds = sequence
+      .filter((item) => item.kind === "path" && selectedSet.has(item.lineId))
+      .map((item) => (item as Extract<SequenceItem, { kind: "path" }>).lineId)
+      .filter((lineId) => !lineIsLocked(lineId));
+
+    if (orderedIds.length < 2) return;
+
+    const orderedSet = new Set(orderedIds);
+    const firstIndex = sequence.findIndex(
+      (item) => item.kind === "path" && orderedSet.has(item.lineId),
+    );
+    const insertIndex = firstIndex >= 0 ? firstIndex : sequence.length;
+    const newSeq = sequence.filter(
+      (item) => !(item.kind === "path" && orderedSet.has(item.lineId)),
+    );
+
+    newSeq.splice(insertIndex, 0, {
+      kind: "repeat",
+      id: makeId(),
+      name: "Selected Paths Repeat",
+      count: 2,
+      lineIds: orderedIds,
+      locked: false,
+    });
+
+    sequence = newSeq;
+    clearLoopSelection();
+    syncLinesToSequence(newSeq);
+    recordChange?.();
+  }
+
+  function offsetPoint<T extends BasePoint>(point: T, dx: number, dy: number): T {
+    if (point.poseVariableId) return { ...point };
+    return {
+      ...point,
+      x: Number(point.x || 0) + dx,
+      y: Number(point.y || 0) + dy,
+    };
+  }
+
+  function cloneLineForRoute(line: Line, index: number, offset = 0): Line {
+    const clone = cloneJson(line);
+    clone.id = makeId();
+    clone.name = `${line.name || `Path ${lines.length + index + 1}`} Copy`;
+    clone.endPoint = offsetPoint(clone.endPoint, offset, offset);
+    clone.controlPoints = (clone.controlPoints || []).map((point) =>
+      offsetPoint(point, offset, offset),
+    );
+    return clone;
+  }
+
+  function getLineStartPoint(lineId: string): Point {
+    const lineIndex = lines.findIndex((line) => line.id === lineId);
+    if (lineIndex <= 0) return cloneJson(startPoint);
+    return cloneJson(lines[lineIndex - 1].endPoint);
+  }
+
+  function makePathVariableName(): string {
+    const usedNames = new Set(pathVariables.map((variable) => variable.name.trim()));
+    let index = pathVariables.length + 1;
+    let name = `Path Variable ${index}`;
+
+    while (usedNames.has(name)) {
+      index++;
+      name = `Path Variable ${index}`;
+    }
+
+    return name;
+  }
+
+  function createPathVariableFromSelectedChain() {
+    if (!selectedChain) return;
+    const orderedIds = orderedLineIdsForSelection(selectedChain.lineIds || []);
+    const selectedLines = orderedIds
+      .map((lineId) => lines.find((line) => line.id === lineId))
+      .filter(Boolean) as Line[];
+
+    if (!selectedLines.length) return;
+
+    const variable: PathVariable = {
+      id: `path-variable-${makeId()}`,
+      name: selectedChain.name
+        ? `${selectedChain.name} Variable`
+        : makePathVariableName(),
+      startPoint: getLineStartPoint(selectedLines[0].id || ""),
+      lines: selectedLines.map((line, index) => {
+        const clone = cloneJson(line);
+        clone.id = `path-variable-line-${makeId()}-${index}`;
+        return clone;
+      }),
+    };
+
+    pathVariables = [...pathVariables, variable];
+    recordChange?.();
+  }
+
+  function updatePathVariableName(variableId: string, name: string) {
+    pathVariables = pathVariables.map((variable) =>
+      variable.id === variableId
+        ? { ...variable, name }
+        : variable,
+    );
+  }
+
+  function duplicatePathVariable(variableId: string) {
+    const variable = pathVariables.find((item) => item.id === variableId);
+    if (!variable) return;
+
+    const clone = cloneJson(variable);
+    clone.id = `path-variable-${makeId()}`;
+    clone.name = `${variable.name || "Path Variable"} Copy`;
+    clone.lines = clone.lines.map((line, index) => ({
+      ...line,
+      id: `path-variable-line-${makeId()}-${index}`,
+    }));
+    pathVariables = [...pathVariables, clone];
+    recordChange?.();
+  }
+
+  function removePathVariable(variableId: string) {
+    pathVariables = pathVariables.filter((variable) => variable.id !== variableId);
+    recordChange?.();
+  }
+
+  function insertPathVariable(variableId: string) {
+    const variable = pathVariables.find((item) => item.id === variableId);
+    if (!variable || !variable.lines.length) return;
+
+    const clonedLines = variable.lines.map((line, index) =>
+      cloneLineForRoute(
+        {
+          ...line,
+          name: `${variable.name || "Path Variable"} ${index + 1}`,
+        },
+        index,
+        0,
+      ),
+    );
+
+    lines = [...lines, ...clonedLines];
+    sequence = [
+      ...sequence,
+      ...clonedLines.map((line) => ({ kind: "path", lineId: line.id! }) as SequenceItem),
+    ];
+    collapsedSections.lines.push(...clonedLines.map(() => false));
+    collapsedSections.controlPoints.push(...clonedLines.map(() => true));
+    collapsedSections = { ...collapsedSections };
+
+    const insertedChain: PathChain = {
+      id: makeChainId(),
+      name: variable.name || `Inserted Path ${pathChains.length + 1}`,
+      color: getRandomColor(),
+      lineIds: clonedLines.map((line) => line.id!).filter(Boolean),
+    };
+    pathChains = [...pathChains, insertedChain];
+    selectedChainId = insertedChain.id;
+    syncLineColorsToChains();
+    recordChange?.();
+  }
+
   function pointHeadingDegrees(point: Point): number {
     const currentPoint = point as any;
     if (currentPoint.heading === "constant") return Number(currentPoint.degrees) || 0;
@@ -606,6 +1044,7 @@
         startPoint,
         lines,
         poseVariables,
+        pathVariables,
       },
       axis,
     );
@@ -613,6 +1052,7 @@
     startPoint = mirrored.startPoint || startPoint;
     lines = mirrored.lines || [];
     poseVariables = mirrored.poseVariables || [];
+    pathVariables = mirrored.pathVariables || [];
     percent = 0;
     recordChange?.();
   }
@@ -727,6 +1167,179 @@
     collapsedSections = { ...collapsedSections };
   }
 
+  function duplicatePathAfter(seqIndex: number) {
+    const seqItem = sequence[seqIndex];
+    if (!seqItem || seqItem.kind !== "path") return;
+
+    const lineIndex = lines.findIndex((line) => line.id === seqItem.lineId);
+    const sourceLine = lines[lineIndex];
+    if (!sourceLine) return;
+
+    const clone = cloneLineForRoute(sourceLine, 0, 4);
+    const newLines = [...lines];
+    newLines.splice(lineIndex + 1, 0, clone);
+    lines = newLines;
+
+    const newSeq = [...sequence];
+    newSeq.splice(seqIndex + 1, 0, { kind: "path", lineId: clone.id! });
+    sequence = newSeq;
+
+    const ownerChainId = getLinePrimaryChainId(sourceLine.id || "");
+    if (ownerChainId) {
+      pathChains = pathChains.map((chain) => {
+        if (chain.id !== ownerChainId) return chain;
+        const sourceIndex = chain.lineIds.indexOf(sourceLine.id || "");
+        const nextLineIds = [...chain.lineIds];
+        nextLineIds.splice(sourceIndex >= 0 ? sourceIndex + 1 : nextLineIds.length, 0, clone.id!);
+        return { ...chain, lineIds: nextLineIds };
+      });
+    } else {
+      ensureLineInDefaultChain(clone.id!);
+    }
+
+    collapsedSections.lines.splice(lineIndex + 1, 0, false);
+    collapsedSections.controlPoints.splice(lineIndex + 1, 0, true);
+    collapsedSections = { ...collapsedSections };
+    syncLineColorsToChains();
+    recordChange?.();
+  }
+
+  function wrapPathInRepeat(seqIndex: number) {
+    const seqItem = sequence[seqIndex];
+    if (!seqItem || seqItem.kind !== "path") return;
+
+    const line = lines.find((item) => item.id === seqItem.lineId);
+    const repeatItem: SequenceItem = {
+      kind: "repeat",
+      id: makeId(),
+      name: "Repeat Loop",
+      count: 2,
+      lineIds: [seqItem.lineId],
+      locked: false,
+    };
+
+	    const newSeq = [...sequence];
+	    newSeq.splice(seqIndex, 1, repeatItem);
+	    sequence = newSeq;
+	    selectedLoopLineIds = selectedLoopLineIds.filter((id) => id !== seqItem.lineId);
+	    syncLinesToSequence(newSeq);
+    if (line) selectedChainId = getLinePrimaryChainId(line.id || "") || selectedChainId;
+    recordChange?.();
+  }
+
+  function wrapSelectedChainInRepeat() {
+    if (!selectedChain) return;
+    const orderedIds = orderedLineIdsForSelection(selectedChain.lineIds || []);
+    if (!orderedIds.length) return;
+
+    const selectedLineSet = new Set(orderedIds);
+    const firstIndex = sequence.findIndex(
+      (item) => item.kind === "path" && selectedLineSet.has(item.lineId),
+    );
+    const insertIndex = firstIndex >= 0 ? firstIndex : sequence.length;
+    const newSeq = sequence.filter(
+      (item) => !(item.kind === "path" && selectedLineSet.has(item.lineId)),
+    );
+	    newSeq.splice(insertIndex, 0, {
+	      kind: "repeat",
+      id: makeId(),
+      name: `${selectedChain.name || "Chain"} Repeat`,
+      count: 2,
+      lineIds: orderedIds,
+      locked: false,
+	    });
+	    sequence = newSeq;
+	    selectedLoopLineIds = selectedLoopLineIds.filter((id) => !selectedLineSet.has(id));
+	    syncLinesToSequence(newSeq);
+    recordChange?.();
+  }
+
+  function unwrapRepeat(seqIndex: number) {
+    const seqItem = sequence[seqIndex];
+    if (!seqItem || seqItem.kind !== "repeat") return;
+
+    const replacement = (seqItem.lineIds || []).map(
+      (lineId) => ({ kind: "path", lineId }) as SequenceItem,
+    );
+    const newSeq = [...sequence];
+    newSeq.splice(seqIndex, 1, ...replacement);
+    sequence = newSeq;
+    syncLinesToSequence(newSeq);
+    recordChange?.();
+  }
+
+  function duplicateRepeatAfter(seqIndex: number) {
+    const seqItem = sequence[seqIndex];
+    if (!seqItem || seqItem.kind !== "repeat") return;
+
+    const newSeq = [...sequence];
+    newSeq.splice(seqIndex + 1, 0, {
+      ...cloneJson(seqItem),
+      id: makeId(),
+      name: `${seqItem.name || "Repeat Loop"} Copy`,
+    });
+    sequence = newSeq;
+    syncLinesToSequence(newSeq);
+    recordChange?.();
+  }
+
+  function duplicateLineInsideRepeat(seqIndex: number, lineId: string) {
+    const seqItem = sequence[seqIndex];
+    if (!seqItem || seqItem.kind !== "repeat") return;
+
+    const lineIndex = lines.findIndex((line) => line.id === lineId);
+    const sourceLine = lines[lineIndex];
+    if (!sourceLine) return;
+
+    const clone = cloneLineForRoute(sourceLine, 0, 4);
+    const newLines = [...lines];
+    newLines.splice(lineIndex + 1, 0, clone);
+    lines = newLines;
+
+    const insertIndex = seqItem.lineIds.indexOf(lineId);
+    const nextLineIds = [...seqItem.lineIds];
+    nextLineIds.splice(insertIndex >= 0 ? insertIndex + 1 : nextLineIds.length, 0, clone.id!);
+
+    const newSeq = [...sequence];
+    newSeq[seqIndex] = { ...seqItem, lineIds: nextLineIds };
+    sequence = newSeq;
+
+    const ownerChainId = getLinePrimaryChainId(sourceLine.id || "");
+    if (ownerChainId) {
+      pathChains = pathChains.map((chain) => {
+        if (chain.id !== ownerChainId) return chain;
+        const sourceIndex = chain.lineIds.indexOf(sourceLine.id || "");
+        const nextIds = [...chain.lineIds];
+        nextIds.splice(sourceIndex >= 0 ? sourceIndex + 1 : nextIds.length, 0, clone.id!);
+        return { ...chain, lineIds: nextIds };
+      });
+    }
+
+    collapsedSections.lines.splice(lineIndex + 1, 0, false);
+    collapsedSections.controlPoints.splice(lineIndex + 1, 0, true);
+    collapsedSections = { ...collapsedSections };
+    syncLineColorsToChains();
+    recordChange?.();
+  }
+
+  function updateRepeatItem(
+    seqIndex: number,
+    patch: Partial<{ name: string; count: number; locked: boolean }>,
+    commit = false,
+  ) {
+    const seqItem = sequence[seqIndex];
+    if (!seqItem || seqItem.kind !== "repeat") return;
+
+    const newSeq = [...sequence];
+    newSeq[seqIndex] = {
+      ...seqItem,
+      ...patch,
+      count: Math.max(1, Math.min(20, Math.round(Number(patch.count ?? seqItem.count) || 1))),
+    };
+    sequence = newSeq;
+    if (commit) recordChange?.();
+  }
+
   // Insert a midpoint between this path and the next path in sequence
   function insertMidpointAfter(seqIndex: number) {
     const seqItem = sequence[seqIndex];
@@ -798,10 +1411,24 @@
     let _lns = lines;
     lines.splice(idx, 1);
     lines = _lns;
-    if (removedId) {
-      sequence = sequence.filter(
-        (s) => s.kind !== "path" || s.lineId !== removedId,
-      );
+	    if (removedId) {
+	      selectedLoopLineIds = selectedLoopLineIds.filter((id) => id !== removedId);
+	      sequence = sequence
+        .map((item) =>
+          item.kind === "repeat"
+            ? {
+                ...item,
+                lineIds: item.lineIds.filter((lineId) => lineId !== removedId),
+              }
+            : item,
+        )
+        .filter((s) =>
+          s.kind === "path"
+            ? s.lineId !== removedId
+            : s.kind === "repeat"
+              ? s.lineIds.length > 0
+              : true,
+        );
       removeLineFromChains(removedId);
     }
     collapsedSections.lines.splice(idx, 1);
@@ -897,6 +1524,23 @@
     sequence = [...sequence, makeShootEventItem()];
   }
 
+  function addRepeatLoop() {
+    const lineId = [...sequencePathLineIds()].pop() || lines[lines.length - 1]?.id;
+    if (!lineId) return;
+    sequence = [
+      ...sequence,
+      {
+        kind: "repeat",
+        id: makeId(),
+        name: "Repeat Loop",
+        count: 2,
+        lineIds: [lineId],
+        locked: false,
+      } as SequenceItem,
+    ];
+    recordChange?.();
+  }
+
   function addWaitAtStart() {
     sequence = [makeWaitItem(), ...sequence];
   }
@@ -985,9 +1629,7 @@
   }
 
   function syncLinesToSequence(newSeq: SequenceItem[]) {
-    const pathOrder = newSeq
-      .filter((item) => item.kind === "path")
-      .map((item) => item.lineId);
+    const pathOrder = sequencePathLineIds(newSeq);
 
     const indexedLines = lines.map((line, idx) => ({
       line,
@@ -1033,6 +1675,12 @@
       if (it.kind === "wait" || it.kind === "event") {
         return (it as any).locked ?? false;
       }
+      if (it.kind === "repeat") {
+        const loopLocked = (it as any).locked ?? false;
+        return loopLocked || it.lineIds.some((lineId) =>
+          lines.find((line) => line.id === lineId)?.locked,
+        );
+      }
       return false;
     };
 
@@ -1072,6 +1720,134 @@
       onChange={handlePoseVariableChange}
       onCommit={recordChange}
     />
+
+    <div class="w-full rounded-md border border-neutral-200 dark:border-neutral-700 p-3 bg-white dark:bg-neutral-800">
+      <div class="flex items-center gap-2 mb-2">
+        <p class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-300">
+          Number Variables
+        </p>
+        <button
+          on:click={addNumberVariable}
+          class="px-2 py-1 text-xs rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200"
+        >
+          New
+        </button>
+      </div>
+
+      {#if numberVariables.length === 0}
+        <p class="text-xs text-neutral-500 dark:text-neutral-400">
+          Store reusable values for repeat counts, speeds, event timing, and other numeric auto constants.
+        </p>
+      {:else}
+        <div class="flex flex-col gap-2">
+          {#each numberVariables as variable (variable.id)}
+            <div class="rounded border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 p-2">
+              <div class="flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  value={variable.name}
+                  on:input={(event) =>
+                    updateNumberVariable(variable.id, {
+                      name: inputValue(event),
+                    })}
+                  on:blur={() => recordChange?.()}
+                  class="min-w-0 flex-1 px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-950"
+                />
+                <input
+                  type="number"
+                  step="0.001"
+                  value={variable.value}
+                  on:input={(event) =>
+                    updateNumberVariable(variable.id, {
+                      value: inputNumber(event),
+                    })}
+                  on:blur={() => updateNumberVariable(variable.id, {}, true)}
+                  class="w-28 px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-950"
+                />
+              </div>
+              <div class="mt-2 flex flex-wrap items-center gap-2">
+                <button
+                  on:click={() => duplicateNumberVariable(variable.id)}
+                  class="px-2 py-1 text-xs rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-200"
+                >
+                  Duplicate
+                </button>
+                <button
+                  on:click={() => removeNumberVariable(variable.id)}
+                  class="px-2 py-1 text-xs rounded bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-200"
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+
+    <div class="w-full rounded-md border border-neutral-200 dark:border-neutral-700 p-3 bg-white dark:bg-neutral-800">
+      <div class="flex items-center gap-2 mb-2">
+        <p class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-300">
+          Path Variables
+        </p>
+        <button
+          on:click={createPathVariableFromSelectedChain}
+          disabled={!selectedChain || !(selectedChain.lineIds || []).length}
+          class="px-2 py-1 text-xs rounded bg-cyan-100 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-200 disabled:opacity-40"
+        >
+          Store Chain
+        </button>
+      </div>
+
+      {#if pathVariables.length === 0}
+        <p class="text-xs text-neutral-500 dark:text-neutral-400">
+          Store the selected path chain as a reusable path template.
+        </p>
+      {:else}
+        <div class="flex flex-col gap-2">
+          {#each pathVariables as variable (variable.id)}
+            <div class="rounded border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 p-2">
+              <div class="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={variable.name}
+                  on:input={(event) =>
+                    updatePathVariableName(
+                      variable.id,
+                      inputValue(event),
+                    )}
+                  on:blur={recordChange}
+                  class="min-w-0 flex-1 px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-950"
+                />
+                <span class="text-xs text-neutral-500 dark:text-neutral-400">
+                  {variable.lines.length} path{variable.lines.length === 1 ? "" : "s"}
+                </span>
+              </div>
+              <div class="mt-2 flex flex-wrap items-center gap-2">
+                <button
+                  on:click={() => insertPathVariable(variable.id)}
+                  class="px-2 py-1 text-xs rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200"
+                >
+                  Insert Copy
+                </button>
+                <button
+                  on:click={() => duplicatePathVariable(variable.id)}
+                  class="px-2 py-1 text-xs rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-200"
+                >
+                  Duplicate
+                </button>
+                <button
+                  on:click={() => removePathVariable(variable.id)}
+                  class="px-2 py-1 text-xs rounded bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-200"
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
 
     <StartingPointSection
       bind:startPoint
@@ -1116,6 +1892,13 @@
         <button on:click={addPathChain} class="px-2 py-1 text-xs rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200">New</button>
         <button on:click={duplicateSelectedPathChain} class="px-2 py-1 text-xs rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-200">Duplicate</button>
         <button
+          on:click={wrapSelectedChainInRepeat}
+          disabled={!selectedChain || !(selectedChain.lineIds || []).length}
+          class="px-2 py-1 text-xs rounded bg-cyan-100 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-200 disabled:opacity-40"
+        >
+          Loop
+        </button>
+        <button
           on:click={removeSelectedPathChain}
           disabled={pathChains.length <= 1}
           class="px-2 py-1 text-xs rounded bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-200 disabled:opacity-40"
@@ -1150,11 +1933,45 @@
       {/if}
     </div>
 
+    <div class="w-full rounded-md border border-neutral-200 dark:border-neutral-700 p-3 bg-white dark:bg-neutral-800">
+      <div class="flex flex-wrap items-center gap-2">
+        <p class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-300">
+          Loop Selection
+        </p>
+        <span class="text-xs text-neutral-500 dark:text-neutral-400">
+          {selectedLoopLineIds.length} selected
+        </span>
+        <button
+          on:click={wrapSelectedPathsInRepeat}
+          disabled={selectedLoopLineIds.length < 2}
+          class="px-2 py-1 text-xs rounded bg-cyan-100 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-200 disabled:opacity-40"
+        >
+          Loop Selected
+        </button>
+        <button
+          on:click={clearLoopSelection}
+          disabled={selectedLoopLineIds.length === 0}
+          class="px-2 py-1 text-xs rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 disabled:opacity-40"
+        >
+          Clear
+        </button>
+      </div>
+    </div>
+
     <!-- Unified sequence render: paths and waits -->
     {#each sequence as item, sIdx}
       <div class="w-full">
         {#if item.kind === "path"}
           {#each lines.filter((l) => l.id === item.lineId) as ln (ln.id)}
+            <label class="mb-1 inline-flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300">
+              <input
+                type="checkbox"
+                checked={isLoopSelected(ln.id || "")}
+                disabled={ln.locked}
+                on:change={() => toggleLoopSelection(ln.id || "")}
+              />
+              Include in selected loop
+            </label>
             <PathLineSection
               bind:line={ln}
               idx={lines.findIndex((l) => l.id === ln.id)}
@@ -1171,6 +1988,8 @@
                 removeLine(lines.findIndex((l) => l.id === ln.id))}
               onInsertAfter={() => addControlPointToLine(sIdx)}
               onInsertMidpoint={() => insertMidpointAfter(sIdx)}
+              onDuplicate={() => duplicatePathAfter(sIdx)}
+              onWrapRepeat={() => wrapPathInRepeat(sIdx)}
               onAddWaitAfter={() => insertWaitAfter(sIdx)}
               onAddEventAfter={() => insertEventAfter(sIdx)}
               onMoveUp={() => moveSequenceItem(sIdx, -1)}
@@ -1183,16 +2002,158 @@
               selectedChainId={getLinePrimaryChainId(ln.id || "")}
               onChainChange={(chainId) => assignLineToChain(ln.id || "", chainId)}
               {poseVariables}
+              {numberVariables}
               onPoseVariableChange={handleLinePoseVariableChange}
               onHeadingModeChange={handleLineHeadingModeChange}
+              onSpeedVariableChange={setLineSpeedVariable}
               {recordChange}
             />
           {/each}
+        {:else if item.kind === "repeat"}
+          <div class="w-full rounded-lg border border-cyan-300 dark:border-cyan-800 bg-cyan-50 dark:bg-cyan-950/30 p-3 shadow-sm">
+            <div class="flex flex-wrap items-center gap-2 mb-2">
+              <span class="text-xs font-semibold uppercase tracking-wide text-cyan-700 dark:text-cyan-200">
+                Repeat Loop
+              </span>
+              <input
+                type="text"
+                value={item.name}
+                on:input={(event) =>
+                  updateRepeatItem(sIdx, {
+                    name: inputValue(event),
+                  })}
+                on:blur={() => recordChange?.()}
+                class="min-w-0 flex-1 px-2 py-1 text-xs rounded border border-cyan-200 dark:border-cyan-800 bg-white dark:bg-neutral-950"
+              />
+              <span class="text-xs text-neutral-600 dark:text-neutral-300">x</span>
+	              <input
+	                type="number"
+                min="1"
+	                max="20"
+	                value={item.count}
+	                disabled={item.locked || Boolean(item.countVariableId)}
+	                on:input={(event) =>
+                  updateRepeatItem(sIdx, {
+                    count: inputNumber(event),
+                  })}
+                on:blur={() => updateRepeatItem(sIdx, { count: item.count }, true)}
+	                class="w-16 px-2 py-1 text-xs rounded border border-cyan-200 dark:border-cyan-800 bg-white dark:bg-neutral-950"
+	              />
+	              <select
+	                value={item.countVariableId || ""}
+	                disabled={item.locked || numberVariables.length === 0}
+	                on:change={(event) =>
+	                  setRepeatCountVariable(
+	                    sIdx,
+	                    inputValue(event),
+	                  )}
+	                class="px-2 py-1 text-xs rounded border border-cyan-200 dark:border-cyan-800 bg-white dark:bg-neutral-950 disabled:opacity-40"
+	                title="Repeat count variable"
+	              >
+	                <option value="">Custom count</option>
+	                {#each numberVariables as variable (variable.id)}
+	                  <option value={variable.id}>{variable.name}</option>
+	                {/each}
+	              </select>
+              <button
+                on:click={() => updateRepeatItem(sIdx, { locked: !item.locked }, true)}
+                class="px-2 py-1 text-xs rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+              >
+                {item.locked ? "Unlock" : "Lock"}
+              </button>
+              <button
+                on:click={() => duplicateRepeatAfter(sIdx)}
+                class="px-2 py-1 text-xs rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-200"
+              >
+                Duplicate
+              </button>
+              <button
+                on:click={() => unwrapRepeat(sIdx)}
+                class="px-2 py-1 text-xs rounded bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200"
+              >
+                Unwrap
+              </button>
+              <button
+                on:click={() => {
+                  const newSeq = [...sequence];
+                  newSeq.splice(sIdx, 1);
+                  sequence = newSeq;
+                  recordChange?.();
+                }}
+                class="px-2 py-1 text-xs rounded bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-200"
+              >
+                Remove
+              </button>
+              <button
+                on:click={() => moveSequenceItem(sIdx, -1)}
+                disabled={sIdx === 0 || item.locked}
+                class="px-2 py-1 text-xs rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 disabled:opacity-40"
+              >
+                Up
+              </button>
+              <button
+                on:click={() => moveSequenceItem(sIdx, 1)}
+                disabled={sIdx === sequence.length - 1 || item.locked}
+                class="px-2 py-1 text-xs rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 disabled:opacity-40"
+              >
+                Down
+              </button>
+            </div>
+            <div class="flex flex-col gap-2">
+              {#each item.lineIds as lineId, loopLineIndex (lineId)}
+                {#each lines.filter((l) => l.id === lineId) as ln (ln.id)}
+                  <div class="rounded border border-cyan-200 dark:border-cyan-900 bg-white dark:bg-neutral-900 p-2">
+                    <div class="mb-1 text-xs text-neutral-500 dark:text-neutral-400">
+                      Loop path {loopLineIndex + 1}
+                    </div>
+                    <PathLineSection
+                      bind:line={ln}
+                      idx={lines.findIndex((l) => l.id === ln.id)}
+                      bind:lines
+                      bind:collapsed={
+                        collapsedSections.lines[lines.findIndex((l) => l.id === ln.id)]
+                      }
+                      bind:collapsedControlPoints={
+                        collapsedSections.controlPoints[
+                          lines.findIndex((l) => l.id === ln.id)
+                        ]
+                      }
+                      onRemove={() =>
+                        removeLine(lines.findIndex((l) => l.id === ln.id))}
+                      onInsertAfter={() => addControlPointToLine(sIdx)}
+                      onInsertMidpoint={() => insertMidpointAfter(sIdx)}
+                      onDuplicate={() => duplicateLineInsideRepeat(sIdx, ln.id || "")}
+                      onWrapRepeat={() => {}}
+                      onAddWaitAfter={() => insertWaitAfter(sIdx)}
+                      onAddEventAfter={() => insertEventAfter(sIdx)}
+                      onMoveUp={() => moveSequenceItem(sIdx, -1)}
+                      onMoveDown={() => moveSequenceItem(sIdx, 1)}
+                      canMoveUp={sIdx !== 0}
+                      canMoveDown={sIdx !== sequence.length - 1}
+                      optimizeLine={optimizeLine}
+                      optimizing={optimizingLineIds?.[ln.id ?? ""] ?? false}
+                      chainOptions={chainOptions}
+                      selectedChainId={getLinePrimaryChainId(ln.id || "")}
+                      onChainChange={(chainId) => assignLineToChain(ln.id || "", chainId)}
+	                      {poseVariables}
+	                      {numberVariables}
+	                      onPoseVariableChange={handleLinePoseVariableChange}
+	                      onHeadingModeChange={handleLineHeadingModeChange}
+	                      onSpeedVariableChange={setLineSpeedVariable}
+	                      {recordChange}
+	                    />
+                  </div>
+                {/each}
+              {/each}
+            </div>
+          </div>
         {:else}
           <WaitRow
             label={item.kind === "event" ? "Event" : "Wait"}
             name={getWait(item).name}
             durationMs={getWait(item).durationMs}
+            durationVariableId={getWait(item).durationVariableId || ""}
+            {numberVariables}
             locked={getWait(item).locked ?? false}
             onToggleLock={() => {
               const newSeq = [...sequence];
@@ -1212,6 +2173,8 @@
               };
               sequence = newSeq;
             }}
+            onDurationVariableChange={(variableId) =>
+              setSequenceDurationVariable(sIdx, variableId)}
             onRemove={() => {
               const newSeq = [...sequence];
               newSeq.splice(sIdx, 1);
@@ -1299,6 +2262,43 @@
           />
         </svg>
         <p>Add Event</p>
+      </button>
+
+      <button
+        on:click={addRepeatLoop}
+        disabled={lines.length === 0}
+        class="font-semibold text-cyan-600 text-sm flex flex-row justify-start items-center gap-1 disabled:opacity-40"
+      >
+        <svg
+          xmlns="http://www.w3.org/2000/svg"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          class="size-5"
+        >
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M17 1l4 4-4 4"
+          />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M3 11V9a4 4 0 014-4h14"
+          />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M7 23l-4-4 4-4"
+          />
+          <path
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M21 13v2a4 4 0 01-4 4H3"
+          />
+        </svg>
+        <p>Add Repeat</p>
       </button>
     </div>
   </div>

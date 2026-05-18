@@ -1,4 +1,14 @@
-import type { Point, Line, Shape, SequenceItem, Settings, PathChain, PoseVariable } from "../types";
+import type {
+  Point,
+  Line,
+  Shape,
+  SequenceItem,
+  Settings,
+  PathChain,
+  PoseVariable,
+  PathVariable,
+  NumberVariable,
+} from "../types";
 import { writable } from "svelte/store";
 
 export type AppState = {
@@ -9,6 +19,8 @@ export type AppState = {
   settings: Settings;
   pathChains: PathChain[];
   poseVariables: PoseVariable[];
+  pathVariables: PathVariable[];
+  numberVariables: NumberVariable[];
 };
 
 type PersistedHistory = {

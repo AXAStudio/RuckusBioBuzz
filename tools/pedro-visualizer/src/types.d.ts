@@ -13,6 +13,19 @@ interface PoseVariable {
   heading: number;
 }
 
+interface PathVariable {
+  id: string;
+  name: string;
+  startPoint: Point;
+  lines: Line[];
+}
+
+interface NumberVariable {
+  id: string;
+  name: string;
+  value: number;
+}
+
 interface WaitSegment {
   name?: string;
   durationMs: number;
@@ -80,6 +93,7 @@ interface Line {
   color: string;
   name?: string;
   speed?: number;
+  speedVariableId?: string;
   locked?: boolean;
   waitBefore?: WaitSegment;
   waitAfter?: WaitSegment;
@@ -102,6 +116,7 @@ type SequenceWaitItem = {
   id: string;
   name: string;
   durationMs: number;
+  durationVariableId?: string;
 };
 
 type SequenceEventItem = {
@@ -109,10 +124,25 @@ type SequenceEventItem = {
   id: string;
   name: string;
   durationMs: number;
+  durationVariableId?: string;
   locked?: boolean;
 };
 
-type SequenceItem = SequencePathItem | SequenceWaitItem | SequenceEventItem;
+type SequenceRepeatItem = {
+  kind: "repeat";
+  id: string;
+  name: string;
+  count: number;
+  countVariableId?: string;
+  lineIds: string[];
+  locked?: boolean;
+};
+
+type SequenceItem =
+  | SequencePathItem
+  | SequenceWaitItem
+  | SequenceEventItem
+  | SequenceRepeatItem;
 
 interface Settings {
   xVelocity: number;

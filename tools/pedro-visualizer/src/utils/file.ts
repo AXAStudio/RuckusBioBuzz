@@ -5,6 +5,8 @@ import type {
   SequenceItem,
   PathChain,
   PoseVariable,
+  PathVariable,
+  NumberVariable,
   Settings,
 } from "../types";
 
@@ -20,6 +22,8 @@ export interface SaveData {
   sequence?: SequenceItem[];
   pathChains?: PathChain[];
   poseVariables?: PoseVariable[];
+  pathVariables?: PathVariable[];
+  numberVariables?: NumberVariable[];
   version?: string;
   timestamp?: string;
 }
@@ -34,6 +38,8 @@ export function downloadTrajectory(
   sequence?: SequenceItem[],
   pathChains?: PathChain[],
   poseVariables?: PoseVariable[],
+  pathVariables?: PathVariable[],
+  numberVariables?: NumberVariable[],
   settings?: Settings,
 ): void {
   const jsonString = JSON.stringify({
@@ -43,6 +49,8 @@ export function downloadTrajectory(
     sequence,
     pathChains,
     poseVariables,
+    pathVariables,
+    numberVariables,
     settings,
     version: "1.2.1",
     timestamp: new Date().toISOString(),

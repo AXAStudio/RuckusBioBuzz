@@ -1,9 +1,14 @@
 <script lang="ts">
+  import type { NumberVariable } from "../../types";
+
   export let name: string;
   export let durationMs: number;
+  export let durationVariableId: string = "";
+  export let numberVariables: NumberVariable[] = [];
   export let locked: boolean = false;
   export let onToggleLock: () => void;
   export let onChange: (newName: string, newDuration: number) => void;
+  export let onDurationVariableChange: (variableId: string) => void = () => {};
   export let onRemove: () => void;
   export let onInsertAfter: () => void;
   export let onAddPathAfter: () => void;
@@ -23,6 +28,10 @@
     const target = e.currentTarget as HTMLInputElement;
     const v = Number(target?.value ?? 0);
     if (!locked) onChange(name, Math.max(0, Number.isFinite(v) ? v : 0));
+  }
+
+  function handleDurationVariableChange(e: Event) {
+    if (!locked) onDurationVariableChange((e.currentTarget as HTMLSelectElement).value);
   }
 </script>
 
@@ -62,8 +71,20 @@
       step="50"
       bind:value={durationMs}
       on:change={handleDurationChange}
-      disabled={locked}
+      disabled={locked || Boolean(durationVariableId)}
     />
+    <select
+      value={durationVariableId}
+      on:change={handleDurationVariableChange}
+      disabled={locked || numberVariables.length === 0}
+      class="pl-1.5 rounded-md bg-neutral-50 dark:bg-neutral-950 dark:border-neutral-700 border-[0.5px] focus:outline-none text-xs max-w-36 disabled:opacity-40"
+      title="{label} duration variable"
+    >
+      <option value="">Custom</option>
+      {#each numberVariables as variable (variable.id)}
+        <option value={variable.id}>{variable.name}</option>
+      {/each}
+    </select>
     <span>ms</span>
   </div>
 

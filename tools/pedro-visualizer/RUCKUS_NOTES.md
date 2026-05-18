@@ -11,7 +11,10 @@ Local customization:
 - Generated autos use this repo's `PathStep` helper for the start and endpoint poses.
 - The sequence editor supports `Path`, `Wait`, and `Event` items. `Add Event` creates a timed `Shoot` event by default.
 - The control panel supports named pose variables that can be assigned to the start pose or path endpoints.
+- The control panel supports path variables that store a reusable copy of a selected path chain and can insert that stored path back into the route.
 - Endpoints assigned to pose variables still allow editable heading mode, linear start heading, and heading curve while the pose controls the final position/heading.
+- Individual paths can be duplicated, selected groups of paths can be wrapped in repeat loops, and path chains can be looped as a group.
+- Number variables store reusable numeric constants for repeat counts, waits/events, path speed, and event marker values. TeamCode export emits them as Java constants.
 - Each path has a `Path Speed` scale from `0.05` to `1.0`; TeamCode export passes it to PedroPathing as the per-path max power.
 - Each path can define parallel event markers. TeamCode export turns them into PedroPathing parametric, temporal, or pose callbacks so mechanisms can start while the path is still running, with optional timed finish handling.
 - The control panel has a telemetry readout that follows playback, showing the current path state, pose, path progress, path speed, active parallel events, and the next queued event marker.

@@ -8,6 +8,8 @@
     PathChain,
     Shape,
     PoseVariable,
+    PathVariable,
+    NumberVariable,
     EventTriggerType,
     TimePrediction,
   } from "./types";
@@ -151,6 +153,178 @@
     }));
   }
 
+  function normalizeNumberVariables(input: NumberVariable[] | undefined): NumberVariable[] {
+    if (!Array.isArray(input)) return [];
+
+    return input.map((variable, index) => {
+      const value = Number(variable.value);
+      return {
+        id: variable.id || `number-${Math.random().toString(36).slice(2)}`,
+        name: (variable.name || "").trim() || `Number ${index + 1}`,
+        value: Number.isFinite(value) ? value : 0,
+      };
+    });
+  }
+
+  function numberVariableValue(
+    variableId: string | undefined,
+    variablesById: Map<string, NumberVariable>,
+    fallback: number,
+  ): number {
+    if (!variableId) return fallback;
+    const value = Number(variablesById.get(variableId)?.value);
+    return Number.isFinite(value) ? value : fallback;
+  }
+
+  function applyNumberVariablesToLines(
+    sourceLines: Line[],
+    sourceNumberVariables: NumberVariable[],
+  ): Line[] {
+    const variablesById = new Map(
+      sourceNumberVariables.map((variable) => [variable.id, variable]),
+    );
+
+    return sourceLines.map((line) => ({
+      ...line,
+      speed: Math.max(
+        0.05,
+        Math.min(
+          1,
+          numberVariableValue(
+            line.speedVariableId,
+            variablesById,
+            Number(line.speed ?? 1) || 1,
+          ),
+        ),
+      ),
+      eventMarkers: (line.eventMarkers || []).map((marker) => ({
+        ...marker,
+        position: Math.max(
+          0,
+          Math.min(
+            1,
+            numberVariableValue(
+              marker.positionVariableId,
+              variablesById,
+              Number(marker.position ?? 0.5) || 0.5,
+            ) > 1
+              ? numberVariableValue(
+                  marker.positionVariableId,
+                  variablesById,
+                  Number(marker.position ?? 0.5) || 0.5,
+                ) / 100
+              : numberVariableValue(
+                  marker.positionVariableId,
+                  variablesById,
+                  Number(marker.position ?? 0.5) || 0.5,
+                ),
+          ),
+        ),
+        triggerMs: Math.max(
+          0,
+          Math.round(
+            numberVariableValue(
+              marker.triggerMsVariableId,
+              variablesById,
+              Number(marker.triggerMs ?? 0) || 0,
+            ),
+          ),
+        ),
+        poseX: numberVariableValue(
+          marker.poseXVariableId,
+          variablesById,
+          Number(marker.poseX ?? line.endPoint?.x ?? 0) || 0,
+        ),
+        poseY: numberVariableValue(
+          marker.poseYVariableId,
+          variablesById,
+          Number(marker.poseY ?? line.endPoint?.y ?? 0) || 0,
+        ),
+        durationMs: Math.max(
+          0,
+          Math.round(
+            numberVariableValue(
+              marker.durationVariableId,
+              variablesById,
+              Number(marker.durationMs ?? 0) || 0,
+            ),
+          ),
+        ),
+      })),
+    }));
+  }
+
+  function applyNumberVariablesToSequence(
+    sourceSequence: SequenceItem[],
+    sourceNumberVariables: NumberVariable[],
+  ): SequenceItem[] {
+    const variablesById = new Map(
+      sourceNumberVariables.map((variable) => [variable.id, variable]),
+    );
+
+    return sourceSequence.map((item) => {
+      if (item.kind === "repeat") {
+        return {
+          ...item,
+          count: Math.max(
+            1,
+            Math.min(
+              20,
+              Math.round(
+                numberVariableValue(item.countVariableId, variablesById, item.count),
+              ),
+            ),
+          ),
+        };
+      }
+
+      if (item.kind === "wait" || item.kind === "event") {
+        return {
+          ...item,
+          durationMs: Math.max(
+            0,
+            Math.round(
+              numberVariableValue(
+                item.durationVariableId,
+                variablesById,
+                item.durationMs,
+              ),
+            ),
+          ),
+        };
+      }
+
+      return item;
+    });
+  }
+
+  function normalizePathVariables(
+    input: PathVariable[] | undefined,
+    sourcePoseVariables: PoseVariable[] = [],
+    sourceNumberVariables: NumberVariable[] = [],
+  ): PathVariable[] {
+    if (!Array.isArray(input)) return [];
+
+    return input.map((variable, index) => {
+      const normalizedLines = applyNumberVariablesToLines(
+        normalizeLines(variable.lines || []),
+        sourceNumberVariables,
+      );
+      const normalizedPath = applyPoseVariablesToPath(
+        variable.startPoint || getDefaultStartPoint(),
+        normalizedLines,
+        sourcePoseVariables,
+      );
+
+      return {
+        id: variable.id || `path-variable-${Math.random().toString(36).slice(2)}`,
+        name: (variable.name || "").trim() || `Path Variable ${index + 1}`,
+        startPoint: normalizedPath.startPoint,
+        lines: normalizedPath.lines,
+      };
+    });
+  }
+
   function bindPointToPoseVariable(point: Point, variable: PoseVariable): Point {
     const targetHeading = Number.isFinite(Number(variable.heading))
       ? Number(variable.heading)
@@ -250,6 +424,8 @@
   let startPoint: Point = getDefaultStartPoint();
   let lines: Line[] = normalizeLines(getDefaultLines());
   let poseVariables: PoseVariable[] = [];
+  let pathVariables: PathVariable[] = [];
+  let numberVariables: NumberVariable[] = [];
 
   function normalizeLegacyFieldMap(input: Settings): Settings {
     const next = { ...input };
@@ -309,6 +485,8 @@
     settings: Settings;
     pathChains?: PathChain[];
     poseVariables?: PoseVariable[];
+    pathVariables?: PathVariable[];
+    numberVariables?: NumberVariable[];
     color?: string; // Optional custom color for this path
   }
   let additionalPaths: AdditionalPathData[] = [];
@@ -1039,6 +1217,8 @@
       settings,
       pathChains,
       poseVariables,
+      pathVariables,
+      numberVariables,
     };
   }
 
@@ -1060,6 +1240,8 @@
       settings = prev.settings;
       pathChains = prev.pathChains;
       poseVariables = prev.poseVariables || [];
+      pathVariables = prev.pathVariables || [];
+      numberVariables = prev.numberVariables || [];
       isUnsaved.set(true);
       two && two.update();
     }
@@ -1077,6 +1259,8 @@
       settings = next.settings;
       pathChains = next.pathChains;
       poseVariables = next.poseVariables || [];
+      pathVariables = next.pathVariables || [];
+      numberVariables = next.numberVariables || [];
       isUnsaved.set(true);
       two && two.update();
     }
@@ -1195,28 +1379,42 @@
       const filePath = paths[i];
       try {
         const content = await browserFileStore.readFile(filePath);
-        const data = JSON.parse(content);
+          const data = JSON.parse(content);
 
         if (data.startPoint && data.lines) {
           const loadedPoseVariables = normalizePoseVariables(data.poseVariables);
-          const normalizedLines = normalizeLines(data.lines || []);
+          const loadedNumberVariables = normalizeNumberVariables(data.numberVariables);
+          const normalizedLines = applyNumberVariablesToLines(
+            normalizeLines(data.lines || []),
+            loadedNumberVariables,
+          );
           const normalizedPath = applyPoseVariablesToPath(
             data.startPoint,
             normalizedLines,
             loadedPoseVariables,
+          );
+          const normalizedSequence = applyNumberVariablesToSequence(
+            data.sequence || normalizedPath.lines.map((ln: Line) => ({
+              kind: "path",
+              lineId: ln.id!,
+            })),
+            loadedNumberVariables,
           );
           newAdditionalPaths.push({
             filePath,
             startPoint: normalizedPath.startPoint,
             lines: normalizedPath.lines,
             shapes: data.shapes || [],
-            sequence: data.sequence || normalizedPath.lines.map((ln: Line) => ({
-              kind: "path",
-              lineId: ln.id!,
-            })),
+            sequence: normalizedSequence,
             settings: data.settings || { ...DEFAULT_SETTINGS },
             pathChains: normalizePathChains(data.pathChains, normalizedPath.lines),
             poseVariables: loadedPoseVariables,
+            pathVariables: normalizePathVariables(
+              data.pathVariables,
+              loadedPoseVariables,
+              loadedNumberVariables,
+            ),
+            numberVariables: loadedNumberVariables,
             color: colors[i],
           });
         }
@@ -2432,6 +2630,8 @@
         sequence: pathData.sequence,
         pathChains: pathData.pathChains || [],
         poseVariables: pathData.poseVariables || [],
+        pathVariables: pathData.pathVariables || [],
+        numberVariables: pathData.numberVariables || [],
         settings: pathData.settings,
         version: "1.2.1",
         timestamp: new Date().toISOString(),
@@ -2843,6 +3043,8 @@
         sequence,
         pathChains,
         poseVariables,
+        pathVariables,
+        numberVariables,
         settings,
         version: "1.2.1",
         timestamp: new Date().toISOString(),
@@ -2941,6 +3143,8 @@
           sequence,
           pathChains,
           poseVariables,
+          pathVariables,
+          numberVariables,
           settings,
         );
       } catch (err2) {
@@ -3337,6 +3541,8 @@
           sequence,
           pathChains,
           poseVariables,
+          pathVariables,
+          numberVariables,
           settings,
           version: "1.2.1",
           timestamp: new Date().toISOString(),
@@ -3378,9 +3584,10 @@
       return;
     }
 
-    // Parse and load the uploaded file, then cache it into the browser store.
-    loadTrajectoryFromFile(evt, async (data) => {
-      const loadedPoseVariables = normalizePoseVariables(data.poseVariables);
+	    // Parse and load the uploaded file, then cache it into the browser store.
+	    loadTrajectoryFromFile(evt, async (data) => {
+	      const loadedPoseVariables = normalizePoseVariables(data.poseVariables);
+	      const loadedNumberVariables = normalizeNumberVariables(data.numberVariables);
 
       // Ensure startPoint has all required fields
       const loadedStartPoint = data.startPoint || {
@@ -3391,25 +3598,37 @@
       };
 
       // Normalize lines with all required fields
-      const normalizedLines = normalizeLines(data.lines || []);
+	      const normalizedLines = applyNumberVariablesToLines(
+	        normalizeLines(data.lines || []),
+	        loadedNumberVariables,
+	      );
       const normalizedPath = applyPoseVariablesToPath(
         loadedStartPoint,
         normalizedLines,
         loadedPoseVariables,
       );
       startPoint = normalizedPath.startPoint;
-      lines = normalizedPath.lines;
-      poseVariables = loadedPoseVariables;
+	      lines = normalizedPath.lines;
+	      poseVariables = loadedPoseVariables;
+	      numberVariables = loadedNumberVariables;
+	      pathVariables = normalizePathVariables(
+	        data.pathVariables,
+	        loadedPoseVariables,
+	        loadedNumberVariables,
+	      );
 
       // Derive sequence from data or create default
-      sequence = (
-        data.sequence && data.sequence.length
-          ? data.sequence
-          : normalizedLines.map((ln) => ({
-              kind: "path",
-              lineId: ln.id!,
-            }))
-      ) as SequenceItem[];
+	      sequence = applyNumberVariablesToSequence(
+	        (
+	          data.sequence && data.sequence.length
+	            ? data.sequence
+	            : normalizedLines.map((ln) => ({
+	                kind: "path",
+	                lineId: ln.id!,
+	              }))
+	        ) as SequenceItem[],
+	        loadedNumberVariables,
+	      );
       pathChains = normalizePathChains(data.pathChains, normalizedPath.lines);
 
       // Load shapes with defaults
@@ -3442,8 +3661,9 @@
   // Electron file-copying logic removed — browser store and upload are used instead.
 
   // Helper function to load data into app state
-  function loadData(data: any) {
-    const loadedPoseVariables = normalizePoseVariables(data.poseVariables);
+	  function loadData(data: any) {
+	    const loadedPoseVariables = normalizePoseVariables(data.poseVariables);
+	    const loadedNumberVariables = normalizeNumberVariables(data.numberVariables);
 
     // Ensure startPoint has all required fields
     const loadedStartPoint = data.startPoint || {
@@ -3454,25 +3674,37 @@
     };
 
     // Normalize lines with all required fields
-    const normalizedLines = normalizeLines(data.lines || []);
+	    const normalizedLines = applyNumberVariablesToLines(
+	      normalizeLines(data.lines || []),
+	      loadedNumberVariables,
+	    );
     const normalizedPath = applyPoseVariablesToPath(
       loadedStartPoint,
       normalizedLines,
       loadedPoseVariables,
     );
     startPoint = normalizedPath.startPoint;
-    lines = normalizedPath.lines;
-    poseVariables = loadedPoseVariables;
+	    lines = normalizedPath.lines;
+	    poseVariables = loadedPoseVariables;
+	    numberVariables = loadedNumberVariables;
+	    pathVariables = normalizePathVariables(
+	      data.pathVariables,
+	      loadedPoseVariables,
+	      loadedNumberVariables,
+	    );
 
     // Derive sequence from data or create default
-    sequence = (
-      data.sequence && data.sequence.length
-        ? data.sequence
-        : normalizedLines.map((ln) => ({
-            kind: "path",
-            lineId: ln.id!,
-          }))
-    ) as SequenceItem[];
+	    sequence = applyNumberVariablesToSequence(
+	      (
+	        data.sequence && data.sequence.length
+	          ? data.sequence
+	          : normalizedLines.map((ln) => ({
+	              kind: "path",
+	              lineId: ln.id!,
+	            }))
+	      ) as SequenceItem[],
+	      loadedNumberVariables,
+	    );
     pathChains = normalizePathChains(data.pathChains, normalizedPath.lines);
 
     // Load shapes with defaults
@@ -3806,6 +4038,8 @@
           sequence,
           pathChains,
           poseVariables,
+          pathVariables,
+          numberVariables,
           settings,
         });
         
@@ -3838,6 +4072,8 @@
             sequence,
             pathChains,
             poseVariables,
+            pathVariables,
+            numberVariables,
             settings,
             version: "1.2.1",
             timestamp: new Date().toISOString(),
@@ -3865,6 +4101,8 @@
               sequence,
               pathChains,
               poseVariables,
+              pathVariables,
+              numberVariables,
               settings,
               version: "1.2.1",
               timestamp: new Date().toISOString(),
@@ -3918,6 +4156,8 @@
   bind:sequence
   bind:pathChains
   bind:poseVariables
+  bind:pathVariables
+  bind:numberVariables
   bind:secondStartPoint
   bind:secondLines
   bind:secondShapes
@@ -4239,6 +4479,8 @@ pointer-events: none; opacity: ${1.0 - idx * 0.15};`}
     bind:sequence
     bind:pathChains
     bind:poseVariables
+    bind:pathVariables
+    bind:numberVariables
     bind:robotWidth
     bind:robotHeight
     bind:settings

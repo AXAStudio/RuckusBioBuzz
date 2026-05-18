@@ -1,5 +1,15 @@
 <script lang="ts">
-  import type { Point, Line, Shape, Settings, SequenceItem, PathChain, PoseVariable } from "../types";
+  import type {
+    Point,
+    Line,
+    Shape,
+    Settings,
+    SequenceItem,
+    PathChain,
+    PoseVariable,
+    PathVariable,
+    NumberVariable,
+  } from "../types";
   import { onMount, onDestroy } from "svelte";
   import {
     showRuler,
@@ -34,6 +44,8 @@
   export let sequence: SequenceItem[];
   export let pathChains: PathChain[] = [];
   export let poseVariables: PoseVariable[] = [];
+  export let pathVariables: PathVariable[] = [];
+  export let numberVariables: NumberVariable[] = [];
   export let secondStartPoint: Point | null = null;
   export let secondLines: Line[] = [];
   export let secondShapes: Shape[] = [];
@@ -175,6 +187,8 @@
       lineId: ln.id || `line-${Math.random().toString(36).slice(2)}`,
     }));
     poseVariables = [];
+    pathVariables = [];
+    numberVariables = [];
     shapes = getDefaultShapes();
   }
 
@@ -281,6 +295,8 @@
     bind:sequence
     bind:pathChains
     bind:poseVariables
+    bind:pathVariables
+    bind:numberVariables
     bind:settings
     bind:secondStartPoint
     bind:secondLines
@@ -297,6 +313,7 @@
   bind:sequence
   bind:pathChains
   bind:poseVariables
+  bind:numberVariables
 />
 
 <SettingsDialog bind:isOpen={settingsOpen} bind:settings />

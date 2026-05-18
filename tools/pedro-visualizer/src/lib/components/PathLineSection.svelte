@@ -1,5 +1,11 @@
 <script lang="ts">
-  import type { EventMarker, EventTriggerType, Line, PoseVariable } from "../../types";
+  import type {
+    EventMarker,
+    EventTriggerType,
+    Line,
+    PoseVariable,
+    NumberVariable,
+  } from "../../types";
   import { snapToGrid, showGrid, gridSize } from "../../stores";
   import ControlPointsSection from "./ControlPointsSection.svelte";
   import HeadingControls from "./HeadingControls.svelte";
@@ -13,6 +19,8 @@
   export let onRemove: () => void;
   export let onInsertAfter: () => void;
   export let onInsertMidpoint: () => void;
+  export let onDuplicate: () => void = () => {};
+  export let onWrapRepeat: () => void = () => {};
   export let onAddWaitAfter: () => void;
   export let onAddEventAfter: () => void;
   export let recordChange: () => void;
@@ -26,8 +34,10 @@
   export let selectedChainId: string = "";
   export let onChainChange: (chainId: string) => void;
   export let poseVariables: PoseVariable[] = [];
+  export let numberVariables: NumberVariable[] = [];
   export let onPoseVariableChange: (lineId: string, poseVariableId: string) => void = () => {};
   export let onHeadingModeChange: (lineId: string, mode: string) => void = () => {};
+  export let onSpeedVariableChange: (lineId: string, variableId: string) => void = () => {};
 
 
   $: snapToGridTitle =
@@ -43,6 +53,7 @@
   })();
   $: pathSpeedValue = clampPathSpeed(line?.speed);
   $: eventMarkers = line.eventMarkers || [];
+  $: hasSpeedVariable = Boolean(line.speedVariableId);
 
   function toggleCollapsed() {
     collapsed = !collapsed;
@@ -58,6 +69,13 @@
     const target = event.currentTarget as HTMLInputElement;
     line.speed = clampPathSpeed(Number(target.value));
     lines = [...lines];
+  }
+
+  function handleSpeedVariableSelect(event: Event) {
+    onSpeedVariableChange(
+      line.id || "",
+      (event.currentTarget as HTMLSelectElement).value,
+    );
   }
 
   function commitPathSpeed() {
@@ -91,6 +109,18 @@
     const numeric = Number(value);
     if (!Number.isFinite(numeric)) return 0;
     return Math.max(0, Math.round(numeric));
+  }
+
+  function numberVariableValue(variableId: string | undefined, fallback: number): number {
+    if (!variableId) return fallback;
+    const variable = numberVariables.find((item) => item.id === variableId);
+    const value = Number(variable?.value);
+    return Number.isFinite(value) ? value : fallback;
+  }
+
+  function eventPositionValueFromVariable(variableId: string, fallback: number): number {
+    const value = numberVariableValue(variableId, fallback);
+    return clampEventPosition(value > 1 ? value / 100 : value);
   }
 
   function eventTriggerType(marker: EventMarker): EventTriggerType {
@@ -181,6 +211,41 @@
     updateEventMarker(index, {
       durationMs: Number((event.currentTarget as HTMLInputElement).value),
     });
+  }
+
+  function handleEventNumberVariableInput(
+    index: number,
+    field:
+      | "positionVariableId"
+      | "triggerMsVariableId"
+      | "poseXVariableId"
+      | "poseYVariableId"
+      | "durationVariableId",
+    event: Event,
+  ) {
+    const variableId = (event.currentTarget as HTMLSelectElement).value;
+    const marker = eventMarkers[index];
+    if (!marker) return;
+
+    const patch: Partial<EventMarker> = {
+      [field]: variableId || undefined,
+    };
+
+    if (variableId) {
+      if (field === "positionVariableId") {
+        patch.position = eventPositionValueFromVariable(variableId, marker.position);
+      } else if (field === "triggerMsVariableId") {
+        patch.triggerMs = clampEventDuration(numberVariableValue(variableId, marker.triggerMs ?? 0));
+      } else if (field === "poseXVariableId") {
+        patch.poseX = numberVariableValue(variableId, eventPoseX(marker));
+      } else if (field === "poseYVariableId") {
+        patch.poseY = numberVariableValue(variableId, eventPoseY(marker));
+      } else if (field === "durationVariableId") {
+        patch.durationMs = clampEventDuration(numberVariableValue(variableId, marker.durationMs ?? 0));
+      }
+    }
+
+    updateEventMarker(index, patch, true);
   }
 
   function handleEventTriggerTypeInput(index: number, event: Event) {
@@ -386,6 +451,22 @@
       >
         {optimizing ? "Optimizing…" : "Optimize"}
       </button>
+      <button
+        class="px-2 py-1 text-xs font-semibold text-neutral-700 dark:text-neutral-200 bg-neutral-200/80 dark:bg-neutral-800/80 border border-neutral-300 dark:border-neutral-700 rounded disabled:opacity-40 disabled:cursor-not-allowed"
+        title={line.locked ? "Path locked" : "Duplicate this path"}
+        on:click={onDuplicate}
+        disabled={line.locked}
+      >
+        Duplicate
+      </button>
+      <button
+        class="px-2 py-1 text-xs font-semibold text-neutral-700 dark:text-neutral-200 bg-neutral-200/80 dark:bg-neutral-800/80 border border-neutral-300 dark:border-neutral-700 rounded disabled:opacity-40 disabled:cursor-not-allowed"
+        title={line.locked ? "Path locked" : "Wrap this path in a repeat loop"}
+        on:click={onWrapRepeat}
+        disabled={line.locked}
+      >
+        Loop
+      </button>
     </div>
 
     <div class="flex flex-row items-center gap-1 ml-auto">
@@ -519,7 +600,7 @@
           value={pathSpeedValue}
           on:input={handlePathSpeedInput}
           on:change={commitPathSpeed}
-          disabled={line.locked}
+          disabled={line.locked || hasSpeedVariable}
           class="flex-1"
         />
         <input
@@ -530,9 +611,21 @@
           value={pathSpeedValue}
           on:input={handlePathSpeedInput}
           on:blur={commitPathSpeed}
-          disabled={line.locked}
+          disabled={line.locked || hasSpeedVariable}
           class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-950 dark:border-neutral-700 border-[0.5px] focus:outline-none w-20"
         />
+        <select
+          value={line.speedVariableId || ""}
+          on:change={handleSpeedVariableSelect}
+          disabled={line.locked || numberVariables.length === 0}
+          class="px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-neutral-100 dark:bg-neutral-900 disabled:opacity-40"
+          title="Path speed variable"
+        >
+          <option value="">Custom</option>
+          {#each numberVariables as variable (variable.id)}
+            <option value={variable.id}>{variable.name}</option>
+          {/each}
+        </select>
       </div>
 
       <div class="font-light">Point Position:</div>
@@ -657,17 +750,30 @@
 
                 {#if eventTriggerType(marker) === "temporal"}
                   <div class="font-extralight">After ms:</div>
-                  <input
-                    type="number"
-                    min="0"
-                    step="50"
-                    value={clampEventDuration(marker.triggerMs)}
-                    disabled={line.locked}
-                    on:input={(event) => handleEventTriggerMsInput(eventIdx, event)}
-                    on:blur={() => updateEventMarker(eventIdx, {}, true)}
-                    class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-700 border-[0.5px] focus:outline-none w-24"
-                  />
-                {:else}
+	                  <input
+	                    type="number"
+	                    min="0"
+	                    step="50"
+	                    value={clampEventDuration(marker.triggerMs)}
+	                    disabled={line.locked || Boolean(marker.triggerMsVariableId)}
+	                    on:input={(event) => handleEventTriggerMsInput(eventIdx, event)}
+	                    on:blur={() => updateEventMarker(eventIdx, {}, true)}
+	                    class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-700 border-[0.5px] focus:outline-none w-24"
+	                  />
+	                  <select
+	                    value={marker.triggerMsVariableId || ""}
+	                    disabled={line.locked || numberVariables.length === 0}
+	                    on:change={(event) =>
+	                      handleEventNumberVariableInput(eventIdx, "triggerMsVariableId", event)}
+	                    class="px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-neutral-100 dark:bg-neutral-900 disabled:opacity-40"
+	                    title="Trigger time variable"
+	                  >
+	                    <option value="">Custom</option>
+	                    {#each numberVariables as variable (variable.id)}
+	                      <option value={variable.id}>{variable.name}</option>
+	                    {/each}
+	                  </select>
+	                {:else}
                   <div class="font-extralight">
                     {eventTriggerType(marker) === "pose" ? "Guess:" : "Trigger:"}
                   </div>
@@ -675,10 +781,10 @@
                     type="range"
                     min="0"
                     max="1"
-                    step="0.01"
-                    value={clampEventPosition(marker.position)}
-                    disabled={line.locked}
-                    on:input={(event) => handleEventPositionInput(eventIdx, event)}
+	                    step="0.01"
+	                    value={clampEventPosition(marker.position)}
+	                    disabled={line.locked || Boolean(marker.positionVariableId)}
+	                    on:input={(event) => handleEventPositionInput(eventIdx, event)}
                     on:change={() => updateEventMarker(eventIdx, {}, true)}
                     class="w-32"
                   />
@@ -686,51 +792,103 @@
                     type="number"
                     min="0"
                     max="100"
-                    step="1"
-                    value={Math.round(clampEventPosition(marker.position) * 100)}
-                    disabled={line.locked}
-                    on:input={(event) => handleEventPercentInput(eventIdx, event)}
+	                    step="1"
+	                    value={Math.round(clampEventPosition(marker.position) * 100)}
+	                    disabled={line.locked || Boolean(marker.positionVariableId)}
+	                    on:input={(event) => handleEventPercentInput(eventIdx, event)}
                     on:blur={() => updateEventMarker(eventIdx, {}, true)}
                     class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-700 border-[0.5px] focus:outline-none w-16"
-                  />
-                  <div class="font-extralight">%</div>
+	                  />
+	                  <div class="font-extralight">%</div>
+	                  <select
+	                    value={marker.positionVariableId || ""}
+	                    disabled={line.locked || numberVariables.length === 0}
+	                    on:change={(event) =>
+	                      handleEventNumberVariableInput(eventIdx, "positionVariableId", event)}
+	                    class="px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-neutral-100 dark:bg-neutral-900 disabled:opacity-40"
+	                    title="Trigger percent variable"
+	                  >
+	                    <option value="">Custom</option>
+	                    {#each numberVariables as variable (variable.id)}
+	                      <option value={variable.id}>{variable.name}</option>
+	                    {/each}
+	                  </select>
 
-                  {#if eventTriggerType(marker) === "pose"}
+	                  {#if eventTriggerType(marker) === "pose"}
                     <div class="font-extralight">X:</div>
                     <input
                       type="number"
-                      step={$snapToGrid && $showGrid ? $gridSize : 0.1}
-                      value={eventPoseX(marker)}
-                      disabled={line.locked}
-                      on:input={(event) => handleEventPoseXInput(eventIdx, event)}
+	                      step={$snapToGrid && $showGrid ? $gridSize : 0.1}
+	                      value={eventPoseX(marker)}
+	                      disabled={line.locked || Boolean(marker.poseXVariableId)}
+	                      on:input={(event) => handleEventPoseXInput(eventIdx, event)}
                       on:blur={() => updateEventMarker(eventIdx, {}, true)}
-                      class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-700 border-[0.5px] focus:outline-none w-20"
-                    />
-                    <div class="font-extralight">Y:</div>
+	                      class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-700 border-[0.5px] focus:outline-none w-20"
+	                    />
+	                    <select
+	                      value={marker.poseXVariableId || ""}
+	                      disabled={line.locked || numberVariables.length === 0}
+	                      on:change={(event) =>
+	                        handleEventNumberVariableInput(eventIdx, "poseXVariableId", event)}
+	                      class="px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-neutral-100 dark:bg-neutral-900 disabled:opacity-40"
+	                      title="Pose X variable"
+	                    >
+	                      <option value="">Custom</option>
+	                      {#each numberVariables as variable (variable.id)}
+	                        <option value={variable.id}>{variable.name}</option>
+	                      {/each}
+	                    </select>
+	                    <div class="font-extralight">Y:</div>
                     <input
                       type="number"
-                      step={$snapToGrid && $showGrid ? $gridSize : 0.1}
-                      value={eventPoseY(marker)}
-                      disabled={line.locked}
-                      on:input={(event) => handleEventPoseYInput(eventIdx, event)}
+	                      step={$snapToGrid && $showGrid ? $gridSize : 0.1}
+	                      value={eventPoseY(marker)}
+	                      disabled={line.locked || Boolean(marker.poseYVariableId)}
+	                      on:input={(event) => handleEventPoseYInput(eventIdx, event)}
                       on:blur={() => updateEventMarker(eventIdx, {}, true)}
-                      class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-700 border-[0.5px] focus:outline-none w-20"
-                    />
-                  {/if}
+	                      class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-700 border-[0.5px] focus:outline-none w-20"
+	                    />
+	                    <select
+	                      value={marker.poseYVariableId || ""}
+	                      disabled={line.locked || numberVariables.length === 0}
+	                      on:change={(event) =>
+	                        handleEventNumberVariableInput(eventIdx, "poseYVariableId", event)}
+	                      class="px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-neutral-100 dark:bg-neutral-900 disabled:opacity-40"
+	                      title="Pose Y variable"
+	                    >
+	                      <option value="">Custom</option>
+	                      {#each numberVariables as variable (variable.id)}
+	                        <option value={variable.id}>{variable.name}</option>
+	                      {/each}
+	                    </select>
+	                  {/if}
                 {/if}
 
                 <div class="font-extralight">Duration ms:</div>
                 <input
                   type="number"
                   min="0"
-                  step="50"
-                  value={clampEventDuration(marker.durationMs)}
-                  disabled={line.locked}
-                  title="0 keeps the event active until auto end"
+	                  step="50"
+	                  value={clampEventDuration(marker.durationMs)}
+	                  disabled={line.locked || Boolean(marker.durationVariableId)}
+	                  title="0 keeps the event active until auto end"
                   on:input={(event) => handleEventDurationInput(eventIdx, event)}
                   on:blur={() => updateEventMarker(eventIdx, {}, true)}
-                  class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-700 border-[0.5px] focus:outline-none w-24"
-                />
+	                  class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-700 border-[0.5px] focus:outline-none w-24"
+	                />
+	                <select
+	                  value={marker.durationVariableId || ""}
+	                  disabled={line.locked || numberVariables.length === 0}
+	                  on:change={(event) =>
+	                    handleEventNumberVariableInput(eventIdx, "durationVariableId", event)}
+	                  class="px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-neutral-100 dark:bg-neutral-900 disabled:opacity-40"
+	                  title="Event duration variable"
+	                >
+	                  <option value="">Custom</option>
+	                  {#each numberVariables as variable (variable.id)}
+	                    <option value={variable.id}>{variable.name}</option>
+	                  {/each}
+	                </select>
 
                 <button
                   title={line.locked ? "Path locked" : "Remove parallel event"}

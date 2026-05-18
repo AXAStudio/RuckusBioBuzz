@@ -15,6 +15,19 @@ export interface PoseVariable {
   heading: number;
 }
 
+export interface PathVariable {
+  id: string;
+  name: string;
+  startPoint: Point;
+  lines: Line[];
+}
+
+export interface NumberVariable {
+  id: string;
+  name: string;
+  value: number;
+}
+
 export type Point = BasePoint &
   (
     | {
@@ -57,10 +70,15 @@ export interface EventMarker {
   name: string;
   triggerType?: EventTriggerType;
   position: number;
+  positionVariableId?: string;
   triggerMs?: number;
+  triggerMsVariableId?: string;
   poseX?: number;
+  poseXVariableId?: string;
   poseY?: number;
+  poseYVariableId?: string;
   durationMs?: number;
+  durationVariableId?: string;
 }
 
 export interface Line {
@@ -70,6 +88,7 @@ export interface Line {
   color: string;
   name?: string;
   speed?: number;
+  speedVariableId?: string;
   locked?: boolean;
   waitBefore?: WaitSegment;
   waitAfter?: WaitSegment;
@@ -90,6 +109,7 @@ export type SequenceWaitItem = {
   id: string;
   name: string;
   durationMs: number;
+  durationVariableId?: string;
   locked?: boolean;
 };
 
@@ -98,10 +118,25 @@ export type SequenceEventItem = {
   id: string;
   name: string;
   durationMs: number;
+  durationVariableId?: string;
   locked?: boolean;
 };
 
-export type SequenceItem = SequencePathItem | SequenceWaitItem | SequenceEventItem;
+export type SequenceRepeatItem = {
+  kind: "repeat";
+  id: string;
+  name: string;
+  count: number;
+  countVariableId?: string;
+  lineIds: string[];
+  locked?: boolean;
+};
+
+export type SequenceItem =
+  | SequencePathItem
+  | SequenceWaitItem
+  | SequenceEventItem
+  | SequenceRepeatItem;
 
 export interface PathChain {
   id: string;
