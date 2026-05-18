@@ -6,6 +6,7 @@ import type {
   PathVariable,
   NumberVariable,
 } from "../types";
+import { mirrorPoseExpression } from "./numberExpressions";
 
 export type MirrorAxis = "x" | "y";
 
@@ -22,6 +23,15 @@ const DEFAULT_FIELD_SIZE = 141.5;
 function mirrorCoordinate(value: number, fieldSize: number): number {
   const numeric = Number(value);
   return fieldSize - (Number.isFinite(numeric) ? numeric : 0);
+}
+
+function mirrorEventMarkerCoordinate(
+  value: number | undefined,
+  shouldMirror: boolean,
+  fieldSize: number,
+): number | undefined {
+  if (!shouldMirror || value === undefined) return value;
+  return mirrorCoordinate(value, fieldSize);
 }
 
 export function mirrorHeadingDegrees(
@@ -45,8 +55,14 @@ export function mirrorBasePoint<T extends BasePoint>(
 
   if (axis === "x") {
     next.x = mirrorCoordinate(next.x, fieldSize);
+    next.xExpression = mirrorPoseExpression(point.xExpression, point.x, (inner) =>
+      `(${fieldSize} - (${inner}))`,
+    );
   } else {
     next.y = mirrorCoordinate(next.y, fieldSize);
+    next.yExpression = mirrorPoseExpression(point.yExpression, point.y, (inner) =>
+      `(${fieldSize} - (${inner}))`,
+    );
   }
 
   return next;
@@ -64,6 +80,16 @@ export function mirrorPoint(
       ...mirrored,
       startDeg: mirrorHeadingDegrees(mirrored.startDeg, axis),
       endDeg: mirrorHeadingDegrees(mirrored.endDeg, axis),
+      startDegExpression: mirrorPoseExpression(
+        point.startDegExpression,
+        point.startDeg ?? 0,
+        (inner) => (axis === "x" ? `(180 - (${inner}))` : `-((${inner}))`),
+      ),
+      endDegExpression: mirrorPoseExpression(
+        point.endDegExpression,
+        point.endDeg ?? 0,
+        (inner) => (axis === "x" ? `(180 - (${inner}))` : `-((${inner}))`),
+      ),
     };
   }
 
@@ -71,6 +97,11 @@ export function mirrorPoint(
     return {
       ...mirrored,
       degrees: mirrorHeadingDegrees(mirrored.degrees, axis),
+      degreesExpression: mirrorPoseExpression(
+        point.degreesExpression,
+        point.degrees ?? 0,
+        (inner) => (axis === "x" ? `(180 - (${inner}))` : `-((${inner}))`),
+      ),
     };
   }
 
@@ -86,6 +117,23 @@ export function mirrorPoseVariable(
   return {
     ...mirrored,
     heading: mirrorHeadingDegrees(mirrored.heading, axis),
+    xExpression:
+      axis === "x"
+        ? mirrorPoseExpression(variable.xExpression, variable.x, (inner) =>
+            `(${fieldSize} - (${inner}))`,
+          )
+        : variable.xExpression,
+    yExpression:
+      axis === "y"
+        ? mirrorPoseExpression(variable.yExpression, variable.y, (inner) =>
+            `(${fieldSize} - (${inner}))`,
+          )
+        : variable.yExpression,
+    headingExpression: mirrorPoseExpression(
+      variable.headingExpression,
+      variable.heading,
+      (inner) => (axis === "x" ? `(180 - (${inner}))` : `-((${inner}))`),
+    ),
   };
 }
 
@@ -100,22 +148,59 @@ export function mirrorLine(
     controlPoints: (line.controlPoints || []).map((point) =>
       mirrorBasePoint(point, axis, fieldSize),
     ),
-    eventMarkers: (line.eventMarkers || []).map((marker) => {
-      if (marker.triggerType !== "pose") return marker;
-
-      return {
-        ...marker,
-        poseX:
-          axis === "x" && marker.poseX !== undefined
-            ? mirrorCoordinate(marker.poseX, fieldSize)
-            : marker.poseX,
-        poseY:
-          axis === "y" && marker.poseY !== undefined
-            ? mirrorCoordinate(marker.poseY, fieldSize)
-            : marker.poseY,
-      };
-    }),
+    eventMarkers: (line.eventMarkers || []).map((marker) => ({
+      ...marker,
+      poseX: mirrorEventMarkerCoordinate(
+        marker.poseX,
+        marker.triggerType === "pose" && axis === "x",
+        fieldSize,
+      ),
+      poseY: mirrorEventMarkerCoordinate(
+        marker.poseY,
+        marker.triggerType === "pose" && axis === "y",
+        fieldSize,
+      ),
+    })),
   };
+}
+
+function collectMirroredNumberVariableIds(
+  lines: Line[] | undefined,
+  axis: MirrorAxis,
+  output: Set<string>,
+) {
+  if (!Array.isArray(lines)) return;
+
+  lines.forEach((line) => {
+    (line.eventMarkers || []).forEach((marker) => {
+      if (marker.triggerType !== "pose") return;
+
+      const variableId =
+        axis === "x" ? marker.poseXVariableId : marker.poseYVariableId;
+      if (variableId) {
+        output.add(variableId);
+      }
+    });
+  });
+}
+
+function mirrorNumberVariables(
+  variables: NumberVariable[] | undefined,
+  mirroredIds: Set<string>,
+  fieldSize: number,
+): NumberVariable[] | undefined {
+  if (!Array.isArray(variables) || mirroredIds.size === 0) {
+    return variables;
+  }
+
+  return variables.map((variable) =>
+    mirroredIds.has(variable.id)
+      ? {
+          ...variable,
+          value: mirrorCoordinate(variable.value, fieldSize),
+        }
+      : variable,
+  );
 }
 
 export function mirrorPathVariable(
@@ -135,6 +220,16 @@ export function mirrorPathData<T extends PathMirrorData>(
   axis: MirrorAxis = "x",
   fieldSize = DEFAULT_FIELD_SIZE,
 ): T {
+  const mirroredNumberVariableIds = new Set<string>();
+  collectMirroredNumberVariableIds(data.lines, axis, mirroredNumberVariableIds);
+  (data.pathVariables || []).forEach((variable) =>
+    collectMirroredNumberVariableIds(
+      variable.lines,
+      axis,
+      mirroredNumberVariableIds,
+    ),
+  );
+
   return {
     ...data,
     startPoint: data.startPoint
@@ -153,5 +248,10 @@ export function mirrorPathData<T extends PathMirrorData>(
           mirrorPathVariable(variable, axis, fieldSize),
         )
       : data.pathVariables,
+    numberVariables: mirrorNumberVariables(
+      data.numberVariables,
+      mirroredNumberVariableIds,
+      fieldSize,
+    ),
   };
 }

@@ -14,8 +14,12 @@
   import _ from "lodash";
   import {
     calculatePathTime,
+    buildEventTimingWindows,
     getRandomColor,
     mirrorPathData,
+    resolveBasePointExpressions,
+    resolvePointExpressions,
+    resolvePoseVariableExpressions,
     type MirrorAxis,
   } from "../utils";
   import ObstaclesSection from "./components/ObstaclesSection.svelte";
@@ -62,7 +66,8 @@
   let selectedChain: PathChain | null = null;
   let previousSelectedChainId = "";
   let chainOptions: Array<{ id: string; name: string; color: string }> = [];
-  let selectedLoopLineIds: string[] = [];
+  let draggedLineId = "";
+  let dragOverRepeatId = "";
 
   const getChainById = (chainId: string): PathChain | null =>
     pathChains.find((chain) => chain.id === chainId) || null;
@@ -309,16 +314,41 @@
   $: robotWidth;
   $: robotHeight;
 
+  function timelineEventColor(eventName: string, index: number) {
+    const colors = ["#f97316", "#06b6d4", "#22c55e", "#e11d48", "#8b5cf6", "#f59e0b"];
+    let hash = index;
+    for (const char of eventName) {
+      hash = (hash * 31 + char.charCodeAt(0)) % colors.length;
+    }
+    return colors[Math.abs(hash) % colors.length];
+  }
+
   // Compute timeline markers for the UI (start of each travel segment)
   $: timePrediction = calculatePathTime(startPoint, lines, settings, sequence);
   $: markers = (() => {
-    const _markers: { percent: number; color: string; name: string }[] = [];
+    const _markers: {
+      percent?: number;
+      startPercent?: number;
+      endPercent?: number;
+      color: string;
+      name: string;
+      label?: string;
+      type?: "marker" | "duration";
+    }[] = [];
     if (
       !timePrediction ||
       !timePrediction.timeline ||
       timePrediction.totalTime <= 0
     )
       return _markers;
+
+    const eventWindows = buildEventTimingWindows(
+      startPoint,
+      lines,
+      timePrediction,
+      settings,
+      sequence,
+    );
 
     timePrediction.timeline.forEach((ev) => {
       if ((ev as any).type === "travel") {
@@ -330,28 +360,28 @@
         const color = line?.color || "#ffffff";
         const name = line?.name || `Path ${lineIndex + 1}`;
         _markers.push({ percent: pct, color, name });
-
-        (line?.eventMarkers || []).forEach((marker, markerIndex) => {
-          const triggerType =
-            marker.triggerType === "temporal" || marker.triggerType === "pose"
-              ? marker.triggerType
-              : "parametric";
-          const rawPosition = Number(marker.position ?? 0.5);
-          const position = Number.isFinite(rawPosition)
-            ? Math.max(0, Math.min(1, rawPosition))
-            : 0.5;
-          const triggerTime =
-            triggerType === "temporal"
-              ? start + Math.max(0, Number(marker.triggerMs ?? 0) || 0) / 1000
-              : start + (end - start) * position;
-          const markerPct = (triggerTime / timePrediction.totalTime) * 100;
-          _markers.push({
-            percent: Math.max(0, Math.min(100, markerPct)),
-            color: "#a855f7",
-            name: `${marker.name || `Event ${markerIndex + 1}`} on ${name}`,
-          });
-        });
       }
+    });
+
+    eventWindows.forEach((eventWindow, index) => {
+      const eventColor = timelineEventColor(eventWindow.name, index + eventWindow.lineIndex * 7);
+      _markers.push({
+        percent: eventWindow.startPercent,
+        color: eventColor,
+        name: `${eventWindow.name} on ${eventWindow.lineName}`,
+        type: "marker",
+      });
+      _markers.push({
+        startPercent: eventWindow.startPercent,
+        endPercent: eventWindow.endPercent,
+        color: eventColor,
+        name: `${eventWindow.name} on ${eventWindow.lineName}`,
+        label:
+          eventWindow.durationMs > 0
+            ? `${eventWindow.name} ${(eventWindow.durationMs / 1000).toFixed(1)}s`
+            : `${eventWindow.name} hold`,
+        type: "duration",
+      });
     });
 
     return _markers;
@@ -529,8 +559,22 @@
     const value = Number(variable.value);
     if (!Number.isFinite(value)) return;
 
+    poseVariables = resolvePoseVariableExpressions(poseVariables, numberVariables);
+    poseVariables.forEach((poseVariable) => {
+      syncPoseVariableUsage(poseVariable.id, poseVariable);
+    });
+
+    startPoint = resolvePointExpressions(startPoint, numberVariables);
+
     lines = lines.map((line) => ({
       ...line,
+      endPoint:
+        line.endPoint.poseVariableId
+          ? line.endPoint
+          : resolvePointExpressions(line.endPoint, numberVariables),
+      controlPoints: (line.controlPoints || []).map((point) =>
+        resolveBasePointExpressions(point, numberVariables),
+      ),
       speed:
         line.speedVariableId === variable.id
           ? Math.max(0.05, Math.min(1, value))
@@ -644,56 +688,118 @@
     return ordered;
   }
 
-  function isLoopSelected(lineId: string): boolean {
-    return selectedLoopLineIds.includes(lineId);
-  }
-
   function lineIsLocked(lineId: string): boolean {
     return lines.find((line) => line.id === lineId)?.locked ?? false;
   }
 
-  function toggleLoopSelection(lineId: string) {
-    if (!lineId || lineIsLocked(lineId)) return;
-    selectedLoopLineIds = isLoopSelected(lineId)
-      ? selectedLoopLineIds.filter((id) => id !== lineId)
-      : [...selectedLoopLineIds, lineId];
+  function handlePathDragStart(
+    event: DragEvent,
+    lineId: string,
+    sourceRepeatId = "",
+  ) {
+    if (!lineId || lineIsLocked(lineId)) {
+      event.preventDefault();
+      return;
+    }
+
+    draggedLineId = lineId;
+    event.dataTransfer?.setData("application/x-pedro-line-id", lineId);
+    event.dataTransfer?.setData("application/x-pedro-repeat-id", sourceRepeatId);
+    event.dataTransfer?.setData("text/plain", lineId);
+    if (event.dataTransfer) {
+      event.dataTransfer.effectAllowed = "move";
+    }
   }
 
-  function clearLoopSelection() {
-    selectedLoopLineIds = [];
+  function handlePathDragEnd() {
+    draggedLineId = "";
+    dragOverRepeatId = "";
   }
 
-  function wrapSelectedPathsInRepeat() {
-    const selectedSet = new Set(selectedLoopLineIds);
-    const orderedIds = sequence
-      .filter((item) => item.kind === "path" && selectedSet.has(item.lineId))
-      .map((item) => (item as Extract<SequenceItem, { kind: "path" }>).lineId)
-      .filter((lineId) => !lineIsLocked(lineId));
+  function handleRepeatDragOver(event: DragEvent, repeatId: string) {
+    if (!draggedLineId || !repeatId) return;
+    const repeatItem = sequence.find(
+      (item) => item.kind === "repeat" && item.id === repeatId,
+    ) as Extract<SequenceItem, { kind: "repeat" }> | undefined;
+    if (!repeatItem || repeatItem.locked) return;
 
-    if (orderedIds.length < 2) return;
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "move";
+    }
+    dragOverRepeatId = repeatId;
+  }
 
-    const orderedSet = new Set(orderedIds);
-    const firstIndex = sequence.findIndex(
-      (item) => item.kind === "path" && orderedSet.has(item.lineId),
-    );
-    const insertIndex = firstIndex >= 0 ? firstIndex : sequence.length;
-    const newSeq = sequence.filter(
-      (item) => !(item.kind === "path" && orderedSet.has(item.lineId)),
-    );
+  function handleRepeatDragLeave(event: DragEvent, repeatId: string) {
+    const nextTarget = event.relatedTarget as Node | null;
+    if (
+      dragOverRepeatId === repeatId &&
+      (!nextTarget || !(event.currentTarget as HTMLElement).contains(nextTarget))
+    ) {
+      dragOverRepeatId = "";
+    }
+  }
 
-    newSeq.splice(insertIndex, 0, {
-      kind: "repeat",
-      id: makeId(),
-      name: "Selected Paths Repeat",
-      count: 2,
-      lineIds: orderedIds,
-      locked: false,
+  function moveLineIntoRepeat(seqIndex: number, lineId: string) {
+    const targetRepeat = sequence[seqIndex];
+    if (
+      !lineId ||
+      lineIsLocked(lineId) ||
+      !targetRepeat ||
+      targetRepeat.kind !== "repeat" ||
+      targetRepeat.locked
+    ) {
+      return;
+    }
+
+    const nextSequence: SequenceItem[] = [];
+    let targetIndex = -1;
+
+    sequence.forEach((item) => {
+      if (item.kind === "path") {
+        if (item.lineId !== lineId) {
+          nextSequence.push(item);
+        }
+        return;
+      }
+
+      if (item.kind === "repeat") {
+        const nextLineIds = (item.lineIds || []).filter((id) => id !== lineId);
+        const nextRepeat = { ...item, lineIds: nextLineIds };
+        if (item.id === targetRepeat.id) {
+          targetIndex = nextSequence.length;
+          nextSequence.push(nextRepeat);
+        } else {
+          nextSequence.push(nextRepeat);
+        }
+        return;
+      }
+
+      nextSequence.push(item);
     });
 
-    sequence = newSeq;
-    clearLoopSelection();
-    syncLinesToSequence(newSeq);
+    if (targetIndex < 0) return;
+
+    const updatedTarget = nextSequence[targetIndex];
+    if (updatedTarget.kind !== "repeat") return;
+    nextSequence[targetIndex] = {
+      ...updatedTarget,
+      lineIds: [...updatedTarget.lineIds, lineId],
+    };
+
+    sequence = nextSequence;
+    syncLinesToSequence(nextSequence);
     recordChange?.();
+  }
+
+  function handleRepeatDrop(event: DragEvent, seqIndex: number) {
+    event.preventDefault();
+    const lineId =
+      event.dataTransfer?.getData("application/x-pedro-line-id") ||
+      event.dataTransfer?.getData("text/plain") ||
+      draggedLineId;
+    moveLineIntoRepeat(seqIndex, lineId);
+    handlePathDragEnd();
   }
 
   function offsetPoint<T extends BasePoint>(point: T, dx: number, dy: number): T {
@@ -951,7 +1057,15 @@
   }
 
   function handlePoseVariableChange(variable: PoseVariable) {
-    syncPoseVariableUsage(variable.id, variable);
+    const resolvedVariables = resolvePoseVariableExpressions(
+      poseVariables.map((item) => (item.id === variable.id ? variable : item)),
+      numberVariables,
+    );
+    poseVariables = resolvedVariables;
+    const resolvedVariable = resolvedVariables.find((item) => item.id === variable.id);
+    if (resolvedVariable) {
+      syncPoseVariableUsage(variable.id, resolvedVariable);
+    }
   }
 
   function handleStartPoseVariableChange(poseVariableId: string) {
@@ -1045,6 +1159,7 @@
         lines,
         poseVariables,
         pathVariables,
+        numberVariables,
       },
       axis,
     );
@@ -1053,6 +1168,7 @@
     lines = mirrored.lines || [];
     poseVariables = mirrored.poseVariables || [];
     pathVariables = mirrored.pathVariables || [];
+    numberVariables = mirrored.numberVariables || [];
     percent = 0;
     recordChange?.();
   }
@@ -1218,11 +1334,10 @@
       locked: false,
     };
 
-	    const newSeq = [...sequence];
-	    newSeq.splice(seqIndex, 1, repeatItem);
-	    sequence = newSeq;
-	    selectedLoopLineIds = selectedLoopLineIds.filter((id) => id !== seqItem.lineId);
-	    syncLinesToSequence(newSeq);
+    const newSeq = [...sequence];
+    newSeq.splice(seqIndex, 1, repeatItem);
+    sequence = newSeq;
+    syncLinesToSequence(newSeq);
     if (line) selectedChainId = getLinePrimaryChainId(line.id || "") || selectedChainId;
     recordChange?.();
   }
@@ -1240,17 +1355,16 @@
     const newSeq = sequence.filter(
       (item) => !(item.kind === "path" && selectedLineSet.has(item.lineId)),
     );
-	    newSeq.splice(insertIndex, 0, {
-	      kind: "repeat",
+    newSeq.splice(insertIndex, 0, {
+      kind: "repeat",
       id: makeId(),
       name: `${selectedChain.name || "Chain"} Repeat`,
       count: 2,
       lineIds: orderedIds,
       locked: false,
-	    });
-	    sequence = newSeq;
-	    selectedLoopLineIds = selectedLoopLineIds.filter((id) => !selectedLineSet.has(id));
-	    syncLinesToSequence(newSeq);
+    });
+    sequence = newSeq;
+    syncLinesToSequence(newSeq);
     recordChange?.();
   }
 
@@ -1411,9 +1525,8 @@
     let _lns = lines;
     lines.splice(idx, 1);
     lines = _lns;
-	    if (removedId) {
-	      selectedLoopLineIds = selectedLoopLineIds.filter((id) => id !== removedId);
-	      sequence = sequence
+    if (removedId) {
+      sequence = sequence
         .map((item) =>
           item.kind === "repeat"
             ? {
@@ -1462,11 +1575,8 @@
     recordChange();
   }
 
-  // Add a control point to the line represented by `seqIndex` in the sequence
-  function addControlPointToLine(seqIndex: number) {
-    const seqItem = sequence[seqIndex];
-    if (!seqItem || seqItem.kind !== "path") return;
-    const lineIndex = lines.findIndex((l) => l.id === seqItem.lineId);
+  function addControlPointToLineById(lineId: string) {
+    const lineIndex = lines.findIndex((line) => line.id === lineId);
     if (lineIndex === -1) return;
     const line = lines[lineIndex];
     line.controlPoints = line.controlPoints || [];
@@ -1482,6 +1592,13 @@
     lines = [...lines];
     collapsedSections = { ...collapsedSections };
     recordChange?.();
+  }
+
+  // Add a control point to the line represented by `seqIndex` in the sequence
+  function addControlPointToLine(seqIndex: number) {
+    const seqItem = sequence[seqIndex];
+    if (!seqItem || seqItem.kind !== "path") return;
+    addControlPointToLineById(seqItem.lineId);
   }
 
   // Add a control point to the last path in `lines` (fallback: create a new line)
@@ -1525,8 +1642,6 @@
   }
 
   function addRepeatLoop() {
-    const lineId = [...sequencePathLineIds()].pop() || lines[lines.length - 1]?.id;
-    if (!lineId) return;
     sequence = [
       ...sequence,
       {
@@ -1534,7 +1649,7 @@
         id: makeId(),
         name: "Repeat Loop",
         count: 2,
-        lineIds: [lineId],
+        lineIds: [],
         locked: false,
       } as SequenceItem,
     ];
@@ -1706,6 +1821,9 @@
     <TelemetryPanel
       {percent}
       {timePrediction}
+      {startPoint}
+      {sequence}
+      {settings}
       {lines}
       {robotXY}
       {robotHeading}
@@ -1852,6 +1970,7 @@
     <StartingPointSection
       bind:startPoint
       {poseVariables}
+      {numberVariables}
       onPoseVariableChange={handleStartPoseVariableChange}
       {addPathAtStart}
       {addWaitAtStart}
@@ -1933,88 +2052,83 @@
       {/if}
     </div>
 
-    <div class="w-full rounded-md border border-neutral-200 dark:border-neutral-700 p-3 bg-white dark:bg-neutral-800">
-      <div class="flex flex-wrap items-center gap-2">
-        <p class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-300">
-          Loop Selection
-        </p>
-        <span class="text-xs text-neutral-500 dark:text-neutral-400">
-          {selectedLoopLineIds.length} selected
-        </span>
-        <button
-          on:click={wrapSelectedPathsInRepeat}
-          disabled={selectedLoopLineIds.length < 2}
-          class="px-2 py-1 text-xs rounded bg-cyan-100 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-200 disabled:opacity-40"
-        >
-          Loop Selected
-        </button>
-        <button
-          on:click={clearLoopSelection}
-          disabled={selectedLoopLineIds.length === 0}
-          class="px-2 py-1 text-xs rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 disabled:opacity-40"
-        >
-          Clear
-        </button>
-      </div>
-    </div>
-
     <!-- Unified sequence render: paths and waits -->
     {#each sequence as item, sIdx}
       <div class="w-full">
         {#if item.kind === "path"}
           {#each lines.filter((l) => l.id === item.lineId) as ln (ln.id)}
-            <label class="mb-1 inline-flex items-center gap-2 text-xs text-neutral-600 dark:text-neutral-300">
-              <input
-                type="checkbox"
-                checked={isLoopSelected(ln.id || "")}
-                disabled={ln.locked}
-                on:change={() => toggleLoopSelection(ln.id || "")}
+            <div
+              class="rounded-lg border border-transparent transition {draggedLineId === (ln.id || "") ? 'opacity-60' : ''}"
+              role="listitem"
+            >
+              <div class="mb-1 flex justify-end">
+                <button
+                  type="button"
+                  class="cursor-grab rounded border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[11px] font-semibold text-cyan-700 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-40 dark:border-cyan-900 dark:bg-cyan-950/40 dark:text-cyan-200"
+                  draggable={!ln.locked}
+                  title={ln.locked ? "Locked paths cannot be dragged" : "Drag this path into a repeat loop"}
+                  on:dragstart={(event) => handlePathDragStart(event, ln.id || "")}
+                  on:dragend={handlePathDragEnd}
+                  disabled={ln.locked}
+                >
+                  Drag To Loop
+                </button>
+              </div>
+              <PathLineSection
+                bind:line={ln}
+                idx={lines.findIndex((l) => l.id === ln.id)}
+                bind:lines
+                bind:collapsed={
+                  collapsedSections.lines[lines.findIndex((l) => l.id === ln.id)]
+                }
+                bind:collapsedControlPoints={
+                  collapsedSections.controlPoints[
+                    lines.findIndex((l) => l.id === ln.id)
+                  ]
+                }
+                onRemove={() =>
+                  removeLine(lines.findIndex((l) => l.id === ln.id))}
+                onInsertAfter={() => addControlPointToLineById(ln.id || "")}
+                onInsertMidpoint={() => insertMidpointAfter(sIdx)}
+                onDuplicate={() => duplicatePathAfter(sIdx)}
+                onWrapRepeat={() => wrapPathInRepeat(sIdx)}
+                onAddWaitAfter={() => insertWaitAfter(sIdx)}
+                onAddEventAfter={() => insertEventAfter(sIdx)}
+                onMoveUp={() => moveSequenceItem(sIdx, -1)}
+                onMoveDown={() => moveSequenceItem(sIdx, 1)}
+                canMoveUp={sIdx !== 0}
+                canMoveDown={sIdx !== sequence.length - 1}
+                optimizeLine={optimizeLine}
+                optimizing={optimizingLineIds?.[ln.id ?? ""] ?? false}
+                chainOptions={chainOptions}
+                selectedChainId={getLinePrimaryChainId(ln.id || "")}
+                onChainChange={(chainId) => assignLineToChain(ln.id || "", chainId)}
+                {poseVariables}
+                {numberVariables}
+                onPoseVariableChange={handleLinePoseVariableChange}
+                onHeadingModeChange={handleLineHeadingModeChange}
+                onSpeedVariableChange={setLineSpeedVariable}
+                {recordChange}
               />
-              Include in selected loop
-            </label>
-            <PathLineSection
-              bind:line={ln}
-              idx={lines.findIndex((l) => l.id === ln.id)}
-              bind:lines
-              bind:collapsed={
-                collapsedSections.lines[lines.findIndex((l) => l.id === ln.id)]
-              }
-              bind:collapsedControlPoints={
-                collapsedSections.controlPoints[
-                  lines.findIndex((l) => l.id === ln.id)
-                ]
-              }
-              onRemove={() =>
-                removeLine(lines.findIndex((l) => l.id === ln.id))}
-              onInsertAfter={() => addControlPointToLine(sIdx)}
-              onInsertMidpoint={() => insertMidpointAfter(sIdx)}
-              onDuplicate={() => duplicatePathAfter(sIdx)}
-              onWrapRepeat={() => wrapPathInRepeat(sIdx)}
-              onAddWaitAfter={() => insertWaitAfter(sIdx)}
-              onAddEventAfter={() => insertEventAfter(sIdx)}
-              onMoveUp={() => moveSequenceItem(sIdx, -1)}
-              onMoveDown={() => moveSequenceItem(sIdx, 1)}
-              canMoveUp={sIdx !== 0}
-              canMoveDown={sIdx !== sequence.length - 1}
-              optimizeLine={optimizeLine}
-              optimizing={optimizingLineIds?.[ln.id ?? ""] ?? false}
-              chainOptions={chainOptions}
-              selectedChainId={getLinePrimaryChainId(ln.id || "")}
-              onChainChange={(chainId) => assignLineToChain(ln.id || "", chainId)}
-              {poseVariables}
-              {numberVariables}
-              onPoseVariableChange={handleLinePoseVariableChange}
-              onHeadingModeChange={handleLineHeadingModeChange}
-              onSpeedVariableChange={setLineSpeedVariable}
-              {recordChange}
-            />
+            </div>
           {/each}
         {:else if item.kind === "repeat"}
-          <div class="w-full rounded-lg border border-cyan-300 dark:border-cyan-800 bg-cyan-50 dark:bg-cyan-950/30 p-3 shadow-sm">
+          <div
+            class="w-full rounded-lg border bg-cyan-50 dark:bg-cyan-950/30 p-3 shadow-sm transition {dragOverRepeatId === item.id ? 'border-cyan-500 ring-2 ring-cyan-400/70 dark:ring-cyan-500/60' : 'border-cyan-300 dark:border-cyan-800'}"
+            role="group"
+            on:dragover={(event) => handleRepeatDragOver(event, item.id)}
+            on:dragleave={(event) => handleRepeatDragLeave(event, item.id)}
+            on:drop={(event) => handleRepeatDrop(event, sIdx)}
+          >
             <div class="flex flex-wrap items-center gap-2 mb-2">
               <span class="text-xs font-semibold uppercase tracking-wide text-cyan-700 dark:text-cyan-200">
                 Repeat Loop
               </span>
+              {#if dragOverRepeatId === item.id}
+                <span class="rounded-full bg-cyan-600 px-2 py-0.5 text-[11px] font-semibold text-white">
+                  Drop path here
+                </span>
+              {/if}
               <input
                 type="text"
                 value={item.name}
@@ -2026,35 +2140,35 @@
                 class="min-w-0 flex-1 px-2 py-1 text-xs rounded border border-cyan-200 dark:border-cyan-800 bg-white dark:bg-neutral-950"
               />
               <span class="text-xs text-neutral-600 dark:text-neutral-300">x</span>
-	              <input
-	                type="number"
+              <input
+                type="number"
                 min="1"
-	                max="20"
-	                value={item.count}
-	                disabled={item.locked || Boolean(item.countVariableId)}
-	                on:input={(event) =>
+                max="20"
+                value={item.count}
+                disabled={item.locked || Boolean(item.countVariableId)}
+                on:input={(event) =>
                   updateRepeatItem(sIdx, {
                     count: inputNumber(event),
                   })}
                 on:blur={() => updateRepeatItem(sIdx, { count: item.count }, true)}
-	                class="w-16 px-2 py-1 text-xs rounded border border-cyan-200 dark:border-cyan-800 bg-white dark:bg-neutral-950"
-	              />
-	              <select
-	                value={item.countVariableId || ""}
-	                disabled={item.locked || numberVariables.length === 0}
-	                on:change={(event) =>
-	                  setRepeatCountVariable(
-	                    sIdx,
-	                    inputValue(event),
-	                  )}
-	                class="px-2 py-1 text-xs rounded border border-cyan-200 dark:border-cyan-800 bg-white dark:bg-neutral-950 disabled:opacity-40"
-	                title="Repeat count variable"
-	              >
-	                <option value="">Custom count</option>
-	                {#each numberVariables as variable (variable.id)}
-	                  <option value={variable.id}>{variable.name}</option>
-	                {/each}
-	              </select>
+                class="w-16 px-2 py-1 text-xs rounded border border-cyan-200 dark:border-cyan-800 bg-white dark:bg-neutral-950"
+              />
+              <select
+                value={item.countVariableId || ""}
+                disabled={item.locked || numberVariables.length === 0}
+                on:change={(event) =>
+                  setRepeatCountVariable(
+                    sIdx,
+                    inputValue(event),
+                  )}
+                class="px-2 py-1 text-xs rounded border border-cyan-200 dark:border-cyan-800 bg-white dark:bg-neutral-950 disabled:opacity-40"
+                title="Repeat count variable"
+              >
+                <option value="">Custom count</option>
+                {#each numberVariables as variable (variable.id)}
+                  <option value={variable.id}>{variable.name}</option>
+                {/each}
+              </select>
               <button
                 on:click={() => updateRepeatItem(sIdx, { locked: !item.locked }, true)}
                 class="px-2 py-1 text-xs rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
@@ -2100,11 +2214,31 @@
               </button>
             </div>
             <div class="flex flex-col gap-2">
+              {#if item.lineIds.length === 0}
+                <div class="rounded border border-dashed border-cyan-300 dark:border-cyan-700 bg-white/70 dark:bg-neutral-950/50 p-4 text-center text-xs font-semibold text-cyan-700 dark:text-cyan-200">
+                  Drag paths into this loop
+                </div>
+              {/if}
               {#each item.lineIds as lineId, loopLineIndex (lineId)}
                 {#each lines.filter((l) => l.id === lineId) as ln (ln.id)}
-                  <div class="rounded border border-cyan-200 dark:border-cyan-900 bg-white dark:bg-neutral-900 p-2">
+                  <div
+                    class="rounded border border-cyan-200 dark:border-cyan-900 bg-white dark:bg-neutral-900 p-2 transition {draggedLineId === (ln.id || '') ? 'opacity-60' : ''}"
+                    role="listitem"
+                  >
                     <div class="mb-1 text-xs text-neutral-500 dark:text-neutral-400">
-                      Loop path {loopLineIndex + 1}
+                      <span>Loop path {loopLineIndex + 1}</span>
+                      <button
+                        type="button"
+                        class="ml-2 cursor-grab rounded border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[11px] font-semibold text-cyan-700 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-40 dark:border-cyan-800 dark:bg-cyan-950/40 dark:text-cyan-200"
+                        draggable={!ln.locked}
+                        title={ln.locked ? "Locked paths cannot be dragged" : "Drag this path into another repeat loop"}
+                        on:dragstart={(event) =>
+                          handlePathDragStart(event, ln.id || "", item.id)}
+                        on:dragend={handlePathDragEnd}
+                        disabled={ln.locked}
+                      >
+                        Drag
+                      </button>
                     </div>
                     <PathLineSection
                       bind:line={ln}
@@ -2120,7 +2254,7 @@
                       }
                       onRemove={() =>
                         removeLine(lines.findIndex((l) => l.id === ln.id))}
-                      onInsertAfter={() => addControlPointToLine(sIdx)}
+                      onInsertAfter={() => addControlPointToLineById(ln.id || "")}
                       onInsertMidpoint={() => insertMidpointAfter(sIdx)}
                       onDuplicate={() => duplicateLineInsideRepeat(sIdx, ln.id || "")}
                       onWrapRepeat={() => {}}
@@ -2135,13 +2269,13 @@
                       chainOptions={chainOptions}
                       selectedChainId={getLinePrimaryChainId(ln.id || "")}
                       onChainChange={(chainId) => assignLineToChain(ln.id || "", chainId)}
-	                      {poseVariables}
-	                      {numberVariables}
-	                      onPoseVariableChange={handleLinePoseVariableChange}
-	                      onHeadingModeChange={handleLineHeadingModeChange}
-	                      onSpeedVariableChange={setLineSpeedVariable}
-	                      {recordChange}
-	                    />
+                      {poseVariables}
+                      {numberVariables}
+                      onPoseVariableChange={handleLinePoseVariableChange}
+                      onHeadingModeChange={handleLineHeadingModeChange}
+                      onSpeedVariableChange={setLineSpeedVariable}
+                      {recordChange}
+                    />
                   </div>
                 {/each}
               {/each}
@@ -2266,8 +2400,7 @@
 
       <button
         on:click={addRepeatLoop}
-        disabled={lines.length === 0}
-        class="font-semibold text-cyan-600 text-sm flex flex-row justify-start items-center gap-1 disabled:opacity-40"
+        class="font-semibold text-cyan-600 text-sm flex flex-row justify-start items-center gap-1"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"

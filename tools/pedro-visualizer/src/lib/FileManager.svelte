@@ -22,7 +22,13 @@
   } from "../types";
   import * as browserFileStore from "../utils/browserFileStore";
   import { currentFilePath, isUnsaved, dualPathMode, secondFilePath } from "../stores";
-  import { getRandomColor, mirrorPathData } from "../utils";
+  import {
+    getRandomColor,
+    mirrorPathData,
+    resolveBasePointExpressions,
+    resolvePointExpressions,
+    resolvePoseVariableExpressions,
+  } from "../utils";
   import {
     saveAutoPathsDirectory,
     getSavedAutoPathsDirectory,
@@ -145,18 +151,32 @@
     }));
   }
 
-  function normalizePoseVariables(input: PoseVariable[] | undefined): PoseVariable[] {
+  function normalizePoseVariables(
+    input: PoseVariable[] | undefined,
+    sourceNumberVariables: NumberVariable[] = [],
+  ): PoseVariable[] {
     if (!Array.isArray(input)) return [];
 
-    return input.map((variable, index) => ({
+    return resolvePoseVariableExpressions(
+      input.map((variable, index) => ({
       id: variable.id || `pose-${Math.random().toString(36).slice(2)}`,
       name: (variable.name || "").trim() || `Pose ${index + 1}`,
       x: Number.isFinite(Number(variable.x)) ? Number(variable.x) : 0,
+      xExpression:
+        typeof variable.xExpression === "string" ? variable.xExpression.trim() || undefined : undefined,
       y: Number.isFinite(Number(variable.y)) ? Number(variable.y) : 0,
+      yExpression:
+        typeof variable.yExpression === "string" ? variable.yExpression.trim() || undefined : undefined,
       heading: Number.isFinite(Number(variable.heading))
         ? Number(variable.heading)
         : 0,
-    }));
+      headingExpression:
+        typeof variable.headingExpression === "string"
+          ? variable.headingExpression.trim() || undefined
+          : undefined,
+    })),
+      sourceNumberVariables,
+    );
   }
 
   function normalizeNumberVariables(input: NumberVariable[] | undefined): NumberVariable[] {
@@ -201,6 +221,12 @@
 
     return sourceLines.map((line) => ({
       ...line,
+      endPoint: line.endPoint.poseVariableId
+        ? line.endPoint
+        : resolvePointExpressions(line.endPoint, sourceNumberVariables),
+      controlPoints: (line.controlPoints || []).map((point) =>
+        resolveBasePointExpressions(point, sourceNumberVariables),
+      ),
       speed: Math.max(
         0.05,
         Math.min(
@@ -309,10 +335,17 @@
         normalizeLines(variable.lines || []),
         sourceNumberVariables,
       );
-      const normalizedPath = applyPoseVariablesToLoadedPath(
-        variable.startPoint || startPoint,
-        normalizedLines,
+      const resolvedPoseVariables = resolvePoseVariableExpressions(
         sourcePoseVariables,
+        sourceNumberVariables,
+      );
+      const normalizedPath = applyPoseVariablesToLoadedPath(
+        resolvePointExpressions(
+          variable.startPoint || startPoint,
+          sourceNumberVariables,
+        ),
+        normalizedLines,
+        resolvedPoseVariables,
       );
 
       return {
@@ -557,8 +590,11 @@
         throw new Error("Invalid file format: missing required fields");
       }
 
-      const loadedPoseVariables = normalizePoseVariables(data.poseVariables);
       const loadedNumberVariables = normalizeNumberVariables(data.numberVariables);
+      const loadedPoseVariables = normalizePoseVariables(
+        data.poseVariables,
+        loadedNumberVariables,
+      );
 
       // Update the application state
       const normalizedLines = applyNumberVariablesToLines(
@@ -566,7 +602,7 @@
         loadedNumberVariables,
       );
       const normalizedPath = applyPoseVariablesToLoadedPath(
-        data.startPoint,
+        resolvePointExpressions(data.startPoint, loadedNumberVariables),
         normalizedLines,
         loadedPoseVariables,
       );

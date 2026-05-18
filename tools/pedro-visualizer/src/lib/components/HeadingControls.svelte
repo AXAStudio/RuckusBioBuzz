@@ -1,6 +1,12 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
+  import type { NumberVariable } from "../../types";
+  import {
+    pointHeadingFieldDisplayValue,
+    resolvePointExpressions,
+  } from "../../utils";
   export let endPoint: any;
+  export let numberVariables: NumberVariable[] = [];
   export let locked: boolean = false;
   export let boundEndHeading: number | null = null;
   export let onHeadingModeChange: (mode: string) => void = () => {};
@@ -20,23 +26,37 @@
   }
 
   function handleConstantInput(event: Event) {
-    const target = event.currentTarget as HTMLInputElement;
-    const value = parseFloat(target.value);
-    if (!isNaN(value)) {
-      endPoint.degrees = value;
-    } else {
-      endPoint.degrees = 0;
-      target.value = "0";
-    }
+    const value = (event.currentTarget as HTMLInputElement).value;
+    const numeric = Number(value);
+    endPoint = resolvePointExpressions(
+      {
+        ...endPoint,
+        degrees: Number.isFinite(numeric) ? numeric : endPoint.degrees ?? 0,
+        degreesExpression: value.trim() ? value : undefined,
+      },
+      numberVariables,
+    );
     dispatch("change");
   }
 
-  function handleConstantBlur(event: Event) {
-    const target = event.currentTarget as HTMLInputElement;
-    if (target.value === "" || isNaN(parseFloat(target.value))) {
-      endPoint.degrees = 0;
-      target.value = "0";
-    }
+  function handleLinearInput(field: "startDeg" | "endDeg", event: Event) {
+    const value = (event.currentTarget as HTMLInputElement).value;
+    const expressionField = `${field}Expression` as
+      | "startDegExpression"
+      | "endDegExpression";
+    const numeric = Number(value);
+    endPoint = resolvePointExpressions(
+      {
+        ...endPoint,
+        [field]: Number.isFinite(numeric) ? numeric : endPoint[field] ?? 0,
+        [expressionField]: value.trim() ? value : undefined,
+      },
+      numberVariables,
+    );
+    dispatch("change");
+  }
+
+  function handleExpressionBlur() {
     dispatch("commit");
   }
 
@@ -65,13 +85,10 @@ With tangential heading, the heading follows the direction of the line."
     <span class="text-xs text-neutral-600 dark:text-neutral-400">Start:</span>
     <input
       class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-950 dark:border-neutral-700 border-[0.5px] focus:outline-none w-14"
-      step="1"
-      type="number"
-      min="-180"
-      max="180"
-      bind:value={endPoint.startDeg}
-      on:input={() => dispatch("change")}
-      on:blur={() => dispatch("commit")}
+      type="text"
+      value={pointHeadingFieldDisplayValue(endPoint, "startDeg")}
+      on:input={(event) => handleLinearInput("startDeg", event)}
+      on:blur={handleExpressionBlur}
       title="The heading the robot starts this line at (in degrees)"
       disabled={locked}
     />
@@ -79,13 +96,10 @@ With tangential heading, the heading follows the direction of the line."
     >
     <input
       class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-950 dark:border-neutral-700 border-[0.5px] focus:outline-none w-14"
-      step="1"
-      type="number"
-      min="-180"
-      max="180"
-      bind:value={endPoint.endDeg}
-      on:input={() => dispatch("change")}
-      on:blur={() => dispatch("commit")}
+      type="text"
+      value={pointHeadingFieldDisplayValue(endPoint, "endDeg")}
+      on:input={(event) => handleLinearInput("endDeg", event)}
+      on:blur={handleExpressionBlur}
       title={poseTargetHeading !== null
         ? "The ending heading comes from the selected pose"
         : "The heading the robot ends this line at (in degrees)"}
@@ -97,13 +111,10 @@ With tangential heading, the heading follows the direction of the line."
     <span class="text-xs text-neutral-600 dark:text-neutral-400">Deg:</span>
     <input
       class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-950 dark:border-neutral-700 border-[0.5px] focus:outline-none w-14"
-      step="1"
-      type="number"
-      min="-180"
-      max="180"
-      value={endPoint.degrees || 0}
+      type="text"
+      value={pointHeadingFieldDisplayValue(endPoint, "degrees")}
       on:input={handleConstantInput}
-      on:blur={handleConstantBlur}
+      on:blur={handleExpressionBlur}
       title={poseTargetHeading !== null
         ? "The heading comes from the selected pose"
         : "The constant heading the robot maintains throughout this line (in degrees)"}

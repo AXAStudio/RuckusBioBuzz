@@ -37,6 +37,7 @@
   import hotkeys from "hotkeys-js";
   import { createAnimationController } from "./utils/animation";
   import {
+    buildTravelLineTimingMetas,
     calculateCurveLength,
     calculateMotionProfileDistanceAtTime,
     calculateMotionProfileTime,
@@ -56,6 +57,9 @@
     easeInOutQuad,
     getCurvePoint,
     getRandomColor,
+    resolveBasePointExpressions,
+    resolvePointExpressions,
+    resolvePoseVariableExpressions,
     quadraticToCubic,
     radiansToDegrees,
     shortestRotation,
@@ -139,18 +143,32 @@
     }));
   }
 
-  function normalizePoseVariables(input: PoseVariable[] | undefined): PoseVariable[] {
+  function normalizePoseVariables(
+    input: PoseVariable[] | undefined,
+    sourceNumberVariables: NumberVariable[] = [],
+  ): PoseVariable[] {
     if (!Array.isArray(input)) return [];
 
-    return input.map((variable, index) => ({
+    return resolvePoseVariableExpressions(
+      input.map((variable, index) => ({
       id: variable.id || `pose-${Math.random().toString(36).slice(2)}`,
       name: (variable.name || "").trim() || `Pose ${index + 1}`,
       x: Number.isFinite(Number(variable.x)) ? Number(variable.x) : 0,
+      xExpression:
+        typeof variable.xExpression === "string" ? variable.xExpression.trim() || undefined : undefined,
       y: Number.isFinite(Number(variable.y)) ? Number(variable.y) : 0,
+      yExpression:
+        typeof variable.yExpression === "string" ? variable.yExpression.trim() || undefined : undefined,
       heading: Number.isFinite(Number(variable.heading))
         ? Number(variable.heading)
         : 0,
-    }));
+      headingExpression:
+        typeof variable.headingExpression === "string"
+          ? variable.headingExpression.trim() || undefined
+          : undefined,
+    })),
+      sourceNumberVariables,
+    );
   }
 
   function normalizeNumberVariables(input: NumberVariable[] | undefined): NumberVariable[] {
@@ -186,6 +204,12 @@
 
     return sourceLines.map((line) => ({
       ...line,
+      endPoint: line.endPoint.poseVariableId
+        ? line.endPoint
+        : resolvePointExpressions(line.endPoint, sourceNumberVariables),
+      controlPoints: (line.controlPoints || []).map((point) =>
+        resolveBasePointExpressions(point, sourceNumberVariables),
+      ),
       speed: Math.max(
         0.05,
         Math.min(
@@ -310,10 +334,17 @@
         normalizeLines(variable.lines || []),
         sourceNumberVariables,
       );
-      const normalizedPath = applyPoseVariablesToPath(
-        variable.startPoint || getDefaultStartPoint(),
-        normalizedLines,
+      const resolvedPoseVariables = resolvePoseVariableExpressions(
         sourcePoseVariables,
+        sourceNumberVariables,
+      );
+      const normalizedPath = applyPoseVariablesToPath(
+        resolvePointExpressions(
+          variable.startPoint || getDefaultStartPoint(),
+          sourceNumberVariables,
+        ),
+        normalizedLines,
+        resolvedPoseVariables,
       );
 
       return {
@@ -498,6 +529,14 @@
     y: number;
     label: string;
     color?: string;
+  };
+  type EventTimelineOverlay = {
+    elements: CanvasPathElement[];
+    labels: PathOverlayItem[];
+  };
+  type LineTiming = {
+    startTime: number;
+    duration: number;
   };
   type SwerveWheelOverlay = {
     id: string;
@@ -849,8 +888,136 @@
     return durationMap;
   }
 
+  function getLineTimingMap(timePrediction: TimePrediction | null | undefined) {
+    const timingMap = new Map<number, LineTiming>();
+    timePrediction?.timeline?.forEach((event) => {
+      if (
+        event.type === "travel" &&
+        event.lineIndex !== undefined &&
+        Number.isFinite(event.duration)
+      ) {
+        timingMap.set(event.lineIndex, {
+          startTime: Number(event.startTime) || 0,
+          duration: Number(event.duration) || 0,
+        });
+      }
+    });
+    return timingMap;
+  }
+
   function getLineLength(sourceStartPoint: BasePoint, line: Line): number {
     return calculateCurveLength(sourceStartPoint, line.controlPoints, line.endPoint);
+  }
+
+  function getLineDistanceAtT(
+    sourceStartPoint: BasePoint,
+    line: Line,
+    position: number,
+  ): number {
+    const targetT = clampNumber(position, 0, 1);
+    const samples = sampleLineCurve(sourceStartPoint, line);
+    for (let i = 1; i < samples.length; i++) {
+      const previous = samples[i - 1];
+      const current = samples[i];
+      if (current.t < targetT) continue;
+
+      const tSpan = current.t - previous.t;
+      const ratio = tSpan <= 0 ? 0 : (targetT - previous.t) / tSpan;
+      return previous.distance + (current.distance - previous.distance) * ratio;
+    }
+    return samples[samples.length - 1]?.distance || 0;
+  }
+
+  function getNearestDistanceOnLine(
+    sourceStartPoint: BasePoint,
+    line: Line,
+    fieldPoint: BasePoint,
+  ): number {
+    const samples = sampleLineCurve(sourceStartPoint, line);
+    let bestDistance = 0;
+    let bestDistanceSq = Number.POSITIVE_INFINITY;
+
+    samples.forEach((sample) => {
+      const dx = sample.point.x - fieldPoint.x;
+      const dy = sample.point.y - fieldPoint.y;
+      const distanceSq = dx * dx + dy * dy;
+      if (distanceSq < bestDistanceSq) {
+        bestDistanceSq = distanceSq;
+        bestDistance = sample.distance;
+      }
+    });
+
+    return bestDistance;
+  }
+
+  function calculateMotionProfileTimeAtDistance(
+    distanceTraveled: number,
+    distance: number,
+    maxVel: number,
+    maxAcc: number,
+    maxDec?: number,
+  ): number {
+    const totalDistance = Math.max(0, Number(distance) || 0);
+    const traveled = clampNumber(Number(distanceTraveled) || 0, 0, totalDistance);
+    const velocity = Math.max(0, Number(maxVel) || 0);
+    const acceleration = Math.max(0, Number(maxAcc) || 0);
+    const deceleration = Math.max(0, Number(maxDec ?? maxAcc) || 0);
+
+    if (
+      totalDistance <= 0 ||
+      velocity <= 0 ||
+      acceleration <= 0 ||
+      deceleration <= 0
+    ) {
+      return 0;
+    }
+
+    const accDist = (velocity * velocity) / (2 * acceleration);
+    const decDist = (velocity * velocity) / (2 * deceleration);
+
+    if (totalDistance >= accDist + decDist) {
+      const accTime = velocity / acceleration;
+      const decTime = velocity / deceleration;
+      const constDist = totalDistance - accDist - decDist;
+      const constTime = constDist / velocity;
+      const totalTime = accTime + constTime + decTime;
+
+      if (traveled <= accDist) {
+        return Math.sqrt((2 * traveled) / acceleration);
+      }
+
+      if (traveled <= accDist + constDist) {
+        return accTime + (traveled - accDist) / velocity;
+      }
+
+      const remainingDistance = Math.max(0, totalDistance - traveled);
+      return totalTime - Math.sqrt((2 * remainingDistance) / deceleration);
+    }
+
+    const vPeak = Math.sqrt(
+      (2 * totalDistance * acceleration * deceleration) /
+        (acceleration + deceleration),
+    );
+    const accTime = vPeak / acceleration;
+    const decTime = vPeak / deceleration;
+    const totalTime = accTime + decTime;
+    const peakDistance = 0.5 * acceleration * accTime * accTime;
+
+    if (traveled <= peakDistance) {
+      return Math.sqrt((2 * traveled) / acceleration);
+    }
+
+    const remainingDistance = Math.max(0, totalDistance - traveled);
+    return totalTime - Math.sqrt((2 * remainingDistance) / deceleration);
+  }
+
+  function eventTimelineColor(eventName: string, index: number): string {
+    const colors = ["#f97316", "#06b6d4", "#22c55e", "#e11d48", "#8b5cf6", "#f59e0b"];
+    let hash = index;
+    for (const char of eventName) {
+      hash = (hash * 31 + char.charCodeAt(0)) % colors.length;
+    }
+    return colors[Math.abs(hash) % colors.length];
   }
 
   function getFallbackLineDuration(
@@ -978,6 +1145,178 @@
     });
 
     return pins;
+  }
+
+  function buildEventDurationSegmentElements(
+    idBase: string,
+    sourceStartPoint: BasePoint,
+    line: Line,
+    startDistance: number,
+    endDistance: number,
+    color: string,
+  ): CanvasPathElement[] {
+    const length = getLineLength(sourceStartPoint, line);
+    const start = clampNumber(startDistance, 0, length);
+    const end = clampNumber(Math.max(endDistance, start + 0.25), 0, length);
+    const segmentDistance = end - start;
+    const segmentCount = Math.max(1, Math.min(28, Math.ceil(segmentDistance / 3)));
+    const elements: CanvasPathElement[] = [];
+
+    for (let i = 0; i < segmentCount; i++) {
+      const d1 = start + (segmentDistance * i) / segmentCount;
+      const d2 = start + (segmentDistance * (i + 1)) / segmentCount;
+      const p1 = getLinePointAtDistance(sourceStartPoint, line, d1);
+      const p2 = getLinePointAtDistance(sourceStartPoint, line, d2);
+      const lineElement = new Two.Line(x(p1.x), y(p1.y), x(p2.x), y(p2.y));
+      lineElement.id = `${idBase}-duration-${i}`;
+      lineElement.stroke = color;
+      lineElement.linewidth = x(1.6);
+      lineElement.opacity = 0.9;
+      lineElement.noFill();
+      (lineElement as any).cap = "round";
+      elements.push(lineElement);
+    }
+
+    return elements;
+  }
+
+  function buildEventTimelineOverlays(
+    idPrefix: string,
+    sourceStartPoint: Point,
+    sourceLines: Line[],
+    timePrediction: TimePrediction | null | undefined,
+    routeSettings: Settings,
+    sourceSequence: SequenceItem[] = [],
+  ): EventTimelineOverlay {
+    const elements: CanvasPathElement[] = [];
+    const lineMetas = buildTravelLineTimingMetas(
+      sourceStartPoint,
+      sourceLines,
+      timePrediction,
+      routeSettings,
+      sourceSequence,
+    ).map((meta) => ({
+      ...meta,
+      motion: {
+        maxVelocity: meta.maxVelocity,
+        maxAcceleration: meta.maxAcceleration,
+        maxDeceleration: meta.maxDeceleration,
+      },
+    }));
+
+    function distanceAtLocalTime(
+      meta: NonNullable<(typeof lineMetas)[number]>,
+      localTime: number,
+    ) {
+      const clampedTime = clampNumber(localTime, 0, meta.duration);
+      if (meta.hasMotionProfile) {
+        return calculateMotionProfileDistanceAtTime(
+          clampedTime,
+          meta.length,
+          meta.motion.maxVelocity,
+          meta.motion.maxAcceleration,
+          meta.motion.maxDeceleration,
+        );
+      }
+      return meta.length * (meta.duration > 0 ? clampedTime / meta.duration : 1);
+    }
+
+    lineMetas.forEach((meta) => {
+      if (!meta || !meta.line.eventMarkers?.length) return;
+
+      meta.line.eventMarkers.forEach((marker, markerIndex) => {
+        const triggerType =
+          marker.triggerType === "temporal" || marker.triggerType === "pose"
+            ? marker.triggerType
+            : "parametric";
+        const position = clampNumber(Number(marker.position ?? 0.5), 0, 1);
+        let fieldPoint: BasePoint;
+        let triggerDistance = 0;
+        let localTriggerTime = 0;
+
+        if (
+          triggerType === "pose" &&
+          Number.isFinite(Number(marker.poseX)) &&
+          Number.isFinite(Number(marker.poseY))
+        ) {
+          fieldPoint = {
+            x: Number(marker.poseX),
+            y: Number(marker.poseY),
+          };
+          triggerDistance = getNearestDistanceOnLine(
+            meta.startPoint,
+            meta.line,
+            fieldPoint,
+          );
+          localTriggerTime = meta.hasMotionProfile
+            ? calculateMotionProfileTimeAtDistance(
+                triggerDistance,
+                meta.length,
+                meta.motion.maxVelocity,
+                meta.motion.maxAcceleration,
+                meta.motion.maxDeceleration,
+              )
+            : meta.duration * (meta.length > 0 ? triggerDistance / meta.length : 0);
+        } else if (triggerType === "temporal") {
+          localTriggerTime = clampNumber(
+            Math.max(0, Number(marker.triggerMs ?? 0) || 0) / 1000,
+            0,
+            meta.duration,
+          );
+          triggerDistance = distanceAtLocalTime(meta, localTriggerTime);
+          fieldPoint = getLinePointAtDistance(
+            meta.startPoint,
+            meta.line,
+            triggerDistance,
+          );
+        } else {
+          fieldPoint = getLinePointAtT(meta.startPoint, meta.line, position);
+          triggerDistance = getLineDistanceAtT(meta.startPoint, meta.line, position);
+          localTriggerTime = meta.hasMotionProfile
+            ? calculateMotionProfileTimeAtDistance(
+                triggerDistance,
+                meta.length,
+                meta.motion.maxVelocity,
+                meta.motion.maxAcceleration,
+                meta.motion.maxDeceleration,
+              )
+            : meta.duration * (meta.length > 0 ? triggerDistance / meta.length : position);
+        }
+
+        const eventDuration = Math.max(0, Number(marker.durationMs ?? 0) || 0) / 1000;
+        const absoluteStartTime = meta.startTime + localTriggerTime;
+        const absoluteEndTime =
+          eventDuration > 0
+            ? absoluteStartTime + eventDuration
+            : Math.max(...lineMetas.map((item) => item?.endTime || 0));
+        const eventName = marker.name || `Event ${markerIndex + 1}`;
+        const color = eventTimelineColor(
+          eventName,
+          markerIndex + meta.lineIndex * 7,
+        );
+
+        lineMetas.forEach((spanMeta) => {
+          if (!spanMeta || spanMeta.duration <= 0) return;
+          const spanStartTime = Math.max(absoluteStartTime, spanMeta.startTime);
+          const spanEndTime = Math.min(absoluteEndTime, spanMeta.endTime);
+          if (spanEndTime < spanStartTime) return;
+
+          elements.push(
+            ...buildEventDurationSegmentElements(
+              `${idPrefix}-event-timeline-exec-${meta.executionIndex}-${marker.id || markerIndex}-span-${spanMeta.executionIndex}`,
+              spanMeta.startPoint,
+              spanMeta.line,
+              distanceAtLocalTime(spanMeta, spanStartTime - spanMeta.startTime),
+              distanceAtLocalTime(spanMeta, spanEndTime - spanMeta.startTime),
+              color,
+            ),
+          );
+        });
+
+      });
+    });
+
+    return { elements, labels: [] };
   }
 
   function tangentCssAngleForLine(
@@ -1382,14 +1721,17 @@
           const data = JSON.parse(content);
 
         if (data.startPoint && data.lines) {
-          const loadedPoseVariables = normalizePoseVariables(data.poseVariables);
           const loadedNumberVariables = normalizeNumberVariables(data.numberVariables);
+          const loadedPoseVariables = normalizePoseVariables(
+            data.poseVariables,
+            loadedNumberVariables,
+          );
           const normalizedLines = applyNumberVariablesToLines(
             normalizeLines(data.lines || []),
             loadedNumberVariables,
           );
           const normalizedPath = applyPoseVariablesToPath(
-            data.startPoint,
+            resolvePointExpressions(data.startPoint, loadedNumberVariables),
             normalizedLines,
             loadedPoseVariables,
           );
@@ -1910,6 +2252,60 @@
 
     return pins;
   })();
+
+  $: eventTimelineOverlays = (() => {
+    const empty: EventTimelineOverlay = { elements: [], labels: [] };
+    if (!settings.showEventTimeline) return empty;
+
+    if ($activePaths.length > 0) {
+      return additionalPaths.reduce<EventTimelineOverlay>((acc, pathData, pathIndex) => {
+        if (!pathData.startPoint || pathData.lines.length === 0) return acc;
+        const pathTime = calculatePathTime(
+          pathData.startPoint,
+          pathData.lines,
+          pathData.settings,
+          pathData.sequence,
+        );
+        const overlay = buildEventTimelineOverlays(
+          `additional-${pathIndex}`,
+          pathData.startPoint,
+          pathData.lines,
+          pathTime,
+          pathData.settings,
+          pathData.sequence,
+        );
+        acc.elements.push(...overlay.elements);
+        acc.labels.push(...overlay.labels);
+        return acc;
+      }, empty);
+    }
+
+    const overlays = buildEventTimelineOverlays(
+      "main",
+      startPoint,
+      lines,
+      timePrediction,
+      settings,
+      sequence,
+    );
+
+    if ($dualPathMode && secondStartPoint && secondLines.length > 0) {
+      const secondOverlay = buildEventTimelineOverlays(
+        "second",
+        secondStartPoint,
+        secondLines,
+        secondTimePrediction,
+        settings,
+        secondSequence,
+      );
+      overlays.elements.push(...secondOverlay.elements);
+      overlays.labels.push(...secondOverlay.labels);
+    }
+
+    return overlays;
+  })();
+  $: eventTimelineElements = eventTimelineOverlays.elements;
+  $: eventTimelineLabels = eventTimelineOverlays.labels;
 
   $: swerveWheelOverlays = (() => {
     if (!settings.showSwerveModules) return [];
@@ -3029,6 +3425,9 @@
         }
       });
     }
+    if (eventTimelineElements.length > 0) {
+      two.add(...eventTimelineElements);
+    }
     two.add(...points);
 
     two.update();
@@ -3586,16 +3985,19 @@
 
 	    // Parse and load the uploaded file, then cache it into the browser store.
 	    loadTrajectoryFromFile(evt, async (data) => {
-	      const loadedPoseVariables = normalizePoseVariables(data.poseVariables);
 	      const loadedNumberVariables = normalizeNumberVariables(data.numberVariables);
+	      const loadedPoseVariables = normalizePoseVariables(
+	        data.poseVariables,
+	        loadedNumberVariables,
+	      );
 
       // Ensure startPoint has all required fields
-      const loadedStartPoint = data.startPoint || {
+      const loadedStartPoint = resolvePointExpressions(data.startPoint || {
         x: 72,
         y: 72,
         heading: "tangential",
         reverse: false,
-      };
+      }, loadedNumberVariables);
 
       // Normalize lines with all required fields
 	      const normalizedLines = applyNumberVariablesToLines(
@@ -3662,16 +4064,19 @@
 
   // Helper function to load data into app state
 	  function loadData(data: any) {
-	    const loadedPoseVariables = normalizePoseVariables(data.poseVariables);
 	    const loadedNumberVariables = normalizeNumberVariables(data.numberVariables);
+	    const loadedPoseVariables = normalizePoseVariables(
+	      data.poseVariables,
+	      loadedNumberVariables,
+	    );
 
     // Ensure startPoint has all required fields
-    const loadedStartPoint = data.startPoint || {
+    const loadedStartPoint = resolvePointExpressions(data.startPoint || {
       x: 72,
       y: 72,
       heading: "tangential",
       reverse: false,
-    };
+    }, loadedNumberVariables);
 
     // Normalize lines with all required fields
 	    const normalizedLines = applyNumberVariablesToLines(
@@ -3770,6 +4175,29 @@
     return new Promise((res) => setTimeout(res, ms));
   }
 
+  function formatOptimizerError(
+    status: number,
+    errorText: string,
+    fallbackStatusText: string,
+  ): string {
+    let message = errorText || fallbackStatusText;
+    let trace = "";
+
+    try {
+      const parsed = JSON.parse(errorText);
+      message = parsed?.message || parsed?.error || message;
+      trace = parsed?.trace || "";
+    } catch {
+      // The hosted optimizer sometimes returns plain text instead of JSON.
+    }
+
+    if (`${message}\n${trace}`.includes("min_collisions")) {
+      return `Optimizer request failed (${status}): Pedro's hosted optimizer hit its collision-count bug. The path was not changed; try again after removing collision obstacles or simplifying the path.`;
+    }
+
+    return `Optimizer request failed (${status}): ${message || fallbackStatusText}`;
+  }
+
   async function runOptimization(payload: any) {
     const response = await fetch(`${OPTIMIZER_BASE_URL}`, {
       method: "POST",
@@ -3780,7 +4208,7 @@
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
       throw new Error(
-        `Optimizer request failed (${response.status}): ${errorText || response.statusText}`,
+        formatOptimizerError(response.status, errorText, response.statusText),
       );
     }
 
@@ -4306,6 +4734,15 @@
             class="h-3 w-3 rotate-45 border-b border-r border-current bg-white/95 dark:bg-neutral-950/90 -mt-1"
           />
           <div class="h-2 w-2 rounded-full bg-current shadow-sm" />
+        </div>
+      {/each}
+
+      {#each eventTimelineLabels as marker (marker.id)}
+        <div
+          class="absolute z-[43] pointer-events-none -translate-x-1/2 translate-y-2 whitespace-nowrap rounded-full border bg-white/95 dark:bg-neutral-950/90 px-2 py-0.5 text-[10px] font-bold leading-tight text-neutral-900 dark:text-neutral-50 shadow-sm"
+          style={`left: ${marker.x}px; top: ${marker.y}px; border-color: ${marker.color || "#f97316"}; box-shadow: 0 0 0 2px ${marker.color || "#f97316"}22;`}
+        >
+          {marker.label}
         </div>
       {/each}
 

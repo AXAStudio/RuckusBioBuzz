@@ -2,7 +2,9 @@
 
 export interface BasePoint {
   x: number;
+  xExpression?: string;
   y: number;
+  yExpression?: string;
   locked?: boolean;
   poseVariableId?: string;
 }
@@ -11,8 +13,11 @@ export interface PoseVariable {
   id: string;
   name: string;
   x: number;
+  xExpression?: string;
   y: number;
+  yExpression?: string;
   heading: number;
+  headingExpression?: string;
 }
 
 export interface PathVariable {
@@ -33,23 +38,32 @@ export type Point = BasePoint &
     | {
         heading: "linear";
         startDeg: number;
+        startDegExpression?: string;
         endDeg: number;
+        endDegExpression?: string;
         headingCurve?: number;
         degrees?: never;
+        degreesExpression?: never;
         reverse?: never;
       }
     | {
         heading: "constant";
         degrees: number;
+        degreesExpression?: string;
         startDeg?: never;
+        startDegExpression?: never;
         endDeg?: never;
+        endDegExpression?: never;
         reverse?: never;
       }
     | {
         heading: "tangential";
         degrees?: never;
+        degreesExpression?: never;
         startDeg?: never;
+        startDegExpression?: never;
         endDeg?: never;
+        endDegExpression?: never;
         reverse: boolean;
       }
   );
@@ -172,6 +186,7 @@ export interface Settings {
   pathOpacity?: number; // Opacity of path lines (0-1)
   showVelocityGradient?: boolean; // Color paths by instantaneous motion-profile velocity
   showEventPins?: boolean; // Show labeled event trigger pins on the field
+  showEventTimeline?: boolean; // Show colored parallel-event duration strips on paths
   showAutoCountdown?: boolean; // Show the 30 second autonomous countdown overlay
   showPathAnnotations?: boolean; // Show per-segment length and time labels
   showSwerveModules?: boolean; // Show estimated swerve wheel angles on robot previews

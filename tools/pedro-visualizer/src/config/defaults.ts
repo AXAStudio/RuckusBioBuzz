@@ -53,8 +53,9 @@ export const DEFAULT_SETTINGS: Settings = {
   pathOpacity: 1,
   showVelocityGradient: false,
   showEventPins: true,
+  showEventTimeline: true,
   showAutoCountdown: true,
-  showPathAnnotations: true,
+  showPathAnnotations: false,
   showSwerveModules: true,
 };
 

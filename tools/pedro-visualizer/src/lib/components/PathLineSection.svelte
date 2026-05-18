@@ -7,6 +7,10 @@
     NumberVariable,
   } from "../../types";
   import { snapToGrid, showGrid, gridSize } from "../../stores";
+  import {
+    pointCoordinateFieldDisplayValue,
+    resolvePointExpressions,
+  } from "../../utils";
   import ControlPointsSection from "./ControlPointsSection.svelte";
   import HeadingControls from "./HeadingControls.svelte";
   import HeadingCurveEditor from "./HeadingCurveEditor.svelte";
@@ -93,6 +97,21 @@
 
   function handlePoseVariableSelect(event: Event) {
     onPoseVariableChange(line.id || "", (event.currentTarget as HTMLSelectElement).value);
+  }
+
+  function updateEndPointCoordinate(field: "x" | "y", event: Event) {
+    const value = (event.currentTarget as HTMLInputElement).value;
+    const expressionField = `${field}Expression` as "xExpression" | "yExpression";
+    const numeric = Number(value);
+    line.endPoint = resolvePointExpressions(
+      {
+        ...line.endPoint,
+        [field]: Number.isFinite(numeric) ? numeric : line.endPoint[field],
+        [expressionField]: value.trim() ? value : undefined,
+      },
+      numberVariables,
+    );
+    lines = [...lines];
   }
 
   function makeEventMarkerId() {
@@ -646,28 +665,25 @@
         <div class="font-extralight">X:</div>
         <input
           class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-950 dark:border-neutral-700 border-[0.5px] focus:outline-none w-28"
-          step={$snapToGrid && $showGrid ? $gridSize : 0.1}
-          type="number"
-          min="0"
-          max="141.5"
-          bind:value={line.endPoint.x}
+          type="text"
+          value={pointCoordinateFieldDisplayValue(line.endPoint, "x")}
+          on:input={(event) => updateEndPointCoordinate("x", event)}
           disabled={line.locked || isEndPointBoundToPoseVariable}
           title={snapToGridTitle}
         />
         <div class="font-extralight">Y:</div>
         <input
           class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-950 dark:border-neutral-700 border-[0.5px] focus:outline-none w-28"
-          step={$snapToGrid && $showGrid ? $gridSize : 0.1}
-          min="0"
-          max="141.5"
-          type="number"
-          bind:value={line.endPoint.y}
+          type="text"
+          value={pointCoordinateFieldDisplayValue(line.endPoint, "y")}
+          on:input={(event) => updateEndPointCoordinate("y", event)}
           disabled={line.locked || isEndPointBoundToPoseVariable}
           title={snapToGridTitle}
         />
 
         <HeadingControls
           endPoint={line.endPoint}
+          {numberVariables}
           locked={line.locked}
           boundEndHeading={boundPoseVariableHeading}
           onHeadingModeChange={(mode) => onHeadingModeChange(line.id || "", mode)}

@@ -2,14 +2,19 @@
   import type {
     BasePoint,
     Line,
+    Point,
+    SequenceItem,
+    Settings,
     TimePrediction,
-    TimelineEvent,
   } from "../../types";
   import type { ScaleLinear } from "d3";
-  import { formatTime } from "../../utils";
+  import { buildEventTimingWindows, formatTime } from "../../utils";
 
   export let percent: number = 0;
   export let timePrediction: TimePrediction | null = null;
+  export let startPoint: Point;
+  export let sequence: SequenceItem[] = [];
+  export let settings: Settings;
   export let lines: Line[] = [];
   export let robotXY: BasePoint;
   export let robotHeading: number;
@@ -40,10 +45,7 @@
     return Math.abs(normalized) < 0.5 ? 0 : normalized;
   }
 
-  function getCurrentEvent(
-    currentTime: number,
-    timeline: TimelineEvent[],
-  ): TimelineEvent | null {
+  function getCurrentEvent(currentTime: number, timeline: TimePrediction["timeline"]) {
     if (!timeline.length) return null;
     return (
       timeline.find(
@@ -58,7 +60,7 @@
     return line?.name?.trim() || `Path ${lineIndex + 1}`;
   }
 
-  function getStateLabel(event: TimelineEvent | null) {
+  function getStateLabel(event: TimePrediction["timeline"][number] | null) {
     if (!event) return "Idle";
     if (event.type === "travel") return "Following path";
     if (event.name?.trim()) return event.name;
@@ -72,56 +74,24 @@
     return "Waiting";
   }
 
-  function getPathProgress(currentTime: number, event: TimelineEvent | null) {
+  function getPathProgress(
+    currentTime: number,
+    event: TimePrediction["timeline"][number] | null,
+  ) {
     if (!event || event.type !== "travel" || event.duration <= 0) return 0;
     return clamp((currentTime - event.startTime) / event.duration, 0, 1);
   }
 
-  function getParallelEvents(
-    currentTime: number,
-    totalTime: number,
-    timeline: TimelineEvent[],
-  ) {
+  function getParallelEvents(currentTime: number, eventWindows: ParallelEventState[]) {
     const active: ParallelEventState[] = [];
     const upcoming: ParallelEventState[] = [];
 
-    timeline.forEach((event) => {
-      if (event.type !== "travel") return;
-      const lineIndex = event.lineIndex ?? -1;
-      const line = lines[lineIndex];
-      if (!line?.eventMarkers?.length) return;
-
-      line.eventMarkers.forEach((marker, markerIndex) => {
-        const triggerType =
-          marker.triggerType === "temporal" || marker.triggerType === "pose"
-            ? marker.triggerType
-            : "parametric";
-        const rawPosition = Number(marker.position ?? 0.5);
-        const position = Number.isFinite(rawPosition)
-          ? clamp(rawPosition, 0, 1)
-          : 0.5;
-        const durationMs = Math.max(0, Math.round(Number(marker.durationMs ?? 0) || 0));
-        const triggerTime =
-          triggerType === "temporal"
-            ? event.startTime + Math.max(0, Number(marker.triggerMs ?? 0) || 0) / 1000
-            : event.startTime + event.duration * position;
-        const endTime =
-          durationMs > 0 ? triggerTime + durationMs / 1000 : Math.max(totalTime, triggerTime);
-        const item = {
-          name: marker.name?.trim() || `Event ${markerIndex + 1}`,
-          lineName: getLineName(lineIndex),
-          triggerPercent: position * 100,
-          triggerTime,
-          endTime,
-          durationMs,
-        };
-
-        if (currentTime >= triggerTime && currentTime <= endTime) {
-          active.push(item);
-        } else if (currentTime < triggerTime) {
-          upcoming.push(item);
-        }
-      });
+    eventWindows.forEach((item) => {
+      if (currentTime >= item.triggerTime && currentTime <= item.endTime) {
+        active.push(item);
+      } else if (currentTime < item.triggerTime) {
+        upcoming.push(item);
+      }
     });
 
     upcoming.sort((a, b) => a.triggerTime - b.triggerTime);
@@ -140,7 +110,21 @@
   $: fieldX = x?.invert ? x.invert(robotXY?.x ?? 0) : 0;
   $: fieldY = y?.invert ? y.invert(robotXY?.y ?? 0) : 0;
   $: fieldHeading = normalizeDegrees(-Number(robotHeading ?? 0));
-  $: parallelState = getParallelEvents(currentTime, totalTime, timeline);
+  $: eventWindows = buildEventTimingWindows(
+    startPoint,
+    lines,
+    timePrediction,
+    settings,
+    sequence,
+  ).map((event) => ({
+    name: event.name,
+    lineName: event.lineName,
+    triggerPercent: event.triggerPathPercent,
+    triggerTime: event.startTime,
+    endTime: event.endTime,
+    durationMs: event.durationMs,
+  }));
+  $: parallelState = getParallelEvents(currentTime, eventWindows);
 </script>
 
 <div
@@ -174,7 +158,10 @@
     <div class="text-neutral-500 dark:text-neutral-400">Active</div>
     <div class="truncate">
       {#if parallelState.active.length > 0}
-        {parallelState.active.map((event) => event.name).join(", ")}
+        {parallelState.active
+          .map((event) =>
+            `${event.name}${event.durationMs > 0 ? ` (${formatTime(event.durationMs / 1000)})` : ""}`)
+          .join(", ")}
       {:else}
         None
       {/if}
@@ -184,6 +171,9 @@
     <div class="truncate">
       {#if parallelState.next}
         {parallelState.next.name} on {parallelState.next.lineName} @ {formatNumber(parallelState.next.triggerPercent, 0)}%
+        {#if parallelState.next.durationMs > 0}
+          for {formatTime(parallelState.next.durationMs / 1000)}
+        {/if}
       {:else}
         None
       {/if}

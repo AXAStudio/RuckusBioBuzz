@@ -1,16 +1,12 @@
 <script lang="ts">
   import type { PoseVariable } from "../../types";
+  import { poseVariableFieldDisplayValue } from "../../utils";
 
   export let poseVariables: PoseVariable[] = [];
   export let onAdd: () => void = () => {};
   export let onRemove: (id: string) => void = () => {};
   export let onChange: (variable: PoseVariable) => void = () => {};
   export let onCommit: () => void = () => {};
-
-  function numericValue(value: string): number {
-    const next = Number(value);
-    return Number.isFinite(next) ? next : 0;
-  }
 
   function updateVariable(
     index: number,
@@ -36,13 +32,20 @@
     });
   }
 
-  function updateNumber(
+  function updateExpression(
     index: number,
     field: "x" | "y" | "heading",
     event: Event,
   ) {
+    const value = (event.currentTarget as HTMLInputElement).value;
+    const expressionField = `${field}Expression` as
+      | "xExpression"
+      | "yExpression"
+      | "headingExpression";
+    const numeric = Number(value);
     updateVariable(index, {
-      [field]: numericValue((event.currentTarget as HTMLInputElement).value),
+      [field]: Number.isFinite(numeric) ? numeric : poseVariables[index]?.[field] ?? 0,
+      [expressionField]: value.trim() ? value : undefined,
     });
   }
 
@@ -89,40 +92,36 @@
           <label class="flex items-center gap-1 text-xs text-neutral-500 dark:text-neutral-300">
             X
             <input
-              type="number"
-              value={variable.x}
-              min="0"
-              max="141.5"
-              step="0.1"
-              on:input={(event) => updateNumber(index, "x", event)}
+              type="text"
+              value={poseVariableFieldDisplayValue(variable, "x")}
+              on:input={(event) => updateExpression(index, "x", event)}
               on:blur={onCommit}
               class="w-full px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-neutral-50 dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100"
+              placeholder="x or depth - 10"
             />
           </label>
 
           <label class="flex items-center gap-1 text-xs text-neutral-500 dark:text-neutral-300">
             Y
             <input
-              type="number"
-              value={variable.y}
-              min="0"
-              max="141.5"
-              step="0.1"
-              on:input={(event) => updateNumber(index, "y", event)}
+              type="text"
+              value={poseVariableFieldDisplayValue(variable, "y")}
+              on:input={(event) => updateExpression(index, "y", event)}
               on:blur={onCommit}
               class="w-full px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-neutral-50 dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100"
+              placeholder="y or depth - 10"
             />
           </label>
 
           <label class="flex items-center gap-1 text-xs text-neutral-500 dark:text-neutral-300">
             H
             <input
-              type="number"
-              value={variable.heading}
-              step="0.1"
-              on:input={(event) => updateNumber(index, "heading", event)}
+              type="text"
+              value={poseVariableFieldDisplayValue(variable, "heading")}
+              on:input={(event) => updateExpression(index, "heading", event)}
               on:blur={onCommit}
               class="w-full px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-neutral-50 dark:bg-neutral-900 text-neutral-900 dark:text-neutral-100"
+              placeholder="heading or depth - 10"
             />
           </label>
 

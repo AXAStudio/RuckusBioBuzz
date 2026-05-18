@@ -7,11 +7,26 @@
   export let percent: number;
   export let handleSeek: (percent: number) => void;
   export let loopAnimation: boolean = true;
-  export let markers: { percent: number; color: string; name: string }[] = [];
+  export let markers: {
+    percent?: number;
+    startPercent?: number;
+    endPercent?: number;
+    color: string;
+    name: string;
+    label?: string;
+    type?: "marker" | "duration";
+  }[] = [];
   // totalTime is in seconds
   export let totalTime: number = 0;
 
   $: elapsedSeconds = (percent / 100) * (totalTime || 0);
+  $: pointMarkers = markers.filter((marker) => marker.type !== "duration");
+  $: durationMarkers = markers.filter(
+    (marker) =>
+      marker.type === "duration" &&
+      Number.isFinite(marker.startPercent) &&
+      Number.isFinite(marker.endPercent),
+  );
 
   function handleTimelineInput(event: Event) {
     const value = parseFloat((event.currentTarget as HTMLInputElement).value);
@@ -91,15 +106,36 @@
   </button>
 
   <div class="w-full relative">
+    {#each durationMarkers as marker, i}
+      <div
+        class="absolute pointer-events-auto"
+        role="button"
+        tabindex="0"
+        on:click={() => handleSeek(marker.startPercent ?? 0)}
+        on:keydown={(e) => {
+          if (e.key === "Enter" || e.key === " ") handleSeek(marker.startPercent ?? 0);
+        }}
+        style={`left: ${marker.startPercent}%; width: ${Math.max(1.5, (marker.endPercent ?? marker.startPercent ?? 0) - (marker.startPercent ?? 0))}%; top: 16px; height: 10px; border-radius: 9999px; background: ${marker.color}; opacity: 0.85; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.35); cursor: pointer;`}
+        title={marker.label || marker.name}
+        aria-label={marker.label || marker.name}
+      ></div>
+      <div
+        class="absolute pointer-events-none whitespace-nowrap text-[10px] font-semibold text-neutral-700 dark:text-neutral-200"
+        style={`left: ${((marker.startPercent ?? 0) + (marker.endPercent ?? marker.startPercent ?? 0)) / 2}%; top: 28px; transform: translateX(-50%);`}
+      >
+        {marker.label || marker.name}
+      </div>
+    {/each}
+
     <!-- markers: small colored dots positioned by percent -->
-    {#each markers as m, i}
+    {#each pointMarkers as m, i}
       <div
         class="absolute"
         role="button"
         tabindex="0"
-        on:click={() => handleSeek(m.percent)}
+        on:click={() => handleSeek(m.percent ?? 0)}
         on:keydown={(e) => {
-          if (e.key === "Enter" || e.key === " ") handleSeek(m.percent);
+          if (e.key === "Enter" || e.key === " ") handleSeek(m.percent ?? 0);
         }}
         style={`left: ${m.percent}%; top: 3px; transform: translateX(-50%); width: 12px; height: 12px; border-radius: 9999px; background: ${m.color}; box-shadow: 0 0 0 2px rgba(0,0,0,0.06); cursor: pointer;`}
         title={m.name}

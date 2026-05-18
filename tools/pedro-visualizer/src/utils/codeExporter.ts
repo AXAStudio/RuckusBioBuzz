@@ -9,16 +9,17 @@ import type {
   EventMarker,
   NumberVariable,
 } from "../types";
+import { buildJavaExpressionFromNumberExpression } from "./numberExpressions";
 import { getCurvePoint } from "./math";
 
 // Lazy-load Prettier's Java plugin; fall back gracefully if unavailable
 let cachedJavaPlugin: any | null = null;
 async function loadJavaPlugin() {
   if (cachedJavaPlugin !== null) return cachedJavaPlugin;
-  const candidates = ["prettier/plugins/java.js", "prettier/plugins/java"];
-  for (const path of candidates) {
+  const candidates = [() => import("prettier-plugin-java")];
+  for (const loadPlugin of candidates) {
     try {
-      const mod = await import(path);
+      const mod = await loadPlugin();
       cachedJavaPlugin = (mod as any).default ?? mod;
       return cachedJavaPlugin;
     } catch (err) {
@@ -213,18 +214,73 @@ function buildPathStepCode(
   name: string,
   point: Point,
   pointRole: "start" | "end",
+  numberVariables: NumberVariable[],
+  numberVariableConstantById: Map<string, string>,
 ): string {
-  return `private static final PathStep ${name} = new PathStep(${fixed(point.x)}, ${fixed(point.y)}, ${fixed(pathStepHeadingDegrees(point, pointRole))});`;
+  const xExpression = buildJavaExpressionFromNumberExpression(
+    point.xExpression,
+    fixed(point.x),
+    numberVariables,
+    numberVariableConstantById,
+  );
+  const yExpression = buildJavaExpressionFromNumberExpression(
+    point.yExpression,
+    fixed(point.y),
+    numberVariables,
+    numberVariableConstantById,
+  );
+  const headingFallback = fixed(pathStepHeadingDegrees(point, pointRole));
+  const headingExpression = point.heading === "constant"
+    ? buildJavaExpressionFromNumberExpression(
+        point.degreesExpression,
+        headingFallback,
+        numberVariables,
+        numberVariableConstantById,
+      )
+    : point.heading === "linear"
+      ? buildJavaExpressionFromNumberExpression(
+          pointRole === "start" ? point.startDegExpression : point.endDegExpression,
+          headingFallback,
+          numberVariables,
+          numberVariableConstantById,
+        )
+      : headingFallback;
+  return `private static final PathStep ${name} = new PathStep(${xExpression}, ${yExpression}, ${headingExpression});`;
 }
 
 function buildPoseVariablePathStepCode(
   name: string,
   variable: PoseVariable,
+  numberVariables: NumberVariable[],
+  numberVariableConstantById: Map<string, string>,
 ): string {
-  return `private static final PathStep ${name} = new PathStep(${fixed(Number(variable.x) || 0)}, ${fixed(Number(variable.y) || 0)}, ${fixed(Number(variable.heading) || 0)});`;
+  const xExpression = buildJavaExpressionFromNumberExpression(
+    variable.xExpression,
+    fixed(Number(variable.x) || 0),
+    numberVariables,
+    numberVariableConstantById,
+  );
+  const yExpression = buildJavaExpressionFromNumberExpression(
+    variable.yExpression,
+    fixed(Number(variable.y) || 0),
+    numberVariables,
+    numberVariableConstantById,
+  );
+  const headingExpression = buildJavaExpressionFromNumberExpression(
+    variable.headingExpression,
+    fixed(Number(variable.heading) || 0),
+    numberVariables,
+    numberVariableConstantById,
+  );
+  return `private static final PathStep ${name} = new PathStep(${xExpression}, ${yExpression}, ${headingExpression});`;
 }
 
-function buildPathSegmentCode(line: Line, startExpression: string): string {
+function buildPathSegmentCode(
+  line: Line,
+  startExpression: string,
+  numberVariables: NumberVariable[],
+  numberVariableConstantById: Map<string, string>,
+): string {
   const headingTypeToFunctionName = {
     constant: "setConstantHeadingInterpolation",
     linear: "setLinearHeadingInterpolation",
@@ -238,15 +294,43 @@ function buildPathSegmentCode(line: Line, startExpression: string): string {
   const curveType =
     line.controlPoints.length === 0 ? "BezierLine" : "BezierCurve";
 
+  const endXExpression = buildJavaExpressionFromNumberExpression(
+    line.endPoint.xExpression,
+    fixed(line.endPoint.x),
+    numberVariables,
+    numberVariableConstantById,
+  );
+  const endYExpression = buildJavaExpressionFromNumberExpression(
+    line.endPoint.yExpression,
+    fixed(line.endPoint.y),
+    numberVariables,
+    numberVariableConstantById,
+  );
+
   const allPoints = controlPoints
-    ? `${startExpression},\n            ${controlPoints},\n            new Pose(${line.endPoint.x.toFixed(3)}, ${line.endPoint.y.toFixed(3)})`
-    : `${startExpression},\n            new Pose(${line.endPoint.x.toFixed(3)}, ${line.endPoint.y.toFixed(3)})`;
+    ? `${startExpression},\n            ${controlPoints},\n            new Pose(${endXExpression}, ${endYExpression})`
+    : `${startExpression},\n            new Pose(${endXExpression}, ${endYExpression})`;
 
   const headingConfig =
     line.endPoint.heading === "constant"
-      ? `Math.toRadians(${line.endPoint.degrees ?? 0})`
+      ? `Math.toRadians(${buildJavaExpressionFromNumberExpression(
+          line.endPoint.degreesExpression,
+          fixed(line.endPoint.degrees ?? 0),
+          numberVariables,
+          numberVariableConstantById,
+        )})`
       : line.endPoint.heading === "linear"
-        ? `Math.toRadians(${line.endPoint.startDeg ?? 0}), Math.toRadians(${line.endPoint.endDeg ?? 0})`
+        ? `Math.toRadians(${buildJavaExpressionFromNumberExpression(
+            line.endPoint.startDegExpression,
+            fixed(line.endPoint.startDeg ?? 0),
+            numberVariables,
+            numberVariableConstantById,
+          )}), Math.toRadians(${buildJavaExpressionFromNumberExpression(
+            line.endPoint.endDegExpression,
+            fixed(line.endPoint.endDeg ?? 0),
+            numberVariables,
+            numberVariableConstantById,
+          )})`
         : "";
 
   const reverseConfig = line.endPoint.reverse
@@ -259,6 +343,26 @@ function buildPathSegmentCode(line: Line, startExpression: string): string {
             )
           )
           .${headingTypeToFunctionName[line.endPoint.heading]}(${headingConfig})${reverseConfig}`;
+}
+
+function buildPoseExpression(
+  point: { x: number; y: number; xExpression?: string; yExpression?: string },
+  numberVariables: NumberVariable[],
+  numberVariableConstantById: Map<string, string>,
+): string {
+  const xExpression = buildJavaExpressionFromNumberExpression(
+    point.xExpression,
+    fixed(point.x),
+    numberVariables,
+    numberVariableConstantById,
+  );
+  const yExpression = buildJavaExpressionFromNumberExpression(
+    point.yExpression,
+    fixed(point.y),
+    numberVariables,
+    numberVariableConstantById,
+  );
+  return `new Pose(${xExpression}, ${yExpression})`;
 }
 
 function buildTeamCodePathSegmentCode(
@@ -424,15 +528,6 @@ export async function generateTeamCodeAutoCode(
     `${pointStepName(point, fallbackName)}.toPose()`;
 
   const pathStepDeclarations: string[] = [];
-  poseVariableConstantById.forEach((constantName, poseVariableId) => {
-    const variable = poseVariablesById.get(poseVariableId);
-    if (variable) {
-      pathStepDeclarations.push(
-        buildPoseVariablePathStepCode(constantName, variable),
-      );
-    }
-  });
-
   numberVariableConstantById.forEach((constantName, variableId) => {
     const variable = numberVariables.find((item) => item.id === variableId);
     if (variable) {
@@ -442,9 +537,29 @@ export async function generateTeamCodeAutoCode(
     }
   });
 
+  poseVariableConstantById.forEach((constantName, poseVariableId) => {
+    const variable = poseVariablesById.get(poseVariableId);
+    if (variable) {
+      pathStepDeclarations.push(
+        buildPoseVariablePathStepCode(
+          constantName,
+          variable,
+          numberVariables,
+          numberVariableConstantById,
+        ),
+      );
+    }
+  });
+
   if (pointStepName(startPoint, "START_STEP") === "START_STEP") {
     pathStepDeclarations.push(
-      buildPathStepCode("START_STEP", startPoint, "start"),
+      buildPathStepCode(
+        "START_STEP",
+        startPoint,
+        "start",
+        numberVariables,
+        numberVariableConstantById,
+      ),
     );
   }
 
@@ -452,7 +567,13 @@ export async function generateTeamCodeAutoCode(
     const fallbackName = `POINT_${idx + 1}`;
     if (pointStepName(line.endPoint, fallbackName) === fallbackName) {
       pathStepDeclarations.push(
-        buildPathStepCode(fallbackName, line.endPoint, "end"),
+        buildPathStepCode(
+          fallbackName,
+          line.endPoint,
+          "end",
+          numberVariables,
+          numberVariableConstantById,
+        ),
       );
     }
   });
@@ -579,14 +700,14 @@ export async function generateTeamCodeAutoCode(
         }
 
         return `case ${idx}:
-	        followPathStep(${pathVariable}, ${pathSpeedExpression(lineById.get(item.lineId))});
-	        break;`;
+        followPathStep(${pathVariable}, ${pathSpeedExpression(lineById.get(item.lineId))});
+        break;`;
       }
 
       if (item.kind === "wait") {
         return `case ${idx}:
-	        runWaitStep(${numberExpression(item.durationVariableId, `${Math.max(0, Number(item.durationMs) || 0)}L`, "long")});
-	        break;`;
+        runWaitStep(${numberExpression(item.durationVariableId, `${Math.max(0, Number(item.durationMs) || 0)}L`, "long")});
+        break;`;
       }
 
       if (item.kind === "repeat") {
@@ -603,8 +724,8 @@ export async function generateTeamCodeAutoCode(
       }
 
       return `case ${idx}:
-	        runTimedEventStep(${javaStringLiteral(item.name || item.kind)}, ${numberExpression(item.durationVariableId, `${Math.max(0, Number(item.durationMs) || 0)}L`, "long")});
-	        break;`;
+        runTimedEventStep(${javaStringLiteral(item.name || item.kind)}, ${numberExpression(item.durationVariableId, `${Math.max(0, Number(item.durationMs) || 0)}L`, "long")});
+        break;`;
     })
     .join("\n      ");
   const startEventCases = [...eventMethods.values()]
@@ -649,17 +770,17 @@ import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 public class ${autoClassName} extends OpMode {
     ${pathStepDeclarationBlock}
 
-	    private Follower follower;
-	    ${chainFieldDeclarations}
-	    ${repeatFieldDeclarations}
-	    private int sequenceIndex;
-	    private long stepStartTime;
-	    private boolean stepStarted;
-	    private boolean pathFinished;
-	    private static final int REPEAT_LOOP_CAPACITY = ${Math.max(1, repeatItems.length)};
-	    private final int[] repeatLoopIterations = new int[REPEAT_LOOP_CAPACITY];
-	    private final int[] repeatLoopPathIndexes = new int[REPEAT_LOOP_CAPACITY];
-	    private static final int PARALLEL_EVENT_CAPACITY = ${parallelEventCapacity};
+    private Follower follower;
+    ${chainFieldDeclarations}
+    ${repeatFieldDeclarations}
+    private int sequenceIndex;
+    private long stepStartTime;
+    private boolean stepStarted;
+    private boolean pathFinished;
+    private static final int REPEAT_LOOP_CAPACITY = ${Math.max(1, repeatItems.length)};
+    private final int[] repeatLoopIterations = new int[REPEAT_LOOP_CAPACITY];
+    private final int[] repeatLoopPathIndexes = new int[REPEAT_LOOP_CAPACITY];
+    private static final int PARALLEL_EVENT_CAPACITY = ${parallelEventCapacity};
     private final String[] activeParallelEventNames = new String[PARALLEL_EVENT_CAPACITY];
     private final long[] activeParallelEventStartTimes = new long[PARALLEL_EVENT_CAPACITY];
     private final long[] activeParallelEventDurations = new long[PARALLEL_EVENT_CAPACITY];
@@ -681,11 +802,11 @@ public class ${autoClassName} extends OpMode {
 
     @Override
     public void start() {
-	        sequenceIndex = 0;
-	        stepStarted = false;
-	        pathFinished = false;
-	        resetRepeatLoops();
-	        resetParallelEvents();
+        sequenceIndex = 0;
+        stepStarted = false;
+        pathFinished = false;
+        resetRepeatLoops();
+        resetParallelEvents();
 
         follower.setStartingPose(${pointStepExpression(startPoint, "START_STEP")});
     }
@@ -713,11 +834,11 @@ public class ${autoClassName} extends OpMode {
         follower.update();
     }
 
-	    private void buildPaths() {
-	      ${chainAssignments}
+    private void buildPaths() {
+      ${chainAssignments}
 
-	      ${repeatAssignments}
-	    }
+      ${repeatAssignments}
+    }
 
     private void runSequence() {
         if (pathFinished) {
@@ -758,68 +879,68 @@ public class ${autoClassName} extends OpMode {
         return angle;
     }
 
-	    private void followPathStep(PathChain path, double pathSpeed) {
-	        if (!stepStarted) {
-	            follower.followPath(path, clampPathSpeed(pathSpeed), true);
-	            stepStarted = true;
-	        }
+    private void followPathStep(PathChain path, double pathSpeed) {
+        if (!stepStarted) {
+            follower.followPath(path, clampPathSpeed(pathSpeed), true);
+            stepStarted = true;
+        }
 
         if (!follower.isBusy()) {
             advanceSequence();
-	        }
-	    }
+        }
+    }
 
-	    private void followRepeatStep(
-	        PathChain[] repeatPaths,
-	        double[] repeatPathSpeeds,
-	        int repeatCount,
-	        int repeatSlot
-	    ) {
-	        if (
-	            repeatSlot < 0 ||
-	            repeatSlot >= REPEAT_LOOP_CAPACITY ||
-	            repeatPaths == null ||
-	            repeatPaths.length == 0 ||
-	            repeatCount <= 0
-	        ) {
-	            advanceSequence();
-	            return;
-	        }
+    private void followRepeatStep(
+        PathChain[] repeatPaths,
+        double[] repeatPathSpeeds,
+        int repeatCount,
+        int repeatSlot
+    ) {
+        if (
+            repeatSlot < 0 ||
+            repeatSlot >= REPEAT_LOOP_CAPACITY ||
+            repeatPaths == null ||
+            repeatPaths.length == 0 ||
+            repeatCount <= 0
+        ) {
+            advanceSequence();
+            return;
+        }
 
-	        int pathIndex = Math.max(0, Math.min(repeatPaths.length - 1, repeatLoopPathIndexes[repeatSlot]));
-	        PathChain path = repeatPaths[pathIndex];
-	        double pathSpeed =
-	            repeatPathSpeeds != null && pathIndex < repeatPathSpeeds.length
-	                ? repeatPathSpeeds[pathIndex]
-	                : 1.0;
+        int pathIndex = Math.max(0, Math.min(repeatPaths.length - 1, repeatLoopPathIndexes[repeatSlot]));
+        PathChain path = repeatPaths[pathIndex];
+        double pathSpeed =
+            repeatPathSpeeds != null && pathIndex < repeatPathSpeeds.length
+                ? repeatPathSpeeds[pathIndex]
+                : 1.0;
 
-	        if (!stepStarted) {
-	            follower.followPath(path, clampPathSpeed(pathSpeed), true);
-	            stepStarted = true;
-	        }
+        if (!stepStarted) {
+            follower.followPath(path, clampPathSpeed(pathSpeed), true);
+            stepStarted = true;
+        }
 
-	        if (follower.isBusy()) {
-	            return;
-	        }
+        if (follower.isBusy()) {
+            return;
+        }
 
-	        stepStarted = false;
-	        repeatLoopPathIndexes[repeatSlot]++;
+        stepStarted = false;
+        repeatLoopPathIndexes[repeatSlot]++;
 
-	        if (repeatLoopPathIndexes[repeatSlot] >= repeatPaths.length) {
-	            repeatLoopPathIndexes[repeatSlot] = 0;
-	            repeatLoopIterations[repeatSlot]++;
-	        }
+        if (repeatLoopPathIndexes[repeatSlot] >= repeatPaths.length) {
+            repeatLoopPathIndexes[repeatSlot] = 0;
+            repeatLoopIterations[repeatSlot]++;
+        }
 
-	        if (repeatLoopIterations[repeatSlot] >= repeatCount) {
-	            repeatLoopIterations[repeatSlot] = 0;
-	            repeatLoopPathIndexes[repeatSlot] = 0;
-	            advanceSequence();
-	        }
-	    }
+        if (repeatLoopIterations[repeatSlot] >= repeatCount) {
+            repeatLoopIterations[repeatSlot] = 0;
+            repeatLoopPathIndexes[repeatSlot] = 0;
+            advanceSequence();
+        }
+    }
 
-	    private double clampPathSpeed(double pathSpeed) {
-	        return Math.max(0.05, Math.min(1.0, pathSpeed));
-	    }
+    private double clampPathSpeed(double pathSpeed) {
+        return Math.max(0.05, Math.min(1.0, pathSpeed));
+    }
 
     private void runWaitStep(long durationMs) {
         if (!stepStarted) {
@@ -903,18 +1024,18 @@ public class ${autoClassName} extends OpMode {
         }
     }
 
-	    private void resetParallelEvents() {
-	        for (int i = 0; i < activeParallelEventNames.length; i++) {
-	            clearParallelEvent(i);
-	        }
-	    }
+    private void resetParallelEvents() {
+        for (int i = 0; i < activeParallelEventNames.length; i++) {
+            clearParallelEvent(i);
+        }
+    }
 
-	    private void resetRepeatLoops() {
-	        for (int i = 0; i < REPEAT_LOOP_CAPACITY; i++) {
-	            repeatLoopIterations[i] = 0;
-	            repeatLoopPathIndexes[i] = 0;
-	        }
-	    }
+    private void resetRepeatLoops() {
+        for (int i = 0; i < REPEAT_LOOP_CAPACITY; i++) {
+            repeatLoopIterations[i] = 0;
+            repeatLoopPathIndexes[i] = 0;
+        }
+    }
 
     private void clearParallelEvent(int index) {
         activeParallelEventNames[index] = null;
@@ -975,6 +1096,7 @@ export async function generateJavaCode(
   lines: Line[],
   exportMode: "full" | "class" | "coordinates" = "class",
   pathChains: PathChain[] = [],
+  numberVariables: NumberVariable[] = [],
 ): Promise<string> {
   const linesWithIds = lines.map((line, idx) => ({
     ...line,
@@ -1001,6 +1123,13 @@ export async function generateJavaCode(
     }))
     .filter((chain) => chain.lineIds.length > 0);
 
+  const numberVariableConstantById = new Map(
+    numberVariables.map((variable) => [
+      variable.id,
+      fixed(Number.isFinite(Number(variable.value)) ? Number(variable.value) : 0),
+    ]),
+  );
+
   const fieldDeclarations = normalizedChains
     .map((chain, idx) => {
       const variableName = sanitizeIdentifier(
@@ -1026,10 +1155,23 @@ export async function generateJavaCode(
           const lineIndex = linesWithIds.findIndex((ln) => ln.id === line.id);
           const startExpression =
             lineIndex <= 0
-              ? `new Pose(${startPoint.x.toFixed(3)}, ${startPoint.y.toFixed(3)})`
-              : `new Pose(${linesWithIds[lineIndex - 1].endPoint.x.toFixed(3)}, ${linesWithIds[lineIndex - 1].endPoint.y.toFixed(3)})`;
+              ? buildPoseExpression(
+                  startPoint,
+                  numberVariables,
+                  numberVariableConstantById,
+                )
+              : buildPoseExpression(
+                  linesWithIds[lineIndex - 1].endPoint,
+                  numberVariables,
+                  numberVariableConstantById,
+                );
 
-          return buildPathSegmentCode(line, startExpression);
+          return buildPathSegmentCode(
+            line,
+            startExpression,
+            numberVariables,
+            numberVariableConstantById,
+          );
         })
         .filter((segment): segment is string => Boolean(segment));
 

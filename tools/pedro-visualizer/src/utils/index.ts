@@ -5,6 +5,7 @@ export * from "./file";
 export * from "./geometry";
 export * from "./gifExporter";
 export * from "./math";
+export * from "./numberExpressions";
 export * from "./pathMirroring";
 export * from "./shapes";
 export * from "./timeCalculator";

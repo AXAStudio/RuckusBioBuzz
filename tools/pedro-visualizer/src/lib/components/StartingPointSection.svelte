@@ -1,8 +1,13 @@
 <script lang="ts">
-  import type { Point, PoseVariable } from "../../types";
+  import type { NumberVariable, Point, PoseVariable } from "../../types";
+  import {
+    pointCoordinateFieldDisplayValue,
+    resolvePointExpressions,
+  } from "../../utils";
 
   export let startPoint: Point;
   export let poseVariables: PoseVariable[] = [];
+  export let numberVariables: NumberVariable[] = [];
   export let onPoseVariableChange: (poseVariableId: string) => void = () => {};
   export let addPathAtStart: () => void;
   export let addWaitAtStart: () => void;
@@ -12,6 +17,20 @@
 
   function handlePoseVariableSelect(event: Event) {
     onPoseVariableChange((event.currentTarget as HTMLSelectElement).value);
+  }
+
+  function updateCoordinate(field: "x" | "y", event: Event) {
+    const value = (event.currentTarget as HTMLInputElement).value;
+    const expressionField = `${field}Expression` as "xExpression" | "yExpression";
+    const numeric = Number(value);
+    startPoint = resolvePointExpressions(
+      {
+        ...startPoint,
+        [field]: Number.isFinite(numeric) ? numeric : startPoint[field],
+        [expressionField]: value.trim() ? value : undefined,
+      },
+      numberVariables,
+    );
   }
 </script>
 
@@ -80,22 +99,18 @@
   <div class="flex flex-row justify-start items-center gap-2">
     <span class="font-extralight">X:</span>
     <input
-      bind:value={startPoint.x}
-      min="0"
-      max="141.5"
-      type="number"
+      value={pointCoordinateFieldDisplayValue(startPoint, "x")}
+      type="text"
       class="pl-1.5 rounded-md bg-neutral-100 border-[0.5px] focus:outline-none w-28 dark:bg-neutral-950 dark:border-neutral-700"
-      step="0.1"
+      on:input={(event) => updateCoordinate("x", event)}
       disabled={startPoint.locked || isBoundToPoseVariable}
     />
     <span class="font-extralight">Y:</span>
     <input
-      bind:value={startPoint.y}
-      min="0"
-      max="141.5"
-      type="number"
+      value={pointCoordinateFieldDisplayValue(startPoint, "y")}
+      type="text"
       class="pl-1.5 rounded-md bg-neutral-100 border-[0.5px] focus:outline-none w-28 dark:bg-neutral-950 dark:border-neutral-700"
-      step="0.1"
+      on:input={(event) => updateCoordinate("y", event)}
       disabled={startPoint.locked || isBoundToPoseVariable}
     />
     <div class="flex items-center gap-2 ml-2">
