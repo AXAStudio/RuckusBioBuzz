@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { EventMarker, Line, PoseVariable } from "../../types";
+  import type { EventMarker, EventTriggerType, Line, PoseVariable } from "../../types";
   import { snapToGrid, showGrid, gridSize } from "../../stores";
   import ControlPointsSection from "./ControlPointsSection.svelte";
   import HeadingControls from "./HeadingControls.svelte";
@@ -93,12 +93,35 @@
     return Math.max(0, Math.round(numeric));
   }
 
+  function eventTriggerType(marker: EventMarker): EventTriggerType {
+    return marker.triggerType === "temporal" || marker.triggerType === "pose"
+      ? marker.triggerType
+      : "parametric";
+  }
+
+  function eventPoseX(marker: EventMarker): number {
+    const numeric = Number(marker.poseX);
+    return Number.isFinite(numeric) ? numeric : Number(line.endPoint?.x ?? 0);
+  }
+
+  function eventPoseY(marker: EventMarker): number {
+    const numeric = Number(marker.poseY);
+    return Number.isFinite(numeric) ? numeric : Number(line.endPoint?.y ?? 0);
+  }
+
   function normalizeEventMarker(marker: EventMarker, index: number): EventMarker {
+    const triggerMs = Number(marker.triggerMs ?? 0);
     return {
       ...marker,
       id: marker.id || makeEventMarkerId(),
       name: marker.name || `Event ${index + 1}`,
+      triggerType: eventTriggerType(marker),
       position: clampEventPosition(marker.position),
+      triggerMs: Number.isFinite(triggerMs)
+        ? Math.max(0, Math.round(triggerMs))
+        : 0,
+      poseX: eventPoseX(marker),
+      poseY: eventPoseY(marker),
       durationMs: clampEventDuration(marker.durationMs),
     };
   }
@@ -117,7 +140,11 @@
         {
           id: makeEventMarkerId(),
           name: `Event ${nextIndex + 1}`,
+          triggerType: "parametric",
           position: 0.5,
+          triggerMs: 0,
+          poseX: Number(line.endPoint?.x ?? 0),
+          poseY: Number(line.endPoint?.y ?? 0),
           durationMs: 0,
         },
       ],
@@ -153,6 +180,37 @@
   function handleEventDurationInput(index: number, event: Event) {
     updateEventMarker(index, {
       durationMs: Number((event.currentTarget as HTMLInputElement).value),
+    });
+  }
+
+  function handleEventTriggerTypeInput(index: number, event: Event) {
+    const triggerType = (event.currentTarget as HTMLSelectElement).value as EventTriggerType;
+    updateEventMarker(
+      index,
+      {
+        triggerType,
+        poseX: eventPoseX(eventMarkers[index]),
+        poseY: eventPoseY(eventMarkers[index]),
+      },
+      true,
+    );
+  }
+
+  function handleEventTriggerMsInput(index: number, event: Event) {
+    updateEventMarker(index, {
+      triggerMs: Number((event.currentTarget as HTMLInputElement).value),
+    });
+  }
+
+  function handleEventPoseXInput(index: number, event: Event) {
+    updateEventMarker(index, {
+      poseX: Number((event.currentTarget as HTMLInputElement).value),
+    });
+  }
+
+  function handleEventPoseYInput(index: number, event: Event) {
+    updateEventMarker(index, {
+      poseY: Number((event.currentTarget as HTMLInputElement).value),
     });
   }
 
@@ -585,30 +643,81 @@
                   on:blur={() => updateEventMarker(eventIdx, {}, true)}
                 />
 
-                <div class="font-extralight">Trigger:</div>
-                <input
-                  type="range"
-                  min="0"
-                  max="1"
-                  step="0.01"
-                  value={clampEventPosition(marker.position)}
+                <div class="font-extralight">Type:</div>
+                <select
+                  value={eventTriggerType(marker)}
                   disabled={line.locked}
-                  on:input={(event) => handleEventPositionInput(eventIdx, event)}
-                  on:change={() => updateEventMarker(eventIdx, {}, true)}
-                  class="w-32"
-                />
-                <input
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="1"
-                  value={Math.round(clampEventPosition(marker.position) * 100)}
-                  disabled={line.locked}
-                  on:input={(event) => handleEventPercentInput(eventIdx, event)}
-                  on:blur={() => updateEventMarker(eventIdx, {}, true)}
-                  class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-700 border-[0.5px] focus:outline-none w-16"
-                />
-                <div class="font-extralight">%</div>
+                  on:change={(event) => handleEventTriggerTypeInput(eventIdx, event)}
+                  class="px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-neutral-100 dark:bg-neutral-900"
+                >
+                  <option value="parametric">Path %</option>
+                  <option value="temporal">Time</option>
+                  <option value="pose">Pose</option>
+                </select>
+
+                {#if eventTriggerType(marker) === "temporal"}
+                  <div class="font-extralight">After ms:</div>
+                  <input
+                    type="number"
+                    min="0"
+                    step="50"
+                    value={clampEventDuration(marker.triggerMs)}
+                    disabled={line.locked}
+                    on:input={(event) => handleEventTriggerMsInput(eventIdx, event)}
+                    on:blur={() => updateEventMarker(eventIdx, {}, true)}
+                    class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-700 border-[0.5px] focus:outline-none w-24"
+                  />
+                {:else}
+                  <div class="font-extralight">
+                    {eventTriggerType(marker) === "pose" ? "Guess:" : "Trigger:"}
+                  </div>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={clampEventPosition(marker.position)}
+                    disabled={line.locked}
+                    on:input={(event) => handleEventPositionInput(eventIdx, event)}
+                    on:change={() => updateEventMarker(eventIdx, {}, true)}
+                    class="w-32"
+                  />
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={Math.round(clampEventPosition(marker.position) * 100)}
+                    disabled={line.locked}
+                    on:input={(event) => handleEventPercentInput(eventIdx, event)}
+                    on:blur={() => updateEventMarker(eventIdx, {}, true)}
+                    class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-700 border-[0.5px] focus:outline-none w-16"
+                  />
+                  <div class="font-extralight">%</div>
+
+                  {#if eventTriggerType(marker) === "pose"}
+                    <div class="font-extralight">X:</div>
+                    <input
+                      type="number"
+                      step={$snapToGrid && $showGrid ? $gridSize : 0.1}
+                      value={eventPoseX(marker)}
+                      disabled={line.locked}
+                      on:input={(event) => handleEventPoseXInput(eventIdx, event)}
+                      on:blur={() => updateEventMarker(eventIdx, {}, true)}
+                      class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-700 border-[0.5px] focus:outline-none w-20"
+                    />
+                    <div class="font-extralight">Y:</div>
+                    <input
+                      type="number"
+                      step={$snapToGrid && $showGrid ? $gridSize : 0.1}
+                      value={eventPoseY(marker)}
+                      disabled={line.locked}
+                      on:input={(event) => handleEventPoseYInput(eventIdx, event)}
+                      on:blur={() => updateEventMarker(eventIdx, {}, true)}
+                      class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-900 dark:border-neutral-700 border-[0.5px] focus:outline-none w-20"
+                    />
+                  {/if}
+                {/if}
 
                 <div class="font-extralight">Duration ms:</div>
                 <input

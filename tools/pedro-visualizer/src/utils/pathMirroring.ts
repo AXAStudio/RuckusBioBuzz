@@ -91,6 +91,21 @@ export function mirrorLine(
     controlPoints: (line.controlPoints || []).map((point) =>
       mirrorBasePoint(point, axis, fieldSize),
     ),
+    eventMarkers: (line.eventMarkers || []).map((marker) => {
+      if (marker.triggerType !== "pose") return marker;
+
+      return {
+        ...marker,
+        poseX:
+          axis === "x" && marker.poseX !== undefined
+            ? mirrorCoordinate(marker.poseX, fieldSize)
+            : marker.poseX,
+        poseY:
+          axis === "y" && marker.poseY !== undefined
+            ? mirrorCoordinate(marker.poseY, fieldSize)
+            : marker.poseY,
+      };
+    }),
   };
 }
 

@@ -57,7 +57,7 @@ public class Constants {
 
     public static SwerveConstants swerveConstants = new SwerveConstants()
             .velocity(73.9)
-//            .zeroPowerBehavior(SwerveConstants.ZeroPowerBehavior.IGNORE_ANGLE_CHANGES)
+            .zeroPowerBehavior(SwerveConstants.ZeroPowerBehavior.X_LOCK)
             .useBrakeModeInTeleOp(true);
 
     private static double kP = 0.0055 * 180 / Math.PI;
@@ -65,8 +65,8 @@ public class Constants {
     private static double kFFront = 0.0130;
     private static double kFBack = 0.0190;
 
-    private static double dtLength = 271.148;
-    private static double dtWidth = 270.7;
+    private static double dtLength = 271.148; //distance from robot center to front/back pod center
+    private static double dtWidth = 270.7; // distance from robot center to left/right pod center
 
     private static CoaxialPod leftFront(HardwareMap hardwareMap) {
         CoaxialPod pod = new CoaxialPod(hardwareMap, "sm2", "ss2", "se2",
@@ -108,13 +108,17 @@ public class Constants {
         return pod;
     }
 
-    // public static PathConstraints pathConstraints = new PathConstraints(0.95, 100, 1, 1);
     public static PathConstraints pathConstraints =
-            new PathConstraints(0.9, 2, 2, 0.03, 50, 1, 10, 1);
-
-    // default
-    // public static PathConstraints defaultConstraints = new PathConstraints(0.995, 0.1, 0.1,
-    // 0.007, 100, 1, 10, 1);
+            new PathConstraints(
+                    0.9,
+                    2,
+                    2,
+                    0.03,
+                    50,
+                    1,
+                    10,
+                    1
+            );
     public static Follower createFollower(HardwareMap hardwareMap) {
         return new FollowerBuilder(followerConstants, hardwareMap).pathConstraints(pathConstraints)
                 .swerveDrivetrain(swerveConstants, leftFront(hardwareMap), rightFront(hardwareMap),

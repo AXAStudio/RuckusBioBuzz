@@ -50,10 +50,16 @@ export interface WaitSegment {
   position?: "before" | "after";
 }
 
+export type EventTriggerType = "parametric" | "temporal" | "pose";
+
 export interface EventMarker {
   id?: string;
   name: string;
+  triggerType?: EventTriggerType;
   position: number;
+  triggerMs?: number;
+  poseX?: number;
+  poseY?: number;
   durationMs?: number;
 }
 
@@ -129,6 +135,11 @@ export interface Settings {
   headingArrowColor?: string; // Color of the heading arrow
   headingArrowThickness?: number; // Thickness/stroke width of the heading arrow
   pathOpacity?: number; // Opacity of path lines (0-1)
+  showVelocityGradient?: boolean; // Color paths by instantaneous motion-profile velocity
+  showEventPins?: boolean; // Show labeled event trigger pins on the field
+  showAutoCountdown?: boolean; // Show the 30 second autonomous countdown overlay
+  showPathAnnotations?: boolean; // Show per-segment length and time labels
+  showSwerveModules?: boolean; // Show estimated swerve wheel angles on robot previews
 }
 
 export interface Shape {

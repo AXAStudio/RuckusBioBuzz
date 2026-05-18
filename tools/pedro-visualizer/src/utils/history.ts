@@ -11,11 +11,30 @@ export type AppState = {
   poseVariables: PoseVariable[];
 };
 
+type PersistedHistory = {
+  version: 1;
+  undoStack: AppState[];
+  redoStack: AppState[];
+  lastHash: string;
+  savedAt: number;
+};
+
+const DEFAULT_STORAGE_KEY = "pedro_visualizer_history_v1";
+const DEFAULT_PERSISTED_SIZE = 50;
+
 function deepClone<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj));
 }
 
-export function createHistory(maxSize = 200) {
+function canUseLocalStorage() {
+  return typeof localStorage !== "undefined";
+}
+
+export function createHistory(
+  maxSize = 200,
+  storageKey = DEFAULT_STORAGE_KEY,
+  persistedSize = DEFAULT_PERSISTED_SIZE,
+) {
   let undoStack: AppState[] = [];
   let redoStack: AppState[] = [];
   let lastHash = "";
@@ -34,6 +53,75 @@ export function createHistory(maxSize = 200) {
     return JSON.stringify(state);
   }
 
+  function trimStacksForMemory() {
+    if (undoStack.length > maxSize) {
+      undoStack = undoStack.slice(-maxSize);
+    }
+    if (redoStack.length > maxSize) {
+      redoStack = redoStack.slice(-maxSize);
+    }
+  }
+
+  function persistedSnapshot(): PersistedHistory {
+    const limit = Math.max(1, Math.min(maxSize, persistedSize));
+    return {
+      version: 1,
+      undoStack: undoStack.slice(-limit),
+      redoStack: redoStack.slice(-limit),
+      lastHash,
+      savedAt: Date.now(),
+    };
+  }
+
+  function persist() {
+    if (!canUseLocalStorage()) return;
+
+    let snapshot = persistedSnapshot();
+    while (snapshot.undoStack.length > 0) {
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(snapshot));
+        return;
+      } catch (error) {
+        // Keep the newest recovery points if localStorage is nearly full.
+        snapshot = {
+          ...snapshot,
+          undoStack: snapshot.undoStack.slice(1),
+          redoStack: snapshot.redoStack.slice(1),
+        };
+      }
+    }
+  }
+
+  function restore() {
+    if (!canUseLocalStorage()) return;
+
+    try {
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as PersistedHistory;
+      if (parsed.version !== 1 || !Array.isArray(parsed.undoStack)) return;
+
+      undoStack = parsed.undoStack.map(deepClone).slice(-maxSize);
+      redoStack = Array.isArray(parsed.redoStack)
+        ? parsed.redoStack.map(deepClone).slice(-maxSize)
+        : [];
+      lastHash =
+        typeof parsed.lastHash === "string"
+          ? parsed.lastHash
+          : undoStack.length
+            ? hash(undoStack[undoStack.length - 1])
+            : "";
+      updateStores();
+    } catch (error) {
+      // A corrupt recovery history should not prevent the visualizer from loading.
+      undoStack = [];
+      redoStack = [];
+      lastHash = "";
+    }
+  }
+
+  restore();
+
   function record(state: AppState) {
     const snapshot = deepClone(state);
     const currentHash = hash(snapshot);
@@ -44,12 +132,11 @@ export function createHistory(maxSize = 200) {
     undoStack.push(snapshot);
     lastHash = currentHash;
     // Cap stack size
-    if (undoStack.length > maxSize) {
-      undoStack.shift();
-    }
+    trimStacksForMemory();
     // Clear redo on new action
     redoStack = [];
     updateStores();
+    persist();
   }
 
   function canUndo() {
@@ -66,7 +153,9 @@ export function createHistory(maxSize = 200) {
     const prev = undoStack[undoStack.length - 1];
     redoStack.push(current);
     lastHash = hash(prev);
+    trimStacksForMemory();
     updateStores();
+    persist();
     return deepClone(prev);
   }
 
@@ -75,7 +164,9 @@ export function createHistory(maxSize = 200) {
     const next = redoStack.pop()!;
     undoStack.push(next);
     lastHash = hash(next);
+    trimStacksForMemory();
     updateStores();
+    persist();
     return deepClone(next);
   }
 

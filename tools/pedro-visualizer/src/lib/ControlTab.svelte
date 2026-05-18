@@ -327,15 +327,21 @@
         _markers.push({ percent: pct, color, name });
 
         (line?.eventMarkers || []).forEach((marker, markerIndex) => {
+          const triggerType =
+            marker.triggerType === "temporal" || marker.triggerType === "pose"
+              ? marker.triggerType
+              : "parametric";
           const rawPosition = Number(marker.position ?? 0.5);
           const position = Number.isFinite(rawPosition)
             ? Math.max(0, Math.min(1, rawPosition))
             : 0.5;
-          const markerPct =
-            ((start + (end - start) * position) / timePrediction.totalTime) *
-            100;
+          const triggerTime =
+            triggerType === "temporal"
+              ? start + Math.max(0, Number(marker.triggerMs ?? 0) || 0) / 1000
+              : start + (end - start) * position;
+          const markerPct = (triggerTime / timePrediction.totalTime) * 100;
           _markers.push({
-            percent: markerPct,
+            percent: Math.max(0, Math.min(100, markerPct)),
             color: "#a855f7",
             name: `${marker.name || `Event ${markerIndex + 1}`} on ${name}`,
           });
@@ -431,7 +437,7 @@
         heading: "linear",
         startDeg: firstFinite(point.startDeg, point.degrees, point.endDeg, targetHeading),
         endDeg: targetHeading,
-        headingCurve: point.headingCurve ?? 1,
+        headingCurve: point.heading === "linear" ? point.headingCurve ?? 1 : 1,
       };
     }
 
@@ -564,7 +570,7 @@
         heading: "linear",
         startDeg: firstFinite(point.startDeg, previousHeading),
         endDeg: targetHeading ?? firstFinite(point.endDeg, previousHeading),
-        headingCurve: point.headingCurve ?? 1,
+        headingCurve: point.heading === "linear" ? point.headingCurve ?? 1 : 1,
       };
     }
 

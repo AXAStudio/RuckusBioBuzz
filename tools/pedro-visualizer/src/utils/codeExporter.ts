@@ -78,18 +78,56 @@ function pathSpeed(line: Line | undefined): number {
   return Math.max(0.05, Math.min(1, speed));
 }
 
-function normalizeEventMarkers(line: Line, pathIndex = 0): Required<EventMarker>[] {
+type NormalizedEventMarker = {
+  id: string;
+  name: string;
+  triggerType: "parametric" | "temporal" | "pose";
+  position: number;
+  triggerMs: number;
+  poseX: number;
+  poseY: number;
+  durationMs: number;
+};
+
+function normalizeEventMarkers(line: Line, pathIndex = 0): NormalizedEventMarker[] {
   return (line.eventMarkers || []).map((marker, markerIndex) => {
     const position = Number(marker.position);
+    const triggerMs = Number(marker.triggerMs ?? 0);
     const durationMs = Number(marker.durationMs ?? 0);
+    const triggerType =
+      marker.triggerType === "temporal" || marker.triggerType === "pose"
+        ? marker.triggerType
+        : "parametric";
 
     return {
       id: marker.id || `path-${pathIndex + 1}-event-${markerIndex + 1}`,
       name: marker.name?.trim() || `Path ${pathIndex + 1} Event ${markerIndex + 1}`,
+      triggerType,
       position: Number.isFinite(position) ? Math.max(0, Math.min(1, position)) : 0.5,
+      triggerMs: Number.isFinite(triggerMs) ? Math.max(0, Math.round(triggerMs)) : 0,
+      poseX: Number.isFinite(Number(marker.poseX))
+        ? Number(marker.poseX)
+        : Number(line.endPoint.x) || 0,
+      poseY: Number.isFinite(Number(marker.poseY))
+        ? Number(marker.poseY)
+        : Number(line.endPoint.y) || 0,
       durationMs: Number.isFinite(durationMs) ? Math.max(0, Math.round(durationMs)) : 0,
     };
   });
+}
+
+function buildTeamCodeCallback(marker: NormalizedEventMarker): string {
+  const action = `() -> startParallelEvent(${javaStringLiteral(marker.name)}, ${marker.durationMs}L)`;
+
+  if (marker.triggerType === "temporal") {
+    return `.addTemporalCallback(${marker.triggerMs}L, ${action})`;
+  }
+
+  if (marker.triggerType === "pose") {
+    return `.addPoseCallback(new Pose(${fixed(marker.poseX)}, ${fixed(marker.poseY)}), ${action}, ${fixed(marker.position)})`;
+  }
+
+  return `.addParametricCallback(${fixed(marker.position)}, ${action})`;
 }
 
 function headingCurve(line: Line): number {
@@ -183,10 +221,7 @@ function buildTeamCodePathSegmentCode(
 
   const reverseConfig = line.endPoint.reverse ? "\n          .setReversed()" : "";
   const callbackConfig = normalizeEventMarkers(line, pathIndex)
-    .map(
-      (marker) =>
-        `\n          .addParametricCallback(${fixed(marker.position)}, () -> startParallelEvent(${javaStringLiteral(marker.name)}, ${marker.durationMs}L))`,
-    )
+    .map((marker) => `\n          ${buildTeamCodeCallback(marker)}`)
     .join("");
 
   return `.addPath(

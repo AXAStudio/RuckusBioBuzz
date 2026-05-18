@@ -31,6 +31,56 @@ function getPathSpeed(line: Line): number {
   return Math.max(0.05, Math.min(1, speed));
 }
 
+const curveLengthCache = new Map<string, number>();
+const MAX_CURVE_LENGTH_CACHE_SIZE = 500;
+
+function pointCacheKey(point: BasePoint): string {
+  return `${Number(point.x).toFixed(4)},${Number(point.y).toFixed(4)}`;
+}
+
+function curveLengthCacheKey(
+  start: BasePoint,
+  controlPoints: BasePoint[],
+  end: BasePoint,
+  samples: number,
+): string {
+  return [samples, start, ...controlPoints, end]
+    .map((value) =>
+      typeof value === "number" ? String(value) : pointCacheKey(value),
+    )
+    .join("|");
+}
+
+function calculateCachedCurveLength(
+  start: BasePoint,
+  controlPoints: BasePoint[],
+  end: BasePoint,
+  samples = 100,
+): number {
+  const key = curveLengthCacheKey(start, controlPoints, end, samples);
+  const cached = curveLengthCache.get(key);
+  if (cached !== undefined) return cached;
+
+  let length = 0;
+  let prev = start;
+  for (let i = 1; i <= samples; i++) {
+    const t = i / samples;
+    const point = getCurvePoint(t, [start, ...controlPoints, end]);
+    const dx = point.x - prev.x;
+    const dy = point.y - prev.y;
+    length += Math.sqrt(dx * dx + dy * dy);
+    prev = point;
+  }
+
+  curveLengthCache.set(key, length);
+  if (curveLengthCache.size > MAX_CURVE_LENGTH_CACHE_SIZE) {
+    const oldestKey = curveLengthCache.keys().next().value;
+    if (oldestKey) curveLengthCache.delete(oldestKey);
+  }
+
+  return length;
+}
+
 /**
  * Calculate the robot position and heading based on the Timeline
  */
@@ -92,22 +142,11 @@ export function calculateRobotState(
     let linePercent = 0;
     const curvePoints = [prevPoint, ...currentLine.controlPoints, currentLine.endPoint];
 
-    // Helper: approximate curve length by sampling
-    function calculateCurveLength(start: BasePoint, controlPoints: BasePoint[], end: BasePoint, samples = 100) {
-      let length = 0;
-      let prev = start;
-      for (let i = 1; i <= samples; i++) {
-        const t = i / samples;
-        const p = getCurvePoint(t, [start, ...controlPoints, end]);
-        const dx = p.x - prev.x;
-        const dy = p.y - prev.y;
-        length += Math.sqrt(dx * dx + dy * dy);
-        prev = p;
-      }
-      return length;
-    }
-
-    const segLength = calculateCurveLength(prevPoint as BasePoint, currentLine.controlPoints as BasePoint[], currentLine.endPoint as BasePoint);
+    const segLength = calculateCachedCurveLength(
+      prevPoint as BasePoint,
+      currentLine.controlPoints as BasePoint[],
+      currentLine.endPoint as BasePoint,
+    );
 
     // If settings provide a motion profile, compute distance fraction accordingly
     if (
@@ -533,27 +572,13 @@ export function generateGhostPathPoints(
     leftRail.push(robotStates[i].left);
   }
 
-  for (let i = robotStates.length - 1; i >= 0; i--) {
+  for (let i = 0; i < robotStates.length; i++) {
     rightRail.push(robotStates[i].right);
   }
 
-  // Build boundary: start bridge (right->left), left rail, end bridge (left->right), right rail
-  const boundary: BasePoint[] = [];
-
-  // Bridge at start from right to left (simple straight connector)
-  const start = robotStates[0];
-  boundary.push(start.right);
-  boundary.push(start.left);
-
-  // Left rail
-  boundary.push(...leftRail);
-
-  // Bridge at end from left to right (simple straight connector)
-  const end = robotStates[robotStates.length - 1];
-  boundary.push(end.right);
-
-  // Right rail
-  boundary.push(...rightRail);
+  // Trace one side forward, then the other side backward. Closing the polygon
+  // provides the end/start bridges without crossing the boundary on tight turns.
+  const boundary: BasePoint[] = [...leftRail, ...rightRail.reverse()];
 
   // Remove consecutive duplicates and ensure closure
   const result: BasePoint[] = [];
@@ -602,7 +627,7 @@ export function generateOnionLayers(
   robotWidth: number,
   robotHeight: number,
   spacing: number = 6,
-): Array<{ x: number; y: number; heading: number; corners: BasePoint[]; lineIndex: number }> {
+): Array<{ x: number; y: number; heading: number; corners: BasePoint[]; lineIndex: number; t: number }> {
   if (lines.length === 0) return [];
 
   const layers: Array<{
@@ -611,6 +636,7 @@ export function generateOnionLayers(
     heading: number;
     corners: BasePoint[];
     lineIndex: number;
+    t: number;
   }> = [];
 
   // Calculate total path length
@@ -722,6 +748,7 @@ export function generateOnionLayers(
           heading: heading,
           corners: corners,
           lineIndex: li,
+          t: layerT,
         });
 
         nextLayerDistance += spacing;

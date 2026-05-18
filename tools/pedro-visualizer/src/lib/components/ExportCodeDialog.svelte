@@ -30,6 +30,8 @@
   let currentLanguage: typeof java | typeof plaintext = java;
   let copied = false;
   let saveStatus = "";
+  let compileOutput = "";
+  let savingTeamCodeAuto = false;
   type ValidationMessage = { level: "error" | "warning"; message: string };
   let validationMessages: ValidationMessage[] = [];
 
@@ -54,6 +56,7 @@
   ) {
     exportFormat = format;
     saveStatus = "";
+    compileOutput = "";
     validationMessages = [];
 
     try {
@@ -141,6 +144,7 @@
     if (exportFormat === "teamcode" && isOpen) {
       try {
         saveStatus = "";
+        compileOutput = "";
         exportedCode = await generateTeamCodeAutoCode(
           startPoint,
           lines,
@@ -285,7 +289,9 @@
     }
 
     try {
-      saveStatus = "Saving...";
+      savingTeamCodeAuto = true;
+      compileOutput = "";
+      saveStatus = "Saving to TeamCode and running Gradle compile...";
       const response = await fetch("/api/teamcode-autos", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -295,19 +301,22 @@
         }),
       });
       const result = await response.json().catch(() => ({}));
+      compileOutput = result.compileOutput || "";
 
       if (!response.ok) {
         throw new Error(result.error || "Save failed.");
       }
 
       saveStatus = result.overwritten
-        ? `Updated ${generatedClassName()}.java in TeamCode.`
-        : `Saved ${generatedClassName()}.java in TeamCode.`;
+        ? `Updated ${generatedClassName()}.java in TeamCode. Compile passed.`
+        : `Saved ${generatedClassName()}.java in TeamCode. Compile passed.`;
     } catch (error) {
       saveStatus =
         error instanceof Error
           ? error.message
           : "Unable to save to TeamCode from this server.";
+    } finally {
+      savingTeamCodeAuto = false;
     }
   }
 </script>
@@ -402,10 +411,10 @@
             </button>
             <button
               on:click={saveTeamCodeAuto}
-              disabled={hasValidationErrors()}
+              disabled={hasValidationErrors() || savingTeamCodeAuto}
               class="px-2 py-1 text-sm rounded-md bg-blue-600 text-white disabled:bg-neutral-400 disabled:cursor-not-allowed"
             >
-              Save to TeamCode
+              {savingTeamCodeAuto ? "Compiling..." : "Save + Compile"}
             </button>
           {/if}
           <button
@@ -430,7 +439,7 @@
         </div>
       </div>
 
-      {#if exportFormat === "teamcode" && (validationMessages.length || saveStatus)}
+      {#if exportFormat === "teamcode" && (validationMessages.length || saveStatus || compileOutput)}
         <div class="w-full flex flex-col gap-1 text-sm">
           {#each validationMessages as message}
             <div
@@ -445,6 +454,14 @@
             <div class="px-2 py-1 rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
               {saveStatus}
             </div>
+          {/if}
+          {#if compileOutput}
+            <details class="rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200">
+              <summary class="cursor-pointer px-2 py-1">
+                Gradle compile output
+              </summary>
+              <pre class="max-h-48 overflow-auto whitespace-pre-wrap px-2 pb-2 text-xs">{compileOutput}</pre>
+            </details>
           {/if}
         </div>
       {/if}

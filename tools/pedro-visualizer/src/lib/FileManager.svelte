@@ -16,6 +16,7 @@
     PathChain,
     PoseVariable,
     Settings,
+    EventTriggerType,
   } from "../types";
   import * as browserFileStore from "../utils/browserFileStore";
   import { currentFilePath, isUnsaved, dualPathMode, secondFilePath } from "../stores";
@@ -77,14 +78,29 @@
     return (markers || []).map((marker, index) => {
       const position = Number(marker.position ?? 0.5);
       const durationMs = Number(marker.durationMs ?? 0);
+      const triggerMs = Number(marker.triggerMs ?? 0);
+      const triggerType: EventTriggerType =
+        marker.triggerType === "temporal" || marker.triggerType === "pose"
+          ? marker.triggerType
+          : "parametric";
 
       return {
         ...marker,
         id: marker.id || `event-${Math.random().toString(36).slice(2)}`,
         name: (marker.name || "").trim() || `Event ${index + 1}`,
+        triggerType,
         position: Number.isFinite(position)
           ? Math.max(0, Math.min(1, position))
           : 0.5,
+        triggerMs: Number.isFinite(triggerMs)
+          ? Math.max(0, Math.round(triggerMs))
+          : 0,
+        ...(Number.isFinite(Number(marker.poseX))
+          ? { poseX: Number(marker.poseX) }
+          : {}),
+        ...(Number.isFinite(Number(marker.poseY))
+          ? { poseY: Number(marker.poseY) }
+          : {}),
         durationMs: Number.isFinite(durationMs)
           ? Math.max(0, Math.round(durationMs))
           : 0,

@@ -8,6 +8,8 @@
     PathChain,
     Shape,
     PoseVariable,
+    EventTriggerType,
+    TimePrediction,
   } from "./types";
   import * as d3 from "d3";
   import {
@@ -32,7 +34,15 @@
   import _ from "lodash";
   import hotkeys from "hotkeys-js";
   import { createAnimationController } from "./utils/animation";
-  import { calculatePathTime, getAnimationDuration } from "./utils";
+  import {
+    calculateCurveLength,
+    calculateMotionProfileDistanceAtTime,
+    calculateMotionProfileTime,
+    calculateMotionProfileVelocityAtDistance,
+    calculatePathTime,
+    getAnimationDuration,
+    getPathSpeed,
+  } from "./utils";
   import { exportAsGif, downloadBlob } from "./utils/gifExporter";
 
   import {
@@ -75,14 +85,29 @@
     return (markers || []).map((marker, index) => {
       const position = Number(marker.position ?? 0.5);
       const durationMs = Number(marker.durationMs ?? 0);
+      const triggerMs = Number(marker.triggerMs ?? 0);
+      const triggerType: EventTriggerType =
+        marker.triggerType === "temporal" || marker.triggerType === "pose"
+          ? marker.triggerType
+          : "parametric";
 
       return {
         ...marker,
         id: marker.id || `event-${Math.random().toString(36).slice(2)}`,
         name: (marker.name || "").trim() || `Event ${index + 1}`,
+        triggerType,
         position: Number.isFinite(position)
           ? Math.max(0, Math.min(1, position))
           : 0.5,
+        triggerMs: Number.isFinite(triggerMs)
+          ? Math.max(0, Math.round(triggerMs))
+          : 0,
+        ...(Number.isFinite(Number(marker.poseX))
+          ? { poseX: Number(marker.poseX) }
+          : {}),
+        ...(Number.isFinite(Number(marker.poseY))
+          ? { poseY: Number(marker.poseY) }
+          : {}),
         durationMs: Number.isFinite(durationMs)
           ? Math.max(0, Math.round(durationMs))
           : 0,
@@ -204,6 +229,7 @@
   $: robotHeight = settings?.rHeight || DEFAULT_ROBOT_HEIGHT;
   let robotXY: BasePoint = { x: 0, y: 0 };
   let robotHeading: number = 0;
+  let additionalRobotStates: Array<{ xy: BasePoint; heading: number }> = [];
   // Animation state
   let percent: number = 0;
   let playing = false;
@@ -286,6 +312,719 @@
     color?: string; // Optional custom color for this path
   }
   let additionalPaths: AdditionalPathData[] = [];
+
+  type CanvasPathElement = Path | PathLine;
+  type PathOverlayItem = {
+    id: string;
+    x: number;
+    y: number;
+    label: string;
+    color?: string;
+  };
+  type SwerveWheelOverlay = {
+    id: string;
+    x: number;
+    y: number;
+    angle: number;
+    length: number;
+    thickness: number;
+    opacity: number;
+    color: string;
+  };
+  type OnionLayerState = {
+    x: number;
+    y: number;
+    heading: number;
+    corners: BasePoint[];
+    lineIndex: number;
+    t?: number;
+  };
+  type CurveSample = {
+    point: BasePoint;
+    distance: number;
+    t: number;
+  };
+
+  const PATH_RENDER_SAMPLES = 100;
+  const AUTO_COUNTDOWN_SECONDS = 30;
+  const SWERVE_X_LOCK_LOCAL_CSS_ANGLES = [-45, 45, -135, 135];
+
+  function clampNumber(value: number, min: number, max: number): number {
+    if (!Number.isFinite(value)) return min;
+    return Math.max(min, Math.min(max, value));
+  }
+
+  function setImageFallback(e: Event, fallbackSrc: string) {
+    (e.currentTarget as HTMLImageElement).src = fallbackSrc;
+  }
+
+  function formatSeconds(value: number): string {
+    const absolute = Math.abs(value);
+    if (absolute >= 60) {
+      const minutes = Math.floor(absolute / 60);
+      const seconds = absolute % 60;
+      return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
+    }
+    return `${absolute.toFixed(1)}s`;
+  }
+
+  function formatCountdown(value: number): string {
+    return value < 0 ? `+${formatSeconds(value)}` : formatSeconds(value);
+  }
+
+  function getCountdownColor(remainingSeconds: number): string {
+    if (remainingSeconds <= 3) return "#dc2626";
+    if (remainingSeconds <= 10) return "#f59e0b";
+    return "#16a34a";
+  }
+
+  function getLineStartPoint(
+    sourceStartPoint: Point,
+    sourceLines: Line[],
+    lineIndex: number,
+  ): BasePoint | null {
+    if (lineIndex === 0) return sourceStartPoint;
+    return sourceLines[lineIndex - 1]?.endPoint || null;
+  }
+
+  function sampleLineCurve(
+    sourceStartPoint: BasePoint,
+    line: Line,
+    samples = PATH_RENDER_SAMPLES,
+  ): CurveSample[] {
+    const sampleCount = Math.max(1, Math.round(samples));
+    const curvePoints = [sourceStartPoint, ...line.controlPoints, line.endPoint];
+    const sampledPoints: CurveSample[] = [
+      {
+        point: { x: sourceStartPoint.x, y: sourceStartPoint.y },
+        distance: 0,
+        t: 0,
+      },
+    ];
+    let distance = 0;
+    let previousPoint = sourceStartPoint;
+
+    for (let i = 1; i <= sampleCount; i++) {
+      const t = i / sampleCount;
+      const point = getCurvePoint(t, curvePoints);
+      const dx = point.x - previousPoint.x;
+      const dy = point.y - previousPoint.y;
+      distance += Math.sqrt(dx * dx + dy * dy);
+      sampledPoints.push({
+        point: { x: point.x, y: point.y },
+        distance,
+        t,
+      });
+      previousPoint = point;
+    }
+
+    return sampledPoints;
+  }
+
+  function getLinePointAtT(
+    sourceStartPoint: BasePoint,
+    line: Line,
+    position: number,
+  ): BasePoint {
+    const t = clampNumber(position, 0, 1);
+    return getCurvePoint(t, [sourceStartPoint, ...line.controlPoints, line.endPoint]);
+  }
+
+  function getLinePointAtDistance(
+    sourceStartPoint: BasePoint,
+    line: Line,
+    targetDistance: number,
+  ): BasePoint {
+    const samples = sampleLineCurve(sourceStartPoint, line);
+    const totalDistance = samples[samples.length - 1]?.distance || 0;
+    const clampedDistance = clampNumber(targetDistance, 0, totalDistance);
+
+    for (let i = 1; i < samples.length; i++) {
+      const previous = samples[i - 1];
+      const current = samples[i];
+      if (current.distance < clampedDistance) continue;
+
+      const segmentDistance = current.distance - previous.distance;
+      const ratio =
+        segmentDistance <= 0
+          ? 0
+          : (clampedDistance - previous.distance) / segmentDistance;
+
+      return {
+        x: previous.point.x + (current.point.x - previous.point.x) * ratio,
+        y: previous.point.y + (current.point.y - previous.point.y) * ratio,
+      };
+    }
+
+    return samples[samples.length - 1]?.point || sourceStartPoint;
+  }
+
+  function getLineMotionValues(line: Line, routeSettings: Settings) {
+    const pathSpeed = getPathSpeed(line);
+    return {
+      maxVelocity: Math.max(0, Number(routeSettings.maxVelocity) || 0) * pathSpeed,
+      maxAcceleration:
+        Math.max(0, Number(routeSettings.maxAcceleration) || 0) * pathSpeed,
+      maxDeceleration:
+        Math.max(
+          0,
+          Number(routeSettings.maxDeceleration ?? routeSettings.maxAcceleration) || 0,
+        ) * pathSpeed,
+      referenceVelocity: Math.max(0, Number(routeSettings.maxVelocity) || 0),
+    };
+  }
+
+  function velocityToColor(ratio: number): string {
+    const t = clampNumber(ratio, 0, 1);
+    const blue = [37, 99, 235];
+    const red = [239, 68, 68];
+    const rgb = blue.map((channel, index) =>
+      Math.round(channel + (red[index] - channel) * t),
+    );
+    return `rgb(${rgb[0]}, ${rgb[1]}, ${rgb[2]})`;
+  }
+
+  function createStandardPathElement(
+    line: Line,
+    sourceStartPoint: BasePoint,
+  ): CanvasPathElement {
+    let lineElem: CanvasPathElement;
+
+    if (line.controlPoints.length > 2) {
+      const cps = [sourceStartPoint, ...line.controlPoints, line.endPoint];
+      let points = [
+        new Two.Anchor(
+          x(sourceStartPoint.x),
+          y(sourceStartPoint.y),
+          0,
+          0,
+          0,
+          0,
+          Two.Commands.move,
+        ),
+      ];
+      for (let i = 1; i <= PATH_RENDER_SAMPLES; ++i) {
+        const point = getCurvePoint(i / PATH_RENDER_SAMPLES, cps);
+        points.push(
+          new Two.Anchor(
+            x(point.x),
+            y(point.y),
+            0,
+            0,
+            0,
+            0,
+            Two.Commands.line,
+          ),
+        );
+      }
+      points.forEach((point) => (point.relative = false));
+      lineElem = new Two.Path(points);
+      lineElem.automatic = false;
+    } else if (line.controlPoints.length > 0) {
+      let cp1 = line.controlPoints[1]
+        ? line.controlPoints[0]
+        : quadraticToCubic(sourceStartPoint, line.controlPoints[0], line.endPoint)
+            .Q1;
+      let cp2 =
+        line.controlPoints[1] ??
+        quadraticToCubic(sourceStartPoint, line.controlPoints[0], line.endPoint)
+          .Q2;
+      let points = [
+        new Two.Anchor(
+          x(sourceStartPoint.x),
+          y(sourceStartPoint.y),
+          x(sourceStartPoint.x),
+          y(sourceStartPoint.y),
+          x(cp1.x),
+          y(cp1.y),
+          Two.Commands.move,
+        ),
+        new Two.Anchor(
+          x(line.endPoint.x),
+          y(line.endPoint.y),
+          x(cp2.x),
+          y(cp2.y),
+          x(line.endPoint.x),
+          y(line.endPoint.y),
+          Two.Commands.curve,
+        ),
+      ];
+      points.forEach((point) => (point.relative = false));
+
+      lineElem = new Two.Path(points);
+      lineElem.automatic = false;
+    } else {
+      lineElem = new Two.Line(
+        x(sourceStartPoint.x),
+        y(sourceStartPoint.y),
+        x(line.endPoint.x),
+        y(line.endPoint.y),
+      );
+    }
+
+    return lineElem;
+  }
+
+  function stylePathElement(
+    element: CanvasPathElement,
+    id: string,
+    stroke: string,
+    opacity: number,
+    locked?: boolean,
+  ) {
+    element.id = id;
+    element.stroke = stroke;
+    element.linewidth = x(LINE_WIDTH);
+    element.noFill();
+    if (locked) {
+      element.dashes = [x(2), x(2)];
+      element.opacity = opacity * 0.7;
+    } else {
+      element.dashes = [];
+      element.opacity = opacity;
+    }
+  }
+
+  function createVelocityGradientPathElements(
+    line: Line,
+    sourceStartPoint: BasePoint,
+    idBase: string,
+    opacity: number,
+    routeSettings: Settings,
+  ): CanvasPathElement[] {
+    const samples = sampleLineCurve(sourceStartPoint, line);
+    const totalLength = samples[samples.length - 1]?.distance || 0;
+    const motion = getLineMotionValues(line, routeSettings);
+
+    if (
+      totalLength <= 0 ||
+      motion.maxVelocity <= 0 ||
+      motion.maxAcceleration <= 0 ||
+      motion.maxDeceleration <= 0 ||
+      motion.referenceVelocity <= 0
+    ) {
+      return [];
+    }
+
+    const elements: CanvasPathElement[] = [];
+
+    for (let i = 1; i < samples.length; i++) {
+      const previous = samples[i - 1];
+      const current = samples[i];
+      const midpointDistance = (previous.distance + current.distance) / 2;
+      const velocity = calculateMotionProfileVelocityAtDistance(
+        midpointDistance,
+        totalLength,
+        motion.maxVelocity,
+        motion.maxAcceleration,
+        motion.maxDeceleration,
+      );
+      const color = velocityToColor(velocity / motion.referenceVelocity);
+      const segment = new Two.Line(
+        x(previous.point.x),
+        y(previous.point.y),
+        x(current.point.x),
+        y(current.point.y),
+      );
+      stylePathElement(segment, `${idBase}-velocity-${i}`, color, opacity, line.locked);
+      elements.push(segment);
+    }
+
+    return elements;
+  }
+
+  function createPathDrawElements(
+    line: Line,
+    sourceStartPoint: BasePoint,
+    idBase: string,
+    stroke: string,
+    opacity: number,
+    routeSettings: Settings,
+  ): CanvasPathElement[] {
+    if (routeSettings.showVelocityGradient) {
+      const gradientElements = createVelocityGradientPathElements(
+        line,
+        sourceStartPoint,
+        idBase,
+        opacity,
+        routeSettings,
+      );
+      if (gradientElements.length > 0) return gradientElements;
+    }
+
+    const lineElem = createStandardPathElement(line, sourceStartPoint);
+    stylePathElement(lineElem, idBase, stroke, opacity, line.locked);
+    return [lineElem];
+  }
+
+  function getLineDurationMap(timePrediction: TimePrediction | null | undefined) {
+    const durationMap = new Map<number, number>();
+    timePrediction?.timeline?.forEach((event) => {
+      if (
+        event.type === "travel" &&
+        event.lineIndex !== undefined &&
+        Number.isFinite(event.duration)
+      ) {
+        durationMap.set(event.lineIndex, event.duration);
+      }
+    });
+    return durationMap;
+  }
+
+  function getLineLength(sourceStartPoint: BasePoint, line: Line): number {
+    return calculateCurveLength(sourceStartPoint, line.controlPoints, line.endPoint);
+  }
+
+  function getFallbackLineDuration(
+    sourceStartPoint: BasePoint,
+    line: Line,
+    routeSettings: Settings,
+  ): number {
+    const length = getLineLength(sourceStartPoint, line);
+    const motion = getLineMotionValues(line, routeSettings);
+
+    if (
+      motion.maxVelocity > 0 &&
+      motion.maxAcceleration > 0 &&
+      motion.maxDeceleration > 0
+    ) {
+      return calculateMotionProfileTime(
+        length,
+        motion.maxVelocity,
+        motion.maxAcceleration,
+        motion.maxDeceleration,
+      );
+    }
+
+    const averageVelocity =
+      ((routeSettings.xVelocity + routeSettings.yVelocity) / 2) * getPathSpeed(line);
+    return averageVelocity > 0 ? length / averageVelocity : 0;
+  }
+
+  function buildPathAnnotations(
+    idPrefix: string,
+    sourceStartPoint: Point,
+    sourceLines: Line[],
+    timePrediction: TimePrediction | null | undefined,
+    routeSettings: Settings,
+  ): PathOverlayItem[] {
+    const durationMap = getLineDurationMap(timePrediction);
+
+    return sourceLines
+      .map((line, lineIndex) => {
+        const lineStartPoint = getLineStartPoint(sourceStartPoint, sourceLines, lineIndex);
+        if (!lineStartPoint || !line?.endPoint) return null;
+
+        const length = getLineLength(lineStartPoint, line);
+        const duration =
+          durationMap.get(lineIndex) ??
+          getFallbackLineDuration(lineStartPoint, line, routeSettings);
+        const midpoint = getLinePointAtDistance(lineStartPoint, line, length / 2);
+
+        return {
+          id: `${idPrefix}-path-label-${lineIndex}`,
+          x: x(midpoint.x),
+          y: y(midpoint.y),
+          label: `${length.toFixed(1)} in / ${formatSeconds(duration)}`,
+          color: line.color,
+        };
+      })
+      .filter(Boolean) as PathOverlayItem[];
+  }
+
+  function buildEventPins(
+    idPrefix: string,
+    sourceStartPoint: Point,
+    sourceLines: Line[],
+    timePrediction: TimePrediction | null | undefined,
+    routeSettings: Settings,
+  ): PathOverlayItem[] {
+    const durationMap = getLineDurationMap(timePrediction);
+    const pins: PathOverlayItem[] = [];
+
+    sourceLines.forEach((line, lineIndex) => {
+      const lineStartPoint = getLineStartPoint(sourceStartPoint, sourceLines, lineIndex);
+      if (!lineStartPoint || !line?.eventMarkers?.length) return;
+
+      const length = getLineLength(lineStartPoint, line);
+      const duration =
+        durationMap.get(lineIndex) ??
+        getFallbackLineDuration(lineStartPoint, line, routeSettings);
+      const motion = getLineMotionValues(line, routeSettings);
+
+      line.eventMarkers.forEach((marker, markerIndex) => {
+        const triggerType =
+          marker.triggerType === "temporal" || marker.triggerType === "pose"
+            ? marker.triggerType
+            : "parametric";
+        const position = clampNumber(Number(marker.position ?? 0.5), 0, 1);
+        let fieldPoint: BasePoint;
+
+        if (
+          triggerType === "pose" &&
+          Number.isFinite(Number(marker.poseX)) &&
+          Number.isFinite(Number(marker.poseY))
+        ) {
+          fieldPoint = {
+            x: Number(marker.poseX),
+            y: Number(marker.poseY),
+          };
+        } else if (
+          triggerType === "temporal" &&
+          duration > 0 &&
+          motion.maxVelocity > 0 &&
+          motion.maxAcceleration > 0 &&
+          motion.maxDeceleration > 0
+        ) {
+          const triggerSeconds = Math.max(0, Number(marker.triggerMs ?? 0) || 0) / 1000;
+          const triggerDistance = calculateMotionProfileDistanceAtTime(
+            Math.min(triggerSeconds, duration),
+            length,
+            motion.maxVelocity,
+            motion.maxAcceleration,
+            motion.maxDeceleration,
+          );
+          fieldPoint = getLinePointAtDistance(lineStartPoint, line, triggerDistance);
+        } else {
+          fieldPoint = getLinePointAtT(lineStartPoint, line, position);
+        }
+
+        pins.push({
+          id: `${idPrefix}-event-pin-${lineIndex}-${marker.id || markerIndex}`,
+          x: x(fieldPoint.x),
+          y: y(fieldPoint.y),
+          label: marker.name || `Event ${markerIndex + 1}`,
+          color: "#a855f7",
+        });
+      });
+    });
+
+    return pins;
+  }
+
+  function tangentCssAngleForLine(
+    sourceStartPoint: BasePoint,
+    line: Line,
+    position: number,
+  ): number {
+    const t = clampNumber(position, 0, 1);
+    const beforeT = clampNumber(t - 0.01, 0, 1);
+    const afterT = clampNumber(t + 0.01, 0, 1);
+    const curvePoints = [sourceStartPoint, ...line.controlPoints, line.endPoint];
+    const before = getCurvePoint(beforeT, curvePoints);
+    const after = getCurvePoint(afterT, curvePoints);
+    const dx = after.x - before.x;
+    const dy = after.y - before.y;
+
+    if (Math.abs(dx) < 1e-9 && Math.abs(dy) < 1e-9) {
+      return 0;
+    }
+
+    return (Math.atan2(-dy, dx) * 180) / Math.PI;
+  }
+
+  function getTravelProgressForSwerve(
+    playbackPercent: number,
+    sourceStartPoint: Point,
+    sourceLines: Line[],
+    timePrediction: TimePrediction | null | undefined,
+    routeSettings: Settings,
+  ): { lineIndex: number; t: number; angle: number } | null {
+    if (!timePrediction?.timeline?.length || timePrediction.totalTime <= 0) {
+      return null;
+    }
+
+    const currentTime = (clampNumber(playbackPercent, 0, 100) / 100) * timePrediction.totalTime;
+    const activeEvent =
+      timePrediction.timeline.find(
+        (event) => currentTime >= event.startTime && currentTime <= event.endTime,
+      ) || timePrediction.timeline[timePrediction.timeline.length - 1];
+
+    if (activeEvent.type !== "travel" || activeEvent.lineIndex === undefined) {
+      return null;
+    }
+
+    const lineIndex = activeEvent.lineIndex;
+    const line = sourceLines[lineIndex];
+    const lineStart = getLineStartPoint(sourceStartPoint, sourceLines, lineIndex);
+
+    if (!line || !lineStart || activeEvent.duration <= 0) {
+      return null;
+    }
+
+    const timeIntoEvent = clampNumber(
+      currentTime - activeEvent.startTime,
+      0,
+      activeEvent.duration,
+    );
+    const lineLength = getLineLength(lineStart, line);
+    let lineT = 0;
+
+    const motion = getLineMotionValues(line, routeSettings);
+    if (
+      lineLength > 0 &&
+      motion.maxVelocity > 0 &&
+      motion.maxAcceleration > 0 &&
+      motion.maxDeceleration > 0
+    ) {
+      const distance = calculateMotionProfileDistanceAtTime(
+        timeIntoEvent,
+        lineLength,
+        motion.maxVelocity,
+        motion.maxAcceleration,
+        motion.maxDeceleration,
+      );
+      lineT = clampNumber(distance / lineLength, 0, 1);
+    } else {
+      lineT = easeInOutQuad(clampNumber(timeIntoEvent / activeEvent.duration, 0, 1));
+    }
+
+    return {
+      lineIndex,
+      t: lineT,
+      angle: tangentCssAngleForLine(lineStart, line, lineT),
+    };
+  }
+
+  function getSwerveWheelAnglesCss(
+    playbackPercent: number,
+    sourceStartPoint: Point,
+    sourceLines: Line[],
+    timePrediction: TimePrediction | null | undefined,
+    routeSettings: Settings,
+    robotHeadingCss: number,
+  ): number[] {
+    const travelState = getTravelProgressForSwerve(
+      playbackPercent,
+      sourceStartPoint,
+      sourceLines,
+      timePrediction,
+      routeSettings,
+    );
+
+    if (travelState) {
+      return [travelState.angle, travelState.angle, travelState.angle, travelState.angle];
+    }
+
+    return SWERVE_X_LOCK_LOCAL_CSS_ANGLES.map(
+      (angle) => robotHeadingCss + angle,
+    );
+  }
+
+  function buildSwerveWheelModules(
+    idPrefix: string,
+    center: BasePoint,
+    robotHeadingCss: number,
+    wheelAnglesCss: number[],
+    opacity = 1,
+    color = "#06b6d4",
+    scale = 1,
+  ): SwerveWheelOverlay[] {
+    const robotPixelWidth = Math.max(1, x(robotWidth));
+    const robotPixelHeight = Math.max(1, x(robotHeight));
+    const halfForward = robotPixelWidth * 0.34 * scale;
+    const halfSide = robotPixelHeight * 0.34 * scale;
+    const wheelLength = clampNumber(
+      Math.min(robotPixelWidth, robotPixelHeight) * 0.28 * scale,
+      6,
+      24,
+    );
+    const wheelThickness = Math.max(3, wheelLength * 0.36);
+    const headingRad = (robotHeadingCss * Math.PI) / 180;
+    const cos = Math.cos(headingRad);
+    const sin = Math.sin(headingRad);
+    const localOffsets = [
+      { x: halfForward, y: -halfSide },
+      { x: halfForward, y: halfSide },
+      { x: -halfForward, y: -halfSide },
+      { x: -halfForward, y: halfSide },
+    ];
+
+    return localOffsets.map((offset, index) => ({
+      id: `${idPrefix}-swerve-module-${index}`,
+      x: center.x + offset.x * cos - offset.y * sin,
+      y: center.y + offset.x * sin + offset.y * cos,
+      angle: wheelAnglesCss[index] ?? robotHeadingCss,
+      length: wheelLength,
+      thickness: wheelThickness,
+      opacity,
+      color,
+    }));
+  }
+
+  function getVisibleOnionLayers(
+    sourceStartPoint: Point,
+    sourceLines: Line[],
+    timePrediction: TimePrediction | null | undefined,
+    routeSettings: Settings,
+  ): OnionLayerState[] {
+    let layers = generateOnionLayers(
+      sourceStartPoint,
+      sourceLines,
+      routeSettings.rWidth,
+      routeSettings.rHeight,
+      routeSettings.onionLayerSpacing || 6,
+    ) as OnionLayerState[];
+
+    if (
+      routeSettings.onionNextPointOnly &&
+      timePrediction?.timeline?.length
+    ) {
+      const currentTime = (timePrediction.totalTime || 0) * (percent / 100);
+      const travelEvents = timePrediction.timeline.filter(
+        (event) => event.type === "travel",
+      );
+      let selectedLineIndex: number | null = null;
+      const currentTravel = travelEvents.find(
+        (event) => event.startTime <= currentTime && event.endTime >= currentTime,
+      );
+
+      if (currentTravel) {
+        selectedLineIndex = currentTravel.lineIndex as number;
+      } else {
+        const nextTravel = travelEvents.find(
+          (event) => event.startTime > currentTime,
+        );
+        if (nextTravel) {
+          selectedLineIndex = nextTravel.lineIndex as number;
+        } else if (travelEvents.length) {
+          selectedLineIndex = travelEvents[travelEvents.length - 1].lineIndex as number;
+        }
+      }
+
+      if (selectedLineIndex !== null) {
+        layers = layers.filter((layer) => layer.lineIndex === selectedLineIndex);
+      }
+    }
+
+    return layers;
+  }
+
+  function buildOnionSwerveModules(
+    idPrefix: string,
+    sourceStartPoint: Point,
+    sourceLines: Line[],
+    layers: OnionLayerState[],
+    opacity: number,
+    color: string,
+  ): SwerveWheelOverlay[] {
+    return layers.flatMap((layer, layerIndex) => {
+      const line = sourceLines[layer.lineIndex];
+      const lineStart = getLineStartPoint(sourceStartPoint, sourceLines, layer.lineIndex);
+      if (!line || !lineStart) return [];
+
+      const wheelAngle = tangentCssAngleForLine(lineStart, line, layer.t ?? 0.5);
+      return buildSwerveWheelModules(
+        `${idPrefix}-onion-${layerIndex}`,
+        { x: x(layer.x), y: y(layer.y) },
+        layer.heading,
+        [wheelAngle, wheelAngle, wheelAngle, wheelAngle],
+        opacity,
+        color,
+        0.65,
+      );
+    });
+  }
 
   const history = createHistory();
   const { canUndoStore, canRedoStore } = history;
@@ -388,6 +1127,7 @@
   shapeGroup.id = "shape-group";
   // Coordinate converters
   let x: d3.ScaleLinear<number, number, number>;
+  let y: d3.ScaleLinear<number, number, number>;
 
   // Animation controller
   let loopAnimation = true;
@@ -561,7 +1301,6 @@
               `${idx1}`,
               x(point.x),
               y(point.y - 0.15),
-              x(POINT_RADIUS),
             );
             pointText.id = `point-${idx + 1}-${idx1}-text`;
             pointText.size = x(1.55);
@@ -608,7 +1347,6 @@
           `${vertexIdx + 1}`,
           x(vertex.x),
           y(vertex.y - 0.15),
-          x(POINT_RADIUS),
         );
         pointText.id = `obstacle-${shapeIdx}-${vertexIdx}-text`;
         pointText.size = x(1.55);
@@ -655,7 +1393,6 @@
               `${idx1}`,
               x(point.x),
               y(point.y - 0.15),
-              x(POINT_RADIUS),
             );
             pointText.id = `second-point-${idx + 1}-${idx1}-text`;
             pointText.size = x(1.55);
@@ -723,7 +1460,6 @@
                 `${pointIdx}`,
                 x(point.x),
                 y(point.y - 0.15),
-                x(POINT_RADIUS * 0.9),
               );
               pointText.id = `additional-path-${pathIdx}-point-${lineIdx + 1}-${pointIdx}-text`;
               pointText.size = x(1.4);
@@ -764,7 +1500,7 @@
       return [];
     }
     
-    let _path: (Path | PathLine)[] = [];
+    let _path: CanvasPathElement[] = [];
 
     lines.forEach((line, idx) => {
       if (!line || !line.endPoint) return; // Skip invalid lines or lines without endPoint
@@ -772,96 +1508,16 @@
         idx === 0 ? startPoint : lines[idx - 1]?.endPoint || null;
       if (!_startPoint) return; // Skip if previous line's endPoint is missing
 
-      let lineElem: Path | PathLine;
-      if (line.controlPoints.length > 2) {
-        // Approximate an n-degree bezier curve by sampling it at 100 points
-        const samples = 100;
-        const cps = [_startPoint, ...line.controlPoints, line.endPoint];
-        let points = [
-          new Two.Anchor(
-            x(_startPoint.x),
-            y(_startPoint.y),
-            0,
-            0,
-            0,
-            0,
-            Two.Commands.move,
-          ),
-        ];
-        for (let i = 1; i <= samples; ++i) {
-          const point = getCurvePoint(i / samples, cps);
-          points.push(
-            new Two.Anchor(
-              x(point.x),
-              y(point.y),
-              0,
-              0,
-              0,
-              0,
-              Two.Commands.line,
-            ),
-          );
-        }
-        points.forEach((point) => (point.relative = false));
-        lineElem = new Two.Path(points);
-        lineElem.automatic = false;
-      } else if (line.controlPoints.length > 0) {
-        let cp1 = line.controlPoints[1]
-          ? line.controlPoints[0]
-          : quadraticToCubic(_startPoint, line.controlPoints[0], line.endPoint)
-              .Q1;
-        let cp2 =
-          line.controlPoints[1] ??
-          quadraticToCubic(_startPoint, line.controlPoints[0], line.endPoint)
-            .Q2;
-        let points = [
-          new Two.Anchor(
-            x(_startPoint.x),
-            y(_startPoint.y),
-            x(_startPoint.x),
-            y(_startPoint.y),
-            x(cp1.x),
-            y(cp1.y),
-            Two.Commands.move,
-          ),
-          new Two.Anchor(
-            x(line.endPoint.x),
-            y(line.endPoint.y),
-            x(cp2.x),
-            y(cp2.y),
-            x(line.endPoint.x),
-            y(line.endPoint.y),
-            Two.Commands.curve,
-          ),
-        ];
-        points.forEach((point) => (point.relative = false));
-
-        lineElem = new Two.Path(points);
-        lineElem.automatic = false;
-      } else {
-        lineElem = new Two.Line(
-          x(_startPoint.x),
-          y(_startPoint.y),
-          x(line.endPoint.x),
-          y(line.endPoint.y),
-        );
-      }
-
-      lineElem.id = `line-${idx + 1}`;
-      lineElem.stroke = line.color;
-      lineElem.linewidth = x(LINE_WIDTH);
-      lineElem.noFill();
-      // Add a dashed line for locked paths
-      const baseOpacity = settings.pathOpacity || 1.0;
-      if (line.locked) {
-        lineElem.dashes = [x(2), x(2)];
-        lineElem.opacity = baseOpacity * 0.7;
-      } else {
-        lineElem.dashes = [];
-        lineElem.opacity = baseOpacity;
-      }
-
-      _path.push(lineElem);
+      _path.push(
+        ...createPathDrawElements(
+          line,
+          _startPoint,
+          `line-${idx + 1}`,
+          line.color,
+          settings.pathOpacity || 1.0,
+          settings,
+        ),
+      );
     });
 
     return _path;
@@ -874,7 +1530,7 @@
       return [];
     }
 
-    let _path: (Path | PathLine)[] = [];
+    let _path: CanvasPathElement[] = [];
 
     secondLines.forEach((line, idx) => {
       if (!line || !line.endPoint) return;
@@ -882,94 +1538,19 @@
         idx === 0 ? secondStartPoint : secondLines[idx - 1]?.endPoint || null;
       if (!_startPoint) return;
 
-      let lineElem: Path | PathLine;
-      if (line.controlPoints.length > 2) {
-        const samples = 100;
-        const cps = [_startPoint, ...line.controlPoints, line.endPoint];
-        let points = [
-          new Two.Anchor(
-            x(_startPoint.x),
-            y(_startPoint.y),
-            0,
-            0,
-            0,
-            0,
-            Two.Commands.move,
-          ),
-        ];
-        for (let i = 1; i <= samples; ++i) {
-          const point = getCurvePoint(i / samples, cps);
-          points.push(
-            new Two.Anchor(
-              x(point.x),
-              y(point.y),
-              0,
-              0,
-              0,
-              0,
-              Two.Commands.line,
-            ),
-          );
-        }
-        points.forEach((point) => (point.relative = false));
-        lineElem = new Two.Path(points);
-        lineElem.automatic = false;
-      } else if (line.controlPoints.length > 0) {
-        let cp1 = line.controlPoints[1]
-          ? line.controlPoints[0]
-          : quadraticToCubic(_startPoint, line.controlPoints[0], line.endPoint)
-              .Q1;
-        let cp2 =
-          line.controlPoints[1] ??
-          quadraticToCubic(_startPoint, line.controlPoints[0], line.endPoint)
-            .Q2;
-        let points = [
-          new Two.Anchor(
-            x(_startPoint.x),
-            y(_startPoint.y),
-            x(_startPoint.x),
-            y(_startPoint.y),
-            x(cp1.x),
-            y(cp1.y),
-            Two.Commands.move,
-          ),
-          new Two.Anchor(
-            x(line.endPoint.x),
-            y(line.endPoint.y),
-            x(cp2.x),
-            y(cp2.y),
-            x(line.endPoint.x),
-            y(line.endPoint.y),
-            Two.Commands.curve,
-          ),
-        ];
-        points.forEach((point) => (point.relative = false));
-
-        lineElem = new Two.Path(points);
-        lineElem.automatic = false;
-      } else {
-        lineElem = new Two.Line(
-          x(_startPoint.x),
-          y(_startPoint.y),
-          x(line.endPoint.x),
-          y(line.endPoint.y),
-        );
-      }
-
-      lineElem.id = `second-line-${idx + 1}`;
-      lineElem.stroke = line.color;
-      lineElem.linewidth = x(LINE_WIDTH);
-      lineElem.noFill();
-      const baseOpacity = settings.pathOpacity || 1.0;
-      if (line.locked) {
-        lineElem.dashes = [x(2), x(2)];
-        lineElem.opacity = baseOpacity * 0.7;
-      } else {
-        lineElem.dashes = [];
-        lineElem.opacity = baseOpacity;
-      }
-
-      _path.push(lineElem);
+      _path.push(
+        ...createPathDrawElements(
+          line,
+          _startPoint,
+          `second-line-${idx + 1}`,
+          line.color,
+          settings.pathOpacity || 1.0,
+          {
+            ...settings,
+            showVelocityGradient: settings.showVelocityGradient,
+          },
+        ),
+      );
     });
 
     return _path;
@@ -981,7 +1562,7 @@
       return [];
     }
 
-    let _path: (Path | PathLine)[] = [];
+    let _path: CanvasPathElement[] = [];
     // All paths should be clearly visible - only slight opacity variation
     const pathOpacityBase = settings.pathOpacity || 1.0;
     const opacity = (1.0 - (pathIdx * 0.1)) * pathOpacityBase;
@@ -992,91 +1573,277 @@
         idx === 0 ? pathData.startPoint : pathData.lines[idx - 1]?.endPoint || null;
       if (!_startPoint) return;
 
-      let lineElem: Path | PathLine;
-      if (line.controlPoints.length > 2) {
-        const samples = 100;
-        const cps = [_startPoint, ...line.controlPoints, line.endPoint];
-        let points = [
-          new Two.Anchor(
-            x(_startPoint.x),
-            y(_startPoint.y),
-            0,
-            0,
-            0,
-            0,
-            Two.Commands.move,
-          ),
-        ];
-        for (let i = 1; i <= samples; ++i) {
-          const point = getCurvePoint(i / samples, cps);
-          points.push(
-            new Two.Anchor(
-              x(point.x),
-              y(point.y),
-              0,
-              0,
-              0,
-              0,
-              Two.Commands.line,
-            ),
-          );
-        }
-        points.forEach((point) => (point.relative = false));
-        lineElem = new Two.Path(points);
-        lineElem.automatic = false;
-      } else if (line.controlPoints.length > 0) {
-        let cp1 = line.controlPoints[1]
-          ? line.controlPoints[0]
-          : quadraticToCubic(_startPoint, line.controlPoints[0], line.endPoint)
-              .Q1;
-        let cp2 =
-          line.controlPoints[1] ??
-          quadraticToCubic(_startPoint, line.controlPoints[0], line.endPoint)
-            .Q2;
-        let points = [
-          new Two.Anchor(
-            x(_startPoint.x),
-            y(_startPoint.y),
-            x(_startPoint.x),
-            y(_startPoint.y),
-            x(cp1.x),
-            y(cp1.y),
-            Two.Commands.move,
-          ),
-          new Two.Anchor(
-            x(line.endPoint.x),
-            y(line.endPoint.y),
-            x(cp2.x),
-            y(cp2.y),
-            x(line.endPoint.x),
-            y(line.endPoint.y),
-            Two.Commands.curve,
-          ),
-        ];
-        points.forEach((point) => (point.relative = false));
-
-        lineElem = new Two.Path(points);
-        lineElem.automatic = false;
-      } else {
-        lineElem = new Two.Line(
-          x(_startPoint.x),
-          y(_startPoint.y),
-          x(line.endPoint.x),
-          y(line.endPoint.y),
-        );
-      }
-
-      lineElem.id = `additional-path-${pathIdx}-line-${idx + 1}`;
-      lineElem.stroke = pathData.color || line.color;
-      lineElem.linewidth = x(LINE_WIDTH);
-      lineElem.noFill();
-      lineElem.opacity = opacity;
-
-      _path.push(lineElem);
+      _path.push(
+        ...createPathDrawElements(
+          line,
+          _startPoint,
+          `additional-path-${pathIdx}-line-${idx + 1}`,
+          pathData.color || line.color,
+          opacity,
+          {
+            ...pathData.settings,
+            showVelocityGradient: settings.showVelocityGradient,
+          },
+        ),
+      );
     });
 
     return _path;
   });
+
+  $: activeAutoTotalTime = (() => {
+    if ($activePaths.length > 0) {
+      return additionalPaths.reduce((maxTime, pathData) => {
+        if (!pathData.startPoint || pathData.lines.length === 0) return maxTime;
+        const pathTime = calculatePathTime(
+          pathData.startPoint,
+          pathData.lines,
+          pathData.settings,
+          pathData.sequence,
+        );
+        return Math.max(maxTime, pathTime.totalTime || 0);
+      }, 0);
+    }
+
+    return Math.max(
+      timePrediction?.totalTime || 0,
+      secondTimePrediction?.totalTime || 0,
+    );
+  })();
+
+  $: currentAutoTime =
+    activeAutoTotalTime > 0
+      ? (clampNumber(percent, 0, 100) / 100) * activeAutoTotalTime
+      : 0;
+  $: autoCountdownRemaining = AUTO_COUNTDOWN_SECONDS - currentAutoTime;
+  $: autoCountdownProgress = clampNumber(
+    currentAutoTime / AUTO_COUNTDOWN_SECONDS,
+    0,
+    1,
+  );
+  $: autoCountdownColor = getCountdownColor(autoCountdownRemaining);
+
+  $: pathAnnotations = (() => {
+    if (!settings.showPathAnnotations) return [];
+
+    if ($activePaths.length > 0) {
+      return additionalPaths.flatMap((pathData, pathIndex) => {
+        if (!pathData.startPoint || pathData.lines.length === 0) return [];
+        const pathTime = calculatePathTime(
+          pathData.startPoint,
+          pathData.lines,
+          pathData.settings,
+          pathData.sequence,
+        );
+        return buildPathAnnotations(
+          `additional-${pathIndex}`,
+          pathData.startPoint,
+          pathData.lines,
+          pathTime,
+          pathData.settings,
+        );
+      });
+    }
+
+    const annotations = buildPathAnnotations(
+      "main",
+      startPoint,
+      lines,
+      timePrediction,
+      settings,
+    );
+
+    if ($dualPathMode && secondStartPoint && secondLines.length > 0) {
+      annotations.push(
+        ...buildPathAnnotations(
+          "second",
+          secondStartPoint,
+          secondLines,
+          secondTimePrediction,
+          settings,
+        ),
+      );
+    }
+
+    return annotations;
+  })();
+
+  $: eventPins = (() => {
+    if (!settings.showEventPins) return [];
+
+    if ($activePaths.length > 0) {
+      return additionalPaths.flatMap((pathData, pathIndex) => {
+        if (!pathData.startPoint || pathData.lines.length === 0) return [];
+        const pathTime = calculatePathTime(
+          pathData.startPoint,
+          pathData.lines,
+          pathData.settings,
+          pathData.sequence,
+        );
+        return buildEventPins(
+          `additional-${pathIndex}`,
+          pathData.startPoint,
+          pathData.lines,
+          pathTime,
+          pathData.settings,
+        );
+      });
+    }
+
+    const pins = buildEventPins(
+      "main",
+      startPoint,
+      lines,
+      timePrediction,
+      settings,
+    );
+
+    if ($dualPathMode && secondStartPoint && secondLines.length > 0) {
+      pins.push(
+        ...buildEventPins(
+          "second",
+          secondStartPoint,
+          secondLines,
+          secondTimePrediction,
+          settings,
+        ),
+      );
+    }
+
+    return pins;
+  })();
+
+  $: swerveWheelOverlays = (() => {
+    if (!settings.showSwerveModules) return [];
+
+    const overlays: SwerveWheelOverlay[] = [];
+
+    if ($activePaths.length > 0) {
+      additionalPaths.forEach((pathData, pathIndex) => {
+        if (!pathData.startPoint || pathData.lines.length === 0) return;
+        const pathTimePrediction = calculatePathTime(
+          pathData.startPoint,
+          pathData.lines,
+          pathData.settings,
+          pathData.sequence,
+        );
+        const maxDuration = effectiveAnimationDuration;
+        const thisDuration = getAnimationDuration(pathTimePrediction.totalTime / 1000);
+        const completionPercent = maxDuration > 0 ? (thisDuration / maxDuration) * 100 : 0;
+        const actualPercent = Math.min(percent, completionPercent);
+        const normalizedPercent =
+          completionPercent > 0 ? (actualPercent / completionPercent) * 100 : 0;
+        const robotState = additionalRobotStates[pathIndex];
+
+        if (!robotState) return;
+
+        overlays.push(
+          ...buildSwerveWheelModules(
+            `additional-${pathIndex}`,
+            robotState.xy,
+            robotState.heading,
+            getSwerveWheelAnglesCss(
+              normalizedPercent,
+              pathData.startPoint,
+              pathData.lines,
+              pathTimePrediction,
+              pathData.settings,
+              robotState.heading,
+            ),
+            0.9 - pathIndex * 0.12,
+            pathData.color || "#06b6d4",
+          ),
+        );
+      });
+
+      return overlays;
+    }
+
+    overlays.push(
+      ...buildSwerveWheelModules(
+        "main",
+        robotXY,
+        robotHeading,
+        getSwerveWheelAnglesCss(
+          percent,
+          startPoint,
+          lines,
+          timePrediction,
+          settings,
+          robotHeading,
+        ),
+        1,
+        "#06b6d4",
+      ),
+    );
+
+    if ($dualPathMode && secondStartPoint && secondLines.length > 0 && secondTimePrediction) {
+      const maxDuration = effectiveAnimationDuration;
+      const thisDuration = getAnimationDuration(secondTimePrediction.totalTime / 1000);
+      const completionPercent = maxDuration > 0 ? (thisDuration / maxDuration) * 100 : 0;
+      const actualPercent = Math.min(percent, completionPercent);
+      const normalizedPercent =
+        completionPercent > 0 ? (actualPercent / completionPercent) * 100 : 0;
+
+      overlays.push(
+        ...buildSwerveWheelModules(
+          "second",
+          secondRobotXY,
+          secondRobotHeading,
+          getSwerveWheelAnglesCss(
+            normalizedPercent,
+            secondStartPoint,
+            secondLines,
+            secondTimePrediction,
+            settings,
+            secondRobotHeading,
+          ),
+          0.8,
+          "#fca5a5",
+        ),
+      );
+    }
+
+    if (settings.showOnionLayers) {
+      const mainLayers = getVisibleOnionLayers(
+        startPoint,
+        lines,
+        timePrediction,
+        settings,
+      );
+      overlays.push(
+        ...buildOnionSwerveModules(
+          "main",
+          startPoint,
+          lines,
+          mainLayers,
+          0.72,
+          settings.onionColor || "#dc2626",
+        ),
+      );
+
+      if ($dualPathMode && secondStartPoint && secondLines.length > 0 && secondTimePrediction) {
+        const secondLayers = getVisibleOnionLayers(
+          secondStartPoint,
+          secondLines,
+          secondTimePrediction,
+          settings,
+        );
+        overlays.push(
+          ...buildOnionSwerveModules(
+            "second",
+            secondStartPoint,
+            secondLines,
+            secondLayers,
+            0.65,
+            "#fca5a5",
+          ),
+        );
+      }
+    }
+
+    return overlays;
+  })();
 
   $: shapeElements = (() => {
     // Obstacles removed: return empty array for shape elements
@@ -1776,6 +2543,7 @@
       if (hasActivePaths) {
         // Multiple paths mode - use the longest path duration
         for (const pathData of additionalPaths) {
+          if (!pathData.startPoint) continue;
           const pathTime = calculatePathTime(
             pathData.startPoint,
             pathData.lines,
@@ -1968,7 +2736,6 @@
   }
 
   // Calculate robot states for all additional paths
-  let additionalRobotStates: Array<{ xy: BasePoint; heading: number }> = [];
   $: {
     additionalRobotStates = additionalPaths.map((pathData) => {
       if (!pathData.startPoint) {
@@ -2883,7 +3650,10 @@
   }
 
   function loadRobot(evt: Event) {
-    loadRobotImage(evt, () => updateRobotImageDisplay());
+    const file = (evt.currentTarget as HTMLInputElement).files?.[0];
+    if (file) {
+      loadRobotImage(file, () => updateRobotImageDisplay());
+    }
   }
 
   function addNewLine() {
@@ -3243,12 +4013,69 @@
         draggable="false"
         on:error={(e) => {
           console.error("Failed to load field map:", settings.fieldMap);
-          e.target.src = "/fields/decode.webp"; // Fallback
+          setImageFallback(e, "/fields/decode.webp");
         }}
         on:dragstart={(e) => e.preventDefault()}
         on:selectstart={(e) => e.preventDefault()}
       />
       <MathTools {x} {y} {twoElement} {robotXY} />
+      {#if settings.showAutoCountdown && activeAutoTotalTime > 0}
+        <div
+          class="absolute top-3 left-1/2 -translate-x-1/2 z-[45] pointer-events-none w-[min(78%,28rem)]"
+        >
+          <div
+            class="rounded-md border border-black/15 dark:border-white/15 bg-white/90 dark:bg-neutral-950/85 shadow-sm px-3 py-2"
+            style={`--countdown-color: ${autoCountdownColor};`}
+          >
+            <div class="flex items-center justify-between gap-3 text-xs font-semibold text-neutral-800 dark:text-neutral-100">
+              <span>Auto</span>
+              <span style="color: var(--countdown-color);">
+                {formatCountdown(autoCountdownRemaining)}
+              </span>
+            </div>
+            <div class="mt-1 h-1.5 overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-800">
+              <div
+                class="h-full rounded-full"
+                style={`width: ${Math.max(3, autoCountdownProgress * 100)}%; background: var(--countdown-color);`}
+              />
+            </div>
+          </div>
+        </div>
+      {/if}
+
+      {#each pathAnnotations as annotation (annotation.id)}
+        <div
+          class="absolute z-[42] pointer-events-none -translate-x-1/2 -translate-y-1/2 whitespace-nowrap rounded border border-black/10 dark:border-white/15 bg-white/90 dark:bg-neutral-950/85 px-2 py-0.5 text-[11px] font-semibold text-neutral-800 dark:text-neutral-100 shadow-sm"
+          style={`left: ${annotation.x}px; top: ${annotation.y}px; border-left: 3px solid ${annotation.color || "#2563eb"};`}
+        >
+          {annotation.label}
+        </div>
+      {/each}
+
+      {#each eventPins as marker (marker.id)}
+        <div
+          class="absolute z-[43] pointer-events-none flex -translate-x-1/2 -translate-y-full flex-col items-center"
+          style={`left: ${marker.x}px; top: ${marker.y}px; color: ${marker.color || "#a855f7"};`}
+        >
+          <div
+            class="rounded-md border border-current bg-white/95 dark:bg-neutral-950/90 px-1.5 py-0.5 text-[11px] font-semibold leading-tight text-neutral-900 dark:text-neutral-50 shadow-sm"
+          >
+            {marker.label}
+          </div>
+          <div
+            class="h-3 w-3 rotate-45 border-b border-r border-current bg-white/95 dark:bg-neutral-950/90 -mt-1"
+          />
+          <div class="h-2 w-2 rounded-full bg-current shadow-sm" />
+        </div>
+      {/each}
+
+      {#each swerveWheelOverlays as module (module.id)}
+        <div
+          class="absolute z-[44] pointer-events-none rounded-full border border-black/40 dark:border-white/50 shadow-sm"
+          style={`left: ${module.x}px; top: ${module.y}px; width: ${module.length}px; height: ${module.thickness}px; margin-left: ${-module.length / 2}px; margin-top: ${-module.thickness / 2}px; transform: rotate(${module.angle}deg); opacity: ${module.opacity}; background: ${module.color};`}
+        />
+      {/each}
+
       <!-- Main robot: only show in normal mode -->
       {#if $activePaths.length === 0}
         <img
@@ -3260,7 +4087,7 @@ pointer-events: none;`}
           draggable="false"
           on:error={(e) => {
             console.error("Failed to load robot image:", settings.robotImage);
-            e.target.src = "/robot.png"; // Fallback to default
+            setImageFallback(e, "/robot.png");
           }}
           on:dragstart={(e) => e.preventDefault()}
           on:selectstart={(e) => e.preventDefault()}
@@ -3310,7 +4137,7 @@ pointer-events: none; opacity: 0.8;`}
           draggable="false"
           on:error={(e) => {
             console.error("Failed to load robot image:", settings.robotImage);
-            e.target.src = "/robot.png";
+            setImageFallback(e, "/robot.png");
           }}
           on:dragstart={(e) => e.preventDefault()}
           on:selectstart={(e) => e.preventDefault()}
@@ -3361,7 +4188,7 @@ pointer-events: none; opacity: ${1.0 - idx * 0.15};`}
             draggable="false"
             on:error={(e) => {
               console.error("Failed to load robot image:", settings.robotImage);
-              e.target.src = "/robot.png";
+              setImageFallback(e, "/robot.png");
             }}
             on:dragstart={(e) => e.preventDefault()}
             on:selectstart={(e) => e.preventDefault()}

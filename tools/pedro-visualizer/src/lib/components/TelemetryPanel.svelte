@@ -92,12 +92,19 @@
       if (!line?.eventMarkers?.length) return;
 
       line.eventMarkers.forEach((marker, markerIndex) => {
+        const triggerType =
+          marker.triggerType === "temporal" || marker.triggerType === "pose"
+            ? marker.triggerType
+            : "parametric";
         const rawPosition = Number(marker.position ?? 0.5);
         const position = Number.isFinite(rawPosition)
           ? clamp(rawPosition, 0, 1)
           : 0.5;
         const durationMs = Math.max(0, Math.round(Number(marker.durationMs ?? 0) || 0));
-        const triggerTime = event.startTime + event.duration * position;
+        const triggerTime =
+          triggerType === "temporal"
+            ? event.startTime + Math.max(0, Number(marker.triggerMs ?? 0) || 0) / 1000
+            : event.startTime + event.duration * position;
         const endTime =
           durationMs > 0 ? triggerTime + durationMs / 1000 : Math.max(totalTime, triggerTime);
         const item = {

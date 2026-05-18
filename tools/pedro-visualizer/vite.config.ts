@@ -1,14 +1,17 @@
 import { defineConfig } from "vite";
 import type { Plugin, ViteDevServer } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
+import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
 import { validateTeamCodeAutoSource } from "./src/utils/javaValidation";
 
 const visualizerDir = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(visualizerDir, "..", "..");
+const execFileAsync = promisify(execFile);
 const teamCodeAutoDir = path.resolve(
   repoRoot,
   "TeamCode",
@@ -21,6 +24,56 @@ const teamCodeAutoDir = path.resolve(
   "teamcode",
   "auto",
 );
+const androidStudioJbr = "/Applications/Android Studio.app/Contents/jbr/Contents/Home";
+
+function trimCompileOutput(output: string): string {
+  const trimmed = output.trim();
+  if (trimmed.length <= 12000) return trimmed;
+  return `${trimmed.slice(0, 4000)}\n\n... output truncated ...\n\n${trimmed.slice(-7500)}`;
+}
+
+async function compileTeamCodeAuto(): Promise<{
+  ok: boolean;
+  output: string;
+  exitCode?: number | string;
+}> {
+  const gradleWrapper = path.resolve(repoRoot, "gradlew");
+  const env = fs.existsSync(androidStudioJbr)
+    ? { ...process.env, JAVA_HOME: androidStudioJbr }
+    : process.env;
+
+  try {
+    const result = await execFileAsync(
+      gradleWrapper,
+      [":TeamCode:compileDebugJavaWithJavac", "--rerun-tasks"],
+      {
+        cwd: repoRoot,
+        env,
+        timeout: 120000,
+        maxBuffer: 8 * 1024 * 1024,
+      },
+    );
+
+    return {
+      ok: true,
+      output: trimCompileOutput(`${result.stdout || ""}\n${result.stderr || ""}`),
+    };
+  } catch (error) {
+    const execError = error as Error & {
+      stdout?: string;
+      stderr?: string;
+      code?: number | string;
+    };
+    return {
+      ok: false,
+      exitCode: execError.code,
+      output: trimCompileOutput(
+        `${execError.stdout || ""}\n${execError.stderr || ""}` ||
+          execError.message,
+      ),
+    };
+  }
+}
 
 function teamCodeAutoWriter(): Plugin {
   return {
@@ -64,10 +117,42 @@ function teamCodeAutoWriter(): Plugin {
 
             await fs.promises.mkdir(teamCodeAutoDir, { recursive: true });
             const existed = fs.existsSync(targetPath);
+            const previousContent = existed
+              ? await fs.promises.readFile(targetPath, "utf8")
+              : null;
             await fs.promises.writeFile(targetPath, content, "utf8");
+            const compileResult = await compileTeamCodeAuto();
+
+            if (!compileResult.ok) {
+              if (previousContent !== null) {
+                await fs.promises.writeFile(targetPath, previousContent, "utf8");
+              } else {
+                await fs.promises.rm(targetPath, { force: true });
+              }
+
+              res.statusCode = 400;
+              res.setHeader("Content-Type", "application/json");
+              res.end(
+                JSON.stringify({
+                  error: `TeamCode compile failed for ${className}.java. The file was ${existed ? "restored to its previous version" : "not kept"}.`,
+                  compileOutput: compileResult.output,
+                  compileExitCode: compileResult.exitCode,
+                  restored: true,
+                  validationIssues,
+                }),
+              );
+              return;
+            }
 
             res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ path: targetPath, overwritten: existed }));
+            res.end(
+              JSON.stringify({
+                path: targetPath,
+                overwritten: existed,
+                compiled: true,
+                compileOutput: compileResult.output,
+              }),
+            );
           } catch (error) {
             res.statusCode = 500;
             res.end(

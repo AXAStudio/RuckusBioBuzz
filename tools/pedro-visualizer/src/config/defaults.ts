@@ -51,6 +51,11 @@ export const DEFAULT_SETTINGS: Settings = {
   headingArrowColor: "#ffffff",
   headingArrowThickness: 2,
   pathOpacity: 1,
+  showVelocityGradient: false,
+  showEventPins: true,
+  showAutoCountdown: true,
+  showPathAnnotations: true,
+  showSwerveModules: true,
 };
 
 /**

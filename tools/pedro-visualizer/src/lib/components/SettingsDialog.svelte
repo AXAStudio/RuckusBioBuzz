@@ -8,6 +8,12 @@
   export let isOpen = false;
   export let settings: Settings;
 
+  type NumericSettingKey = {
+    [K in keyof Settings]-?: Exclude<Settings[K], undefined> extends number
+      ? K
+      : never;
+  }[keyof Settings];
+
   // Track which sections are collapsed
   let collapsedSections = {
     robot: true,
@@ -34,17 +40,22 @@
       )
     ) {
       const defaultSettings = await resetSettings();
-      // Update the bound settings object
-      Object.keys(defaultSettings).forEach((key) => {
-        settings[key] = defaultSettings[key];
-      });
+      Object.assign(settings, defaultSettings);
     }
+  }
+
+  function inputValue(e: Event): string {
+    return (e.currentTarget as HTMLInputElement).value;
+  }
+
+  function setImageFallback(e: Event, fallbackSrc: string) {
+    (e.currentTarget as HTMLImageElement).src = fallbackSrc;
   }
 
   // Helper function to handle input with validation
   function handleNumberInput(
     value: string,
-    property: keyof Settings,
+    property: NumericSettingKey,
     min?: number,
     max?: number,
   ) {
@@ -52,7 +63,7 @@
     if (isNaN(num)) num = 0;
     if (min !== undefined) num = Math.max(min, num);
     if (max !== undefined) num = Math.min(max, num);
-    settings[property] = num;
+    (settings as Record<NumericSettingKey, number>)[property] = num;
   }
 
   // Helper function to convert file to base64
@@ -87,6 +98,35 @@
         }
       }
     }
+  }
+
+  async function handleRobotImageUpload(e: Event) {
+    const file = (e.currentTarget as HTMLInputElement).files?.[0];
+    if (!file) return;
+
+    try {
+      const base64 = await imageToBase64(file);
+      settings.robotImage = base64;
+      // Automatically enable heading arrow when custom robot image is uploaded
+      settings.showHeadingArrow = true;
+      settings = { ...settings }; // Force reactivity
+
+      const successMsg = document.createElement("div");
+      successMsg.className =
+        "fixed bottom-4 right-4 bg-green-500 text-white px-4 py-2 rounded-md shadow-lg";
+      successMsg.textContent = "Robot image updated!";
+      document.body.appendChild(successMsg);
+      setTimeout(() => successMsg.remove(), 3000);
+    } catch (error) {
+      alert(
+        "Error loading image: " +
+          (error instanceof Error ? error.message : String(error)),
+      );
+    }
+  }
+
+  function openRobotImagePicker() {
+    document.getElementById("robot-image-input")?.click();
   }
 </script>
 
@@ -230,7 +270,7 @@
                   max="36"
                   step="0.5"
                   on:input={(e) =>
-                    handleNumberInput(e.target.value, "rWidth", 1, 36)}
+                    handleNumberInput(inputValue(e), "rWidth", 1, 36)}
                   class="w-full px-3 py-2 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
@@ -253,7 +293,7 @@
                   max="36"
                   step="0.5"
                   on:input={(e) =>
-                    handleNumberInput(e.target.value, "rHeight", 1, 36)}
+                    handleNumberInput(inputValue(e), "rHeight", 1, 36)}
                   class="w-full px-3 py-2 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
@@ -276,7 +316,7 @@
                   max="24"
                   step="0.5"
                   on:input={(e) =>
-                    handleNumberInput(e.target.value, "safetyMargin", 0, 24)}
+                    handleNumberInput(inputValue(e), "safetyMargin", 0, 24)}
                   class="w-full px-3 py-2 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
@@ -307,7 +347,7 @@
                           "Failed to load robot image:",
                           settings.robotImage,
                         );
-                        e.target.src = "/robot.png"; // Fallback
+                        setImageFallback(e, "/robot.png");
                       }}
                     />
                     {#if settings.robotImage && settings.robotImage !== "/robot.png"}
@@ -375,32 +415,10 @@
                       type="file"
                       accept="image/*"
                       class="hidden"
-                      on:change={async (e) => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          try {
-                            const base64 = await imageToBase64(file);
-                            settings.robotImage = base64;
-                            // Automatically enable heading arrow when custom robot image is uploaded
-                            settings.showHeadingArrow = true;
-                            settings = { ...settings }; // Force reactivity
-
-                            // Show success message
-                            const successMsg = document.createElement("div");
-                            successMsg.className =
-                              "fixed bottom-4 right-4 bg-green-500 text-white px-4 py-2 rounded-md shadow-lg";
-                            successMsg.textContent = "Robot image updated!";
-                            document.body.appendChild(successMsg);
-                            setTimeout(() => successMsg.remove(), 3000);
-                          } catch (error) {
-                            alert("Error loading image: " + error.message);
-                          }
-                        }
-                      }}
+                      on:change={handleRobotImageUpload}
                     />
                     <button
-                      on:click={() =>
-                        document.getElementById("robot-image-input").click()}
+                      on:click={openRobotImagePicker}
                       class="px-4 py-2 text-sm bg-blue-500 hover:bg-blue-600 text-white rounded-md transition-colors flex items-center justify-center gap-2"
                     >
                       <svg
@@ -549,7 +567,7 @@
                     min="0"
                     step="1"
                     on:input={(e) =>
-                      handleNumberInput(e.target.value, "xVelocity", 0)}
+                      handleNumberInput(inputValue(e), "xVelocity", 0)}
                     class="w-full px-3 py-2 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
@@ -568,7 +586,7 @@
                     min="0"
                     step="1"
                     on:input={(e) =>
-                      handleNumberInput(e.target.value, "yVelocity", 0)}
+                      handleNumberInput(inputValue(e), "yVelocity", 0)}
                     class="w-full px-3 py-2 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
@@ -611,7 +629,7 @@
                   min="0"
                   step="1"
                   on:input={(e) =>
-                    handleNumberInput(e.target.value, "maxVelocity", 0)}
+                    handleNumberInput(inputValue(e), "maxVelocity", 0)}
                   class="w-full px-3 py-2 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
@@ -632,7 +650,7 @@
                     min="0"
                     step="1"
                     on:input={(e) =>
-                      handleNumberInput(e.target.value, "maxAcceleration", 0)}
+                      handleNumberInput(inputValue(e), "maxAcceleration", 0)}
                     class="w-full px-3 py-2 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
@@ -651,7 +669,7 @@
                     min="0"
                     step="1"
                     on:input={(e) =>
-                      handleNumberInput(e.target.value, "maxDeceleration", 0)}
+                      handleNumberInput(inputValue(e), "maxDeceleration", 0)}
                     class="w-full px-3 py-2 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
@@ -675,7 +693,7 @@
                   min="0"
                   step="0.1"
                   on:input={(e) =>
-                    handleNumberInput(e.target.value, "kFriction", 0)}
+                    handleNumberInput(inputValue(e), "kFriction", 0)}
                   class="w-full px-3 py-2 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
@@ -966,6 +984,115 @@
                   </div>
                 </div>
               {/if}
+
+              <div
+                class="grid grid-cols-1 sm:grid-cols-2 gap-3"
+              >
+                <label
+                  class="flex items-center justify-between gap-3 p-3 bg-white dark:bg-neutral-800 rounded-lg border border-neutral-200 dark:border-neutral-700"
+                >
+                  <span>
+                    <span
+                      class="text-sm font-medium text-neutral-700 dark:text-neutral-300 block mb-1"
+                    >
+                      Velocity Gradient
+                    </span>
+                    <span class="text-xs text-neutral-500 dark:text-neutral-400">
+                      Color paths blue to red by speed
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    bind:checked={settings.showVelocityGradient}
+                    class="w-5 h-5 rounded border-neutral-300 dark:border-neutral-600 text-red-500 focus:ring-2 focus:ring-red-500 cursor-pointer"
+                    title="Color paths by motion-profile velocity"
+                  />
+                </label>
+
+                <label
+                  class="flex items-center justify-between gap-3 p-3 bg-white dark:bg-neutral-800 rounded-lg border border-neutral-200 dark:border-neutral-700"
+                >
+                  <span>
+                    <span
+                      class="text-sm font-medium text-neutral-700 dark:text-neutral-300 block mb-1"
+                    >
+                      Event Pins
+                    </span>
+                    <span class="text-xs text-neutral-500 dark:text-neutral-400">
+                      Show trigger labels on the field
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    bind:checked={settings.showEventPins}
+                    class="w-5 h-5 rounded border-neutral-300 dark:border-neutral-600 text-purple-500 focus:ring-2 focus:ring-purple-500 cursor-pointer"
+                    title="Show event marker pins on the canvas"
+                  />
+                </label>
+
+                <label
+                  class="flex items-center justify-between gap-3 p-3 bg-white dark:bg-neutral-800 rounded-lg border border-neutral-200 dark:border-neutral-700"
+                >
+                  <span>
+                    <span
+                      class="text-sm font-medium text-neutral-700 dark:text-neutral-300 block mb-1"
+                    >
+                      Auto Countdown
+                    </span>
+                    <span class="text-xs text-neutral-500 dark:text-neutral-400">
+                      Show 30 second playback timer
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    bind:checked={settings.showAutoCountdown}
+                    class="w-5 h-5 rounded border-neutral-300 dark:border-neutral-600 text-emerald-500 focus:ring-2 focus:ring-emerald-500 cursor-pointer"
+                    title="Show the autonomous countdown overlay"
+                  />
+                </label>
+
+                <label
+                  class="flex items-center justify-between gap-3 p-3 bg-white dark:bg-neutral-800 rounded-lg border border-neutral-200 dark:border-neutral-700"
+                >
+                  <span>
+                    <span
+                      class="text-sm font-medium text-neutral-700 dark:text-neutral-300 block mb-1"
+                    >
+                      Path Labels
+                    </span>
+                    <span class="text-xs text-neutral-500 dark:text-neutral-400">
+                      Show segment distance and time
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    bind:checked={settings.showPathAnnotations}
+                    class="w-5 h-5 rounded border-neutral-300 dark:border-neutral-600 text-sky-500 focus:ring-2 focus:ring-sky-500 cursor-pointer"
+                    title="Show path length and predicted time labels"
+                  />
+                </label>
+
+                <label
+                  class="flex items-center justify-between gap-3 p-3 bg-white dark:bg-neutral-800 rounded-lg border border-neutral-200 dark:border-neutral-700"
+                >
+                  <span>
+                    <span
+                      class="text-sm font-medium text-neutral-700 dark:text-neutral-300 block mb-1"
+                    >
+                      Swerve Modules
+                    </span>
+                    <span class="text-xs text-neutral-500 dark:text-neutral-400">
+                      Show estimated wheel angles
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    bind:checked={settings.showSwerveModules}
+                    class="w-5 h-5 rounded border-neutral-300 dark:border-neutral-600 text-cyan-500 focus:ring-2 focus:ring-cyan-500 cursor-pointer"
+                    title="Show swerve wheel angle previews"
+                  />
+                </label>
+              </div>
 
               <!-- Heading Arrow Settings -->
               {#if settings.showHeadingArrow}

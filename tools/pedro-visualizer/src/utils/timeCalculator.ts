@@ -17,7 +17,7 @@ import {
 /**
  * Calculate the length of a curve by sampling points
  */
-function calculateCurveLength(
+export function calculateCurveLength(
   start: BasePoint,
   controlPoints: BasePoint[],
   end: BasePoint,
@@ -41,7 +41,7 @@ function calculateCurveLength(
 /**
  * Calculate time for a motion profile (trapezoidal or triangular)
  */
-function calculateMotionProfileTime(
+export function calculateMotionProfileTime(
   distance: number,
   maxVel: number,
   maxAcc: number,
@@ -70,7 +70,126 @@ function calculateMotionProfileTime(
   }
 }
 
-function getPathSpeed(line: Line): number {
+export function calculateMotionProfileDistanceAtTime(
+  elapsedTime: number,
+  distance: number,
+  maxVel: number,
+  maxAcc: number,
+  maxDec?: number,
+): number {
+  const totalDistance = Math.max(0, Number(distance) || 0);
+  const velocity = Math.max(0, Number(maxVel) || 0);
+  const acceleration = Math.max(0, Number(maxAcc) || 0);
+  const deceleration = Math.max(0, Number(maxDec ?? maxAcc) || 0);
+
+  if (
+    totalDistance <= 0 ||
+    velocity <= 0 ||
+    acceleration <= 0 ||
+    deceleration <= 0
+  ) {
+    return 0;
+  }
+
+  const t = Math.max(0, Number(elapsedTime) || 0);
+  const accDist = (velocity * velocity) / (2 * acceleration);
+  const decDist = (velocity * velocity) / (2 * deceleration);
+
+  if (totalDistance >= accDist + decDist) {
+    const accTime = velocity / acceleration;
+    const decTime = velocity / deceleration;
+    const constDist = totalDistance - accDist - decDist;
+    const constTime = constDist / velocity;
+    const totalTime = accTime + constTime + decTime;
+    const clampedT = Math.min(t, totalTime);
+
+    if (clampedT <= accTime) {
+      return 0.5 * acceleration * clampedT * clampedT;
+    }
+
+    if (clampedT <= accTime + constTime) {
+      return accDist + velocity * (clampedT - accTime);
+    }
+
+    const decT = clampedT - accTime - constTime;
+    return Math.min(
+      totalDistance,
+      accDist + constDist + velocity * decT - 0.5 * deceleration * decT * decT,
+    );
+  }
+
+  const vPeak = Math.sqrt(
+    (2 * totalDistance * acceleration * deceleration) /
+      (acceleration + deceleration),
+  );
+  const accTime = vPeak / acceleration;
+  const decTime = vPeak / deceleration;
+  const totalTime = accTime + decTime;
+  const clampedT = Math.min(t, totalTime);
+
+  if (clampedT <= accTime) {
+    return 0.5 * acceleration * clampedT * clampedT;
+  }
+
+  const decT = clampedT - accTime;
+  const peakDistance = 0.5 * acceleration * accTime * accTime;
+  return Math.min(
+    totalDistance,
+    peakDistance + vPeak * decT - 0.5 * deceleration * decT * decT,
+  );
+}
+
+export function calculateMotionProfileVelocityAtDistance(
+  distanceTraveled: number,
+  distance: number,
+  maxVel: number,
+  maxAcc: number,
+  maxDec?: number,
+): number {
+  const totalDistance = Math.max(0, Number(distance) || 0);
+  const velocity = Math.max(0, Number(maxVel) || 0);
+  const acceleration = Math.max(0, Number(maxAcc) || 0);
+  const deceleration = Math.max(0, Number(maxDec ?? maxAcc) || 0);
+
+  if (
+    totalDistance <= 0 ||
+    velocity <= 0 ||
+    acceleration <= 0 ||
+    deceleration <= 0
+  ) {
+    return 0;
+  }
+
+  const traveled = Math.max(0, Math.min(totalDistance, Number(distanceTraveled) || 0));
+  const accDist = (velocity * velocity) / (2 * acceleration);
+  const decDist = (velocity * velocity) / (2 * deceleration);
+
+  if (totalDistance >= accDist + decDist) {
+    if (traveled <= accDist) {
+      return Math.sqrt(2 * acceleration * traveled);
+    }
+
+    if (traveled <= totalDistance - decDist) {
+      return velocity;
+    }
+
+    return Math.sqrt(2 * deceleration * Math.max(0, totalDistance - traveled));
+  }
+
+  const vPeak = Math.sqrt(
+    (2 * totalDistance * acceleration * deceleration) /
+      (acceleration + deceleration),
+  );
+  const peakDistance = (vPeak * vPeak) / (2 * acceleration);
+
+  if (traveled <= peakDistance) {
+    return Math.sqrt(2 * acceleration * traveled);
+  }
+
+  return Math.sqrt(2 * deceleration * Math.max(0, totalDistance - traveled));
+}
+
+export function getPathSpeed(line: Line): number {
   const speed = Number(line.speed ?? 1);
   if (!Number.isFinite(speed)) return 1;
   return Math.max(0.05, Math.min(1, speed));
