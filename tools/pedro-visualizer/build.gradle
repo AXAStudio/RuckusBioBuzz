@@ -4,7 +4,14 @@ plugins {
     id 'idea'
 }
 
-def npmCommand = System.getProperty('os.name').toLowerCase().contains('windows') ? 'npm.cmd' : 'npm'
+def isWindows = System.getProperty('os.name').toLowerCase().contains('windows')
+def npmCommand = isWindows ? 'npm.cmd' : [
+        System.getenv('NPM'),
+        '/opt/homebrew/bin/npm',
+        '/usr/local/bin/npm',
+        '/usr/bin/npm',
+        *(System.getenv('PATH') ?: '').split(File.pathSeparator).collect { "${it}/npm" }
+].find { it != null && file(it).canExecute() } ?: 'npm'
 
 sourceSets {
     main {
