@@ -49,7 +49,15 @@ tasks.register('npmBuild', Exec) {
 tasks.register('npmDev', Exec) {
     group = 'pedro visualizer'
     description = 'Start the Pedro visualizer dev server at http://127.0.0.1:5173/.'
+    dependsOn 'npmInstall'
     commandLine npmCommand, 'run', 'dev', '--', '--host', '127.0.0.1', '--port', '5173'
+}
+
+tasks.register('visualizer', Exec) {
+    group = 'pedro visualizer'
+    description = 'Install dependencies, start the Pedro visualizer, and open it in your browser.'
+    dependsOn 'npmInstall'
+    commandLine npmCommand, 'run', 'dev', '--', '--host', '127.0.0.1', '--port', '5173', '--open'
 }
 
 tasks.named('assemble') {

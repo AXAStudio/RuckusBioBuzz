@@ -21,3 +21,9 @@ allprojects {
 repositories {
     mavenCentral()
 }
+
+tasks.register('visualizer') {
+    group = 'pedro visualizer'
+    description = 'Start the Pedro visualizer and open it in your browser.'
+    dependsOn ':PedroVisualizer:visualizer'
+}
