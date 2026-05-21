@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Pollen Camera Tester</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <main class="shell">
+      <section class="stage">
+        <div class="video-wrap">
+          <video id="video" autoplay playsinline muted></video>
+          <canvas id="overlay"></canvas>
+          <div id="emptyState" class="empty-state">
+            <h1>Pollen Camera Tester</h1>
+            <p>Connect a USB webcam, choose it below, then start the camera.</p>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <div class="group">
+          <label for="cameraSelect">Camera</label>
+          <select id="cameraSelect"></select>
+          <button id="startButton" type="button">Start Camera</button>
+          <button id="snapshotButton" type="button" disabled>Snapshot</button>
+        </div>
+
+        <div class="group metrics">
+          <div>
+            <span>Clumps</span>
+            <strong id="clumpCount">0</strong>
+          </div>
+          <div>
+            <span>Best</span>
+            <strong id="bestLabel">none</strong>
+          </div>
+          <div>
+            <span>Steering</span>
+            <strong id="steeringLabel">0.000</strong>
+          </div>
+          <div>
+            <span>FPS</span>
+            <strong id="fpsLabel">0</strong>
+          </div>
+        </div>
+
+        <div class="group">
+          <label>
+            <span>Minimum Area</span>
+            <input id="minArea" type="range" min="50" max="3000" step="25" value="350">
+            <output id="minAreaValue">350</output>
+          </label>
+          <label>
+            <span>Single Ball Area</span>
+            <input id="singleBallArea" type="range" min="200" max="6000" step="50" value="1600">
+            <output id="singleBallAreaValue">1600</output>
+          </label>
+          <label>
+            <span>Merge Gap</span>
+            <input id="mergeGap" type="range" min="0" max="80" step="1" value="28">
+            <output id="mergeGapValue">28</output>
+          </label>
+        </div>
+
+        <div class="group">
+          <div class="constant-row">
+            <span>HSV Range A</span>
+            <strong>15,90,70 - 38,255,255</strong>
+          </div>
+          <div class="constant-row">
+            <span>HSV Range B</span>
+            <strong>12,60,45 - 42,255,255</strong>
+          </div>
+          <div class="constant-row">
+            <span>RLE Open</span>
+            <strong>3 px</strong>
+          </div>
+          <div class="constant-row">
+            <span>RLE Close</span>
+            <strong>16 x 12 px</strong>
+          </div>
+        </div>
+
+        <div class="group">
+          <label class="check">
+            <input id="showMask" type="checkbox">
+            <span>Show threshold mask</span>
+          </label>
+          <label class="check">
+            <input id="mirrorVideo" type="checkbox">
+            <span>Mirror preview</span>
+          </label>
+        </div>
+
+        <p class="note">Use this at <strong>localhost</strong>. Browser camera access will not work from a plain file URL.</p>
+      </aside>
+    </main>
+
+    <script src="tester.js"></script>
+  </body>
+</html>

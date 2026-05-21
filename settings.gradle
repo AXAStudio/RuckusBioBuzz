@@ -1,7 +1,9 @@
 include ':FtcRobotController'
 include ':TeamCode'
 include ':PedroVisualizer'
+include ':PollenCameraTester'
 
 project(':PedroVisualizer').projectDir = file('tools/pedro-visualizer')
+project(':PollenCameraTester').projectDir = file('tools/pollen-camera-tester')
 
 includeBuild 'third_party/PedroPathing'

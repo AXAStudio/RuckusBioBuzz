@@ -1,0 +1,32 @@
+plugins {
+    id 'base'
+    id 'java-base'
+    id 'idea'
+}
+
+sourceSets {
+    main {
+        resources.srcDirs = ['.']
+    }
+}
+
+idea {
+    module {
+        resourceDirs += file('.')
+        excludeDirs += [
+            file('build')
+        ] as Set
+    }
+}
+
+tasks.register('serve', Exec) {
+    group = 'pollen camera tester'
+    description = 'Start the pollen camera tester at http://localhost:8787/.'
+    commandLine 'python3', '-m', 'http.server', '8787'
+}
+
+tasks.register('serveLocalhost', Exec) {
+    group = 'pollen camera tester'
+    description = 'Start the pollen camera tester at http://127.0.0.1:8787/.'
+    commandLine 'python3', '-m', 'http.server', '8787', '--bind', '127.0.0.1'
+}
