@@ -1,4 +1,4 @@
-package org.firstinspires.ftc.teamcode.tele;
+package org.firstinspires.ftc.teamcode.Tools;
 
 import android.graphics.Canvas;
 
@@ -19,9 +19,11 @@ public class blobDetection implements VisionProcessor {
 
     public int frameWidth, frameHeight;
     public final List<Integer> xyList = new ArrayList<>();
+    public final List<Integer> xList = new ArrayList<>();
+    public double median = Double.NaN;
 
     @Override
-    public void init(int width, int height, CameraCalibration calibration){
+    public void init(int width, int height, CameraCalibration calibration) {
         frameHeight = height;
         frameWidth = width;
     }
@@ -29,6 +31,7 @@ public class blobDetection implements VisionProcessor {
     @Override
     public Object processFrame(Mat frame, long captureTimeNanoes) {
         xyList.clear();
+        xList.clear();
 
         for (int column = 0; column < GRID_RESOLUTION; column++) {
             for (int row = 0; row < GRID_RESOLUTION; row++) {
@@ -49,9 +52,13 @@ public class blobDetection implements VisionProcessor {
                     xyList.add(y);
                     xyList.add(x2);
                     xyList.add(y2);
+                    xList.add(x);
+                    xList.add(x2);
                 }
             }
         }
+
+        median = xList.isEmpty() ? Double.NaN : getMedian.getMedianDown(xList);
         return xyList;
     }
 
@@ -59,4 +66,3 @@ public class blobDetection implements VisionProcessor {
     public void onDrawFrame(Canvas canvas, int onscreenWidth, int onscreenHeight,
                             float scaleBmpPxToCanvasPx, float scaleCanvasDensity, Object userContext) {}
 }
-
