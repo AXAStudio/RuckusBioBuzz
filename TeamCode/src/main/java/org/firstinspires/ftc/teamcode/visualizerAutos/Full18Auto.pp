@@ -105,6 +105,7 @@
       "endPoint": {
         "x": 11.05245972673443,
         "y": 51.90197461212974,
+        "poseVariableId": "pose-mpfpi7pp-gs2o5u",
         "heading": "linear",
         "startDeg": 150,
         "endDeg": 150,
@@ -373,7 +374,18 @@
       ]
     }
   ],
-  "poseVariables": [],
+  "poseVariables": [
+    {
+      "id": "pose-mpfpi7pp-gs2o5u",
+      "name": "Gate Intake",
+      "x": 11.05245972673443,
+      "y": 51.90197461212974,
+      "heading": 150,
+      "xExpression": "11.05245972673443",
+      "yExpression": "51.90197461212974",
+      "headingExpression": "150"
+    }
+  ],
   "pathVariables": [],
   "numberVariables": [],
   "settings": {
@@ -408,5 +420,5 @@
     "showSwerveModules": true
   },
   "version": "1.2.1",
-  "timestamp": "2026-05-20T18:22:44.655Z"
+  "timestamp": "2026-05-21T16:31:17.690Z"
 }

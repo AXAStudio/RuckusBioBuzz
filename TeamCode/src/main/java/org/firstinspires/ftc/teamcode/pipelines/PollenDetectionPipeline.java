@@ -1,756 +1,1388 @@
 package org.firstinspires.ftc.teamcode.pipelines;
 
-import org.firstinspires.ftc.robotcore.external.Telemetry;
-import org.firstinspires.ftc.robotcore.internal.camera.calibration.CameraCalibration;
-import org.firstinspires.ftc.vision.VisionProcessor;
-import org.opencv.core.*;
-import org.opencv.imgproc.Imgproc;
 import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.RectF;
+import android.util.Size;
+
+import com.qualcomm.robotcore.hardware.HardwareMap;
+
+import org.firstinspires.ftc.robotcore.external.Telemetry;
+import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
+import org.firstinspires.ftc.robotcore.internal.camera.calibration.CameraCalibration;
+import org.firstinspires.ftc.vision.VisionPortal;
+import org.firstinspires.ftc.vision.VisionProcessor;
+import org.opencv.core.Core;
+import org.opencv.core.CvType;
+import org.opencv.core.Mat;
+import org.opencv.core.MatOfPoint;
+import org.opencv.core.MatOfPoint2f;
+import org.opencv.core.Point;
+import org.opencv.core.Rect;
+import org.opencv.core.RotatedRect;
+import org.opencv.core.Scalar;
+import org.opencv.imgproc.Imgproc;
+import org.opencv.imgproc.Moments;
 
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
-
-/**
- * PollenDetectionPipeline
- * ═══════════════════════════════════════════════════════════════════════
- * Detects clumps of BIOBUZZ Pollen — yellow plastic balls ~2.8" diameter
- * — on the FTC foam field surface.
- *
- * Drop into:  TeamCode/src/main/java/…/teamcode/vision/
- *
- * ── Why this architecture ────────────────────────────────────────────
- *
- * The naive approach (HSV threshold → morphologyEx → findContours) works
- * but is slow on Android because:
- *
- *   1. morphologyEx with a 15px kernel slides over all 307,200 pixels
- *      twice — the single biggest cost in the pipeline (~8–12ms).
- *   2. findContours() allocates a MatOfPoint object per contour,
- *      generating GC pressure that causes jitter in the vision thread.
- *   3. Computing moments/bounding boxes requires a second pass over each
- *      contour's pixel list.
- *
- * This pipeline replaces steps 2 and 3 with Run-Length Encoding (RLE):
- *
- *   • After the HSV threshold, the binary mask is compressed into "runs"
- *     (horizontal spans of foreground pixels). A 640×480 scene with a few
- *     pollen balls typically produces 300–2000 runs — vs 307,200 pixels.
- *
- *   • Morphological open and close operate on runs, not pixels. Erosion
- *     is shrinking run endpoints; dilation is expanding them and merging
- *     overlapping runs. Cost is O(R) where R = run count, independent of
- *     kernel size. A 15px close costs the same as a 3px close.
- *     (Ref: Ehrensperger et al., "Fast algorithms for morphological
- *     operations using RLE binary images", arXiv:1504.01052)
- *
- *   • Connected-component labeling uses a single-pass union-find over
- *     runs rather than pixels. Adjacent-row runs that overlap horizontally
- *     are unioned. Blob statistics (centroid, area, bounding box) are
- *     accumulated during this single pass — no second scan, no contour
- *     tracing, no heap allocation per blob.
- *     (Ref: Wang et al., "New algorithm for binary CCL based on RLE and
- *     union-find sets", Beijing Inst. of Technology, 2010)
- *
- * ── Total frame cost (640×480, REV Control Hub estimate) ────────────
- *
- *   HSV threshold (cvtColor + 2× inRange + bitwise_or) : ~2.5 ms
- *   RLE compression of binary mask                      : ~0.4 ms
- *   RLE open (noise removal)                            : ~0.3 ms
- *   RLE close (gap filling between touching balls)      : ~0.3 ms
- *   RLE CCL + accumulation (union-find, single pass)    : ~0.3 ms
- *   Clump merging + annotation                          : ~0.5 ms
- *   ─────────────────────────────────────────────────────────────────
- *   TOTAL                                               : ~4–5 ms
- *   vs naive pixel-grid pipeline                        : ~15–25 ms
- *   Camera frame budget at 30fps                        : 33 ms
- *
- * ── Usage ────────────────────────────────────────────────────────────
- *
- *   PollenDetectionPipeline pipeline = new PollenDetectionPipeline(telemetry);
- *
- *   visionPortal = new VisionPortal.Builder()
- *       .setCamera(hardwareMap.get(WebcamName.class, "Webcam 1"))
- *       .addProcessor(pipeline)
- *       .build();
- *
- *   // In OpMode loop:
- *   Clump target = pipeline.getBestClump();
- *   if (target != null) {
- *       double correction = KP * pipeline.getSteeringError();
- *       // feed into your drive
- *   }
- *
- * ── Tuning ───────────────────────────────────────────────────────────
- *
- *   SINGLE_BALL_AREA_PX  — most important. Point camera at one ball at
- *                          intake distance, read getBestClump().areaPx
- *                          from telemetry, plug that value in here.
- *
- *   HSV ranges           — defaults cover warm fluorescent + LED venues.
- *                          Tighten S_MIN if yellow field seams give false
- *                          positives. Loosen H range if pollen looks
- *                          orange-ish under your lights.
- *
- *   OPEN_RADIUS          — increase to kill larger noise speckles.
- *   CLOSE_GAP            — increase if touching balls aren't merging.
- *   CLUMP_MERGE_GAP      — increase if separate clumps are merging wrong.
- * ═══════════════════════════════════════════════════════════════════════
- */
+import java.util.Locale;
 public class PollenDetectionPipeline implements VisionProcessor {
+    public static final String DEFAULT_WEBCAM_NAME = "Webcam 1";
+    public static final Size DEFAULT_CAMERA_RESOLUTION = new Size(640, 480);
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Tuning constants
-    // ─────────────────────────────────────────────────────────────────────────
+    private static final double ROI_TOP_FRACTION = 0.28;
 
-    // HSV color space (OpenCV): H ∈ [0,179]  S ∈ [0,255]  V ∈ [0,255]
-    // BIOBUZZ pollen is daffodil yellow. Two overlapping ranges handle the
-    // shift in apparent hue between warm fluorescent (common in gymnasiums)
-    // and cooler LED rigs used at championship venues.
-    private static final Scalar HSV_LO_A = new Scalar(15,  90,  70);
-    private static final Scalar HSV_HI_A = new Scalar(38, 255, 255);
-    private static final Scalar HSV_LO_B = new Scalar(12,  60,  45); // wider net for dim venues
-    private static final Scalar HSV_HI_B = new Scalar(42, 255, 255);
+    private static final Scalar HSV_STRICT_LOW = new Scalar(15, 192, 211);
+    private static final Scalar HSV_STRICT_HIGH = new Scalar(26, 255, 255);
+    private static final Scalar HSV_WIDE_LOW = new Scalar(12, 163, 183);
+    private static final Scalar HSV_WIDE_HIGH = new Scalar(29, 255, 255);
 
-    // RLE morphological open: removes noise runs shorter than this many pixels.
-    // A single pollen ball at 3ft spans ~22px wide; noise is typically 1–4px.
-    private static final int OPEN_RADIUS = 3;
+    private static final int RGB_MIN_R = 195;
+    private static final int RGB_MIN_G = 126;
+    private static final int RGB_MAX_B = 83;
+    private static final int YELLOW_MARGIN = 120;
+    private static final int MIN_YELLOW_SCORE = 110;
 
-    // RLE morphological close: fills horizontal gaps between touching balls.
-    // Two adjacent balls at 3ft may have a 5–15px dark gap between them.
-    private static final int CLOSE_H_GAP = 16;
-
-    // Vertical radius for the close operation: how many rows apart two runs
-    // can be and still be merged into one blob region.
-    private static final int CLOSE_V_RADIUS = 12;
-
-    // Component area filter — pixels²
-    private static final double MIN_AREA = 350.0;
-    private static final double MAX_AREA = 100_000.0;
-
-    // Bounding-box aspect ratio filter (width / height).
-    // One ball ≈ 1:1; three in a row ≈ 3:1. Cap at 5 to reject thin streaks.
+    private static final double MIN_AREA_PX = 260.0;
+    private static final double MAX_AREA_FRACTION = 0.36;
     private static final double MAX_ASPECT = 5.0;
+    private static final double MIN_EXTENT = 0.22;
+    private static final double MIN_FILL_RATIO = 0.16;
+    private static final double MIN_CIRCULARITY = 0.26;
+    private static final double MIN_CONFIDENCE = 0.56;
 
-    // Spatial distance within which two blobs are merged into one Clump.
-    private static final int CLUMP_MERGE_GAP = 28;
+    private static final int OPEN_KERNEL_PX = 3;
+    private static final int CLOSE_KERNEL_PX = 15;
+    private static final int MAX_CONTOURS = 24;
 
-    // Estimated pixel area of one pollen ball at typical intake distance.
-    // ⚠ CALIBRATE THIS: place one ball at your intake, call getBestClump()
-    //   .areaPx, then paste that number here.
-    private static final double SINGLE_BALL_AREA_PX = 1_600.0;
+    private static final double CLUMP_MAX_ASPECT = 24.0;
+    private static final double CLUMP_PEAK_THRESHOLD_FRACTION = 0.38;
+    private static final double CLUMP_PEAK_MIN_RADIUS_PX = 4.0;
+    private static final double CLUMP_PEAK_MIN_DISTANCE_RADIUS = 1.05;
+    private static final double CLUMP_AREA_FILL_ESTIMATE = 0.68;
+    private static final double CLUMP_WIDTH_SPACING_RADIUS = 1.55;
+    private static final double CLUMP_FRAGMENT_RADIUS_FRACTION = 0.22;
+    private static final double CLUMP_FRAGMENT_MIN_MINOR_PX = 42.0;
+    private static final double CIRCLE_HOUGH_PARAM2 = 20.0;
+    private static final double CIRCLE_MIN_SCORE = 0.70;
+    private static final double CIRCLE_MIN_YELLOW_FRACTION = 0.26;
+    private static final int CIRCLE_MIN_RADIUS_PX = 8;
+    private static final int CIRCLE_MAX_RADIUS_PX = 72;
 
-    // Maximum runs array size. 32k handles even the noisiest frames.
-    private static final int MAX_RUNS = 32_000;
+    private static final Comparator<Detection> LARGEST_CLUMP_ORDER =
+            Comparator.comparingInt((Detection detection) -> detection.estimatedCount)
+                    .thenComparingDouble(detection -> detection.areaPx)
+                    .thenComparingDouble(detection -> detection.confidence)
+                    .reversed();
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // OpenCV Mats — allocated once, reused each frame to avoid GC churn
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private final Mat hsvMat   = new Mat();
-    private final Mat maskA    = new Mat();
-    private final Mat maskB    = new Mat();
-    private final Mat mask     = new Mat();
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // RLE parallel arrays — runs stored as (row, colStart, colEnd[inclusive])
-    // Using parallel primitives avoids per-run object allocation (no GC).
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private final int[] rRow   = new int[MAX_RUNS];
-    private final int[] rStart = new int[MAX_RUNS];
-    private final int[] rEnd   = new int[MAX_RUNS];
-    private int         rCount = 0;
-
-    // Union-find arrays for CCL
-    private final int[] ufParent = new int[MAX_RUNS];
-    private final int[] ufRank   = new int[MAX_RUNS];
-
-    // Per-component accumulators (indexed by canonical label = run index)
-    private final long[] cSumX  = new long[MAX_RUNS];
-    private final long[] cSumY  = new long[MAX_RUNS];
-    private final long[] cArea  = new long[MAX_RUNS];
-    private final int[]  cMinX  = new int[MAX_RUNS];
-    private final int[]  cMinY  = new int[MAX_RUNS];
-    private final int[]  cMaxX  = new int[MAX_RUNS];
-    private final int[]  cMaxY  = new int[MAX_RUNS];
-
-    // Raw byte array for fast mask readout (avoid Mat.get() in inner loops)
-    private byte[] maskBytes = new byte[0];
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Shared state — written by vision thread, read by robot thread
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private final Object     lock     = new Object();
-    private final List<Clump> results  = new ArrayList<>();
-    private Clump   best          = null;
-    private double  steeringError = 0.0;
-    private int     fw = 640, fh = 480;  // frame dimensions
-
+    private final Object lock = new Object();
     private final Telemetry telemetry;
+    private final List<Detection> detections = new ArrayList<>();
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Public result type
-    // ─────────────────────────────────────────────────────────────────────────
+    private final Mat rgbRoi = new Mat();
+    private final Mat hsv = new Mat();
+    private final Mat strictMask = new Mat();
+    private final Mat wideMask = new Mat();
+    private final Mat rgbYellowMask = new Mat();
+    private final Mat mask = new Mat();
+    private final Mat contourMask = new Mat();
+    private final Mat openKernel = Imgproc.getStructuringElement(
+            Imgproc.MORPH_ELLIPSE,
+            new org.opencv.core.Size(oddKernelSize(OPEN_KERNEL_PX, 1), oddKernelSize(OPEN_KERNEL_PX, 1))
+    );
+    private final Mat closeKernel = Imgproc.getStructuringElement(
+            Imgproc.MORPH_ELLIPSE,
+            new org.opencv.core.Size(oddKernelSize(CLOSE_KERNEL_PX, 3), oddKernelSize(CLOSE_KERNEL_PX, 3))
+    );
 
-    /**
-     * A detected pollen clump. All coordinates are in full-frame pixels.
-     *
-     * estimatedBallCount  — rough count derived from total blob area.
-     *                       Calibrate SINGLE_BALL_AREA_PX for accuracy.
-     *
-     * steeringError       — normalized horizontal offset in [-1, +1].
-     *                       Negative = clump is left of frame center.
-     *                       Positive = right. Feed directly into a P-loop:
-     *                         power = KP * pipeline.getSteeringError()
-     */
-    public static class Clump {
-        public final double centerX, centerY;
-        public final double areaPx;
-        public final int    boundX, boundY, boundW, boundH;
-        public final int    estimatedBallCount;
-        public final double steeringError;
+    private int frameWidth = 640;
+    private int frameHeight = 480;
+    private int roiTop = computeRoiTop(480);
+    private Detection best = null;
+    private double steeringError = 0.0;
+    private int maskPixels = 0;
 
-        Clump(double cx, double cy, double area,
-              int bx, int by, int bw, int bh, int frameWidth) {
-            centerX            = cx;
-            centerY            = cy;
-            areaPx             = area;
-            boundX = bx; boundY = by; boundW = bw; boundH = bh;
-            estimatedBallCount = Math.max(1, (int) Math.round(area / SINGLE_BALL_AREA_PX));
-            steeringError      = (cx - frameWidth / 2.0) / (frameWidth / 2.0);
-        }
+    private final Paint boxPaint = new Paint();
+    private final Paint textPaint = new Paint();
+    private final Paint textBackgroundPaint = new Paint();
+    private final Paint guidePaint = new Paint();
+    private final Paint memberPaint = new Paint();
+    private final Paint arrowPaint = new Paint();
 
-        @Override
-        public String toString() {
-            return String.format("Clump{~%d balls  cx=%.0f  cy=%.0f  err=%.3f}",
-                    estimatedBallCount, centerX, centerY, steeringError);
-        }
+    public PollenDetectionPipeline() {
+        this(null);
     }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Constructor
-    // ─────────────────────────────────────────────────────────────────────────
 
     public PollenDetectionPipeline(Telemetry telemetry) {
         this.telemetry = telemetry;
+
+        boxPaint.setStyle(Paint.Style.STROKE);
+        boxPaint.setStrokeWidth(5.0f);
+        boxPaint.setColor(Color.rgb(80, 255, 90));
+
+        textPaint.setStyle(Paint.Style.FILL);
+        textPaint.setTextSize(32.0f);
+        textPaint.setFakeBoldText(true);
+        textPaint.setColor(Color.rgb(80, 255, 90));
+
+        textBackgroundPaint.setStyle(Paint.Style.FILL);
+        textBackgroundPaint.setColor(Color.argb(190, 0, 0, 0));
+
+        guidePaint.setStyle(Paint.Style.STROKE);
+        guidePaint.setStrokeWidth(2.0f);
+        guidePaint.setColor(Color.argb(190, 255, 255, 255));
+
+        memberPaint.setStyle(Paint.Style.STROKE);
+        memberPaint.setStrokeWidth(2.0f);
+        memberPaint.setColor(Color.WHITE);
+
+        arrowPaint.setStyle(Paint.Style.STROKE);
+        arrowPaint.setStrokeWidth(4.0f);
+        arrowPaint.setColor(Color.rgb(255, 150, 40));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // VisionProcessor — init
-    // ─────────────────────────────────────────────────────────────────────────
+    public VisionPortal buildVisionPortal(HardwareMap hardwareMap) {
+        return buildVisionPortal(hardwareMap, DEFAULT_WEBCAM_NAME);
+    }
+
+    public VisionPortal buildVisionPortal(HardwareMap hardwareMap, String webcamName) {
+        return new VisionPortal.Builder()
+                .setCamera(hardwareMap.get(WebcamName.class, webcamName))
+                .setCameraResolution(DEFAULT_CAMERA_RESOLUTION)
+                .addProcessor(this)
+                .build();
+    }
 
     @Override
     public void init(int width, int height, CameraCalibration calibration) {
-        synchronized (lock) { fw = width; fh = height; }
-        int needed = width * height;
-        if (maskBytes.length < needed) maskBytes = new byte[needed];
+        synchronized (lock) {
+            frameWidth = width;
+            frameHeight = height;
+            roiTop = computeRoiTop(height);
+        }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // VisionProcessor — processFrame  (runs on the vision thread)
-    // ─────────────────────────────────────────────────────────────────────────
-
     @Override
-    public Object processFrame(Mat input, long captureTimeNanos) {
-        int W, H;
-        synchronized (lock) { W = fw; H = fh; }
+    public Object processFrame(Mat frame, long captureTimeNanos) {
+        int width = frame.cols();
+        int height = frame.rows();
+        int top = computeRoiTop(height);
+        int roiHeight = Math.max(1, height - top);
+        Rect roiRect = new Rect(0, top, width, roiHeight);
 
-        // ── 1. HSV threshold ─────────────────────────────────────────────────
-        // HSV separates hue from brightness, giving stability across venue
-        // lighting. Two merged ranges catch both warm and cool light sources.
-        Imgproc.cvtColor(input, hsvMat, Imgproc.COLOR_RGB2HSV);
-        Core.inRange(hsvMat, HSV_LO_A, HSV_HI_A, maskA);
-        Core.inRange(hsvMat, HSV_LO_B, HSV_HI_B, maskB);
-        Core.bitwise_or(maskA, maskB, mask);
+        Mat roi = frame.submat(roiRect);
+        roi.copyTo(rgbRoi);
+        roi.release();
 
-        // ── 2. RLE compression ───────────────────────────────────────────────
-        // Read entire mask as a flat byte array once (avoids JNI overhead of
-        // calling Mat.get() inside any kind of loop).
-        mask.get(0, 0, maskBytes);
-        rCount = buildRle(maskBytes, W, H);
+        buildMask(rgbRoi, hsv, mask);
+        int nextMaskPixels = Core.countNonZero(mask);
+        mask.copyTo(contourMask);
 
-        // ── 3. RLE morphological open (noise removal) ────────────────────────
-        // Erosion: drop runs shorter than 2*OPEN_RADIUS, shrink the rest.
-        // Dilation: restore surviving runs to original size.
-        // Net effect: isolated specks vanish, real ball blobs survive.
-        rCount = rleOpen(W);
+        Mat hierarchy = new Mat();
+        List<MatOfPoint> contours = new ArrayList<>();
+        Imgproc.findContours(contourMask, contours, hierarchy, Imgproc.RETR_EXTERNAL, Imgproc.CHAIN_APPROX_SIMPLE);
+        hierarchy.release();
 
-        // ── 4. RLE morphological close (gap filling) ─────────────────────────
-        // Dilation: expand runs by CLOSE_H_GAP and merge vertical neighbors.
-        // Erosion: shrink back to original size.
-        // Net effect: small gaps between touching balls in a clump are filled.
-        rCount = rleClose(W);
+        if (contours.size() > MAX_CONTOURS) {
+            Collections.sort(contours, (left, right) -> Double.compare(Imgproc.contourArea(right), Imgproc.contourArea(left)));
+            List<MatOfPoint> retained = new ArrayList<>(contours.subList(0, MAX_CONTOURS));
+            for (int i = MAX_CONTOURS; i < contours.size(); i++) {
+                contours.get(i).release();
+            }
+            contours = retained;
+        }
 
-        // ── 5. Single-pass RLE connected-component labeling ──────────────────
-        // Sorts runs by (row, start) then sweeps adjacency with a two-pointer,
-        // union-find merging. Blob statistics are accumulated in the same pass.
-        int numBlobs = rleLabel();
+        double maxArea = Math.max(MIN_AREA_PX, width * height * MAX_AREA_FRACTION);
+        List<Detection> nextDetections = new ArrayList<>();
+        for (MatOfPoint contour : contours) {
+            Detection detection = candidateFromContour(rgbRoi, hsv, mask, contour, width, top, maxArea);
+            if (detection == null) {
+                detection = candidateFromClumpContour(rgbRoi, hsv, mask, contour, width, top, maxArea);
+            }
+            if (detection != null) {
+                nextDetections.add(detection);
+            }
+            contour.release();
+        }
+        if (hasFragmentedCandidate(nextDetections)) {
+            refineFragmentedCandidatesWithCircles(
+                    nextDetections,
+                    detectVisibleBallCircles(rgbRoi, hsv, mask, top),
+                    width
+            );
+        }
+        Collections.sort(nextDetections, LARGEST_CLUMP_ORDER);
 
-        // ── 6. Filter blobs, build Clumps ────────────────────────────────────
-        List<Clump> clumps = buildClumps(numBlobs, W);
-        Collections.sort(clumps, CLUMP_ORDER);
+        Detection largestClump = largestClump(nextDetections);
+        Detection nextBest = largestClump != null ? largestClump : (nextDetections.isEmpty() ? null : nextDetections.get(0));
 
-        // ── 7. Annotate + publish ─────────────────────────────────────────────
-        drawAnnotations(input, clumps, W, H);
         synchronized (lock) {
-            results.clear();
-            results.addAll(clumps);
-            best          = clumps.isEmpty() ? null : clumps.get(0);
-            steeringError = best != null ? best.steeringError : 0.0;
+            frameWidth = width;
+            frameHeight = height;
+            roiTop = top;
+            maskPixels = nextMaskPixels;
+            detections.clear();
+            detections.addAll(nextDetections);
+            best = nextBest;
+            steeringError = best == null ? 0.0 : best.steeringError;
         }
+
         if (telemetry != null) {
-            telemetry.addData("[Pollen] clumps", clumps.size());
-            telemetry.addData("[Pollen] best",   best != null ? best : "none");
+            telemetry.addData("[Pollen] detections", nextDetections.size());
+            telemetry.addData("[Pollen] mask px", nextMaskPixels);
+            telemetry.addData("[Pollen] largest", nextBest == null ? "none" : nextBest);
         }
+
         return null;
     }
 
     @Override
-    public void onDrawFrame(Canvas canvas, int ow, int oh,
-                            float bmpScale, float canvasScale, Object ctx) { }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Step 2: Build RLE from binary mask
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Single linear scan of the flat mask byte array.
-     * Encodes each horizontal run of nonzero pixels as (row, start, end).
-     * O(W × H) — exactly one read per pixel, no branching per-column beyond
-     * the foreground/background transition check.
-     */
-    private int buildRle(byte[] m, int W, int H) {
-        int count = 0;
-        for (int y = 0; y < H && count < MAX_RUNS - 1; y++) {
-            int base  = y * W;
-            boolean in = false;
-            int     s  = 0;
-            for (int x = 0; x < W; x++) {
-                boolean fg = m[base + x] != 0;
-                if (fg && !in)          { s = x; in = true; }
-                else if (!fg && in)     { writeRun(count++, y, s, x - 1); in = false; }
-            }
-            if (in) writeRun(count++, y, s, W - 1);
+    public void onDrawFrame(Canvas canvas, int onscreenWidth, int onscreenHeight,
+                            float scaleBmpPxToCanvasPx, float scaleCanvasDensity,
+                            Object userContext) {
+        Detection target;
+        int localFrameWidth;
+        int localFrameHeight;
+        int localRoiTop;
+        synchronized (lock) {
+            target = best;
+            localFrameWidth = frameWidth;
+            localFrameHeight = frameHeight;
+            localRoiTop = roiTop;
         }
-        return count;
+
+        float xScale = onscreenWidth / (float) Math.max(1, localFrameWidth);
+        float yScale = onscreenHeight / (float) Math.max(1, localFrameHeight);
+        float centerX = onscreenWidth * 0.5f;
+
+        canvas.drawLine(centerX, 0, centerX, onscreenHeight, guidePaint);
+        canvas.drawLine(0, localRoiTop * yScale, onscreenWidth, localRoiTop * yScale, guidePaint);
+
+        if (target == null) {
+            drawLabel(canvas, "NO POLLEN CLUMP", 8.0f, 40.0f, Color.RED);
+            return;
+        }
+
+        RectF box = new RectF(
+                target.boundX * xScale,
+                target.boundY * yScale,
+                (target.boundX + target.boundW) * xScale,
+                (target.boundY + target.boundH) * yScale
+        );
+        canvas.drawRect(box, boxPaint);
+
+        float targetX = (float) target.centerX * xScale;
+        float targetY = (float) target.centerY * yScale;
+        canvas.drawCircle(targetX, targetY, Math.max(7.0f, (float) target.radiusPx * xScale), boxPaint);
+        canvas.drawLine(targetX - 14.0f, targetY, targetX + 14.0f, targetY, boxPaint);
+        canvas.drawLine(targetX, targetY - 14.0f, targetX, targetY + 14.0f, boxPaint);
+
+        for (int i = 0; i < Math.min(40, target.memberCenters.size()); i++) {
+            Center member = target.memberCenters.get(i);
+            canvas.drawCircle((float) member.x * xScale, (float) member.y * yScale, 5.0f, memberPaint);
+        }
+
+        float arrowY = onscreenHeight - 28.0f;
+        canvas.drawLine(centerX, arrowY, targetX, arrowY, arrowPaint);
+        float arrowDir = targetX >= centerX ? -1.0f : 1.0f;
+        canvas.drawLine(targetX, arrowY, targetX + arrowDir * 14.0f, arrowY - 8.0f, arrowPaint);
+        canvas.drawLine(targetX, arrowY, targetX + arrowDir * 14.0f, arrowY + 8.0f, arrowPaint);
+
+        String label = String.format(
+                Locale.US,
+                "LARGEST clump=%d %s err=%+.2f",
+                target.estimatedCount,
+                target.direction().toUpperCase(Locale.US),
+                target.steeringError
+        );
+        drawLabel(canvas, label, Math.max(4.0f, box.left), Math.max(40.0f, box.top - 8.0f), Color.rgb(80, 255, 90));
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Step 3: RLE morphological open
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Erosion + dilation in run-space.
-     *
-     * Erosion: shrink each run inward by OPEN_RADIUS on each side.
-     *   - Runs shorter than 2*OPEN_RADIUS vanish entirely (noise removal).
-     *   - Runs that have no vertically adjacent neighbour within OPEN_RADIUS
-     *     rows are also dropped (isolated horizontal streaks).
-     *
-     * Dilation: re-expand surviving runs by OPEN_RADIUS on each side.
-     *   Completes the open: noise is gone, ball blobs return to original size.
-     *
-     * Critical insight (Ehrensperger 2015): for RLE morphology, kernel size
-     * does NOT increase cost — a 15px erosion is the same number of array
-     * operations as a 3px erosion, because we work on run endpoints, not pixels.
-     */
-    private int rleOpen(int W) {
-        if (rCount == 0) return 0;
-        sortRuns(rCount); // sort needed for the neighbour check below
-
-        int out = 0;
-        for (int i = 0; i < rCount; i++) {
-            int ns = rStart[i] + OPEN_RADIUS;
-            int ne = rEnd[i]   - OPEN_RADIUS;
-            if (ns > ne) continue; // run too short — drop
-
-            // Vertical neighbour check: require at least one run on an
-            // adjacent row that overlaps the shrunken span.
-            boolean hasNeighbour = false;
-            for (int j = 0; j < rCount && !hasNeighbour; j++) {
-                int dy = rRow[j] - rRow[i];
-                if (dy == 0 || dy < -OPEN_RADIUS) continue;
-                if (dy > OPEN_RADIUS) break; // sorted by row → can early-exit
-                if (rStart[j] <= ne && rEnd[j] >= ns) hasNeighbour = true;
-            }
-            if (!hasNeighbour) continue;
-
-            writeRun(out++, rRow[i], ns, ne);
-        }
-
-        // Re-dilate: restore eroded runs to original size
-        for (int i = 0; i < out; i++) {
-            rStart[i] = Math.max(0,   rStart[i] - OPEN_RADIUS);
-            rEnd[i]   = Math.min(W-1, rEnd[i]   + OPEN_RADIUS);
-        }
-        return out;
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Step 4: RLE morphological close
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Dilation + erosion in run-space.
-     *
-     * Dilation: expand every run by CLOSE_H_GAP horizontally, then merge all
-     *   runs that now overlap — including runs on adjacent rows within
-     *   CLOSE_V_RADIUS. Small gaps between touching balls collapse into one run.
-     *
-     * Erosion: shrink surviving (merged) runs back by CLOSE_H_GAP.
-     *   Restores original boundaries; the "bridge" pixels that filled the
-     *   gap are removed, but the two blobs now share adjacency for CCL.
-     */
-    private int rleClose(int W) {
-        if (rCount == 0) return 0;
-
-        // Dilate horizontally
-        for (int i = 0; i < rCount; i++) {
-            rStart[i] = Math.max(0,   rStart[i] - CLOSE_H_GAP);
-            rEnd[i]   = Math.min(W-1, rEnd[i]   + CLOSE_H_GAP);
-        }
-
-        // Sort by (row ASC, start ASC) then merge overlapping/adjacent runs
-        sortRuns(rCount);
-        int out = 0;
-        for (int i = 0; i < rCount; i++) {
-            if (out == 0) { copyRun(i, out++); continue; }
-            int p  = out - 1;
-            int dy = rRow[i] - rRow[p];
-            if (dy <= CLOSE_V_RADIUS && rStart[i] <= rEnd[p] + 1) {
-                // Merge into previous run
-                if (rEnd[i] > rEnd[p]) rEnd[p] = rEnd[i];
-            } else {
-                copyRun(i, out++);
-            }
-        }
-
-        // Erode back
-        int final_ = 0;
-        for (int i = 0; i < out; i++) {
-            int ns = rStart[i] + CLOSE_H_GAP;
-            int ne = rEnd[i]   - CLOSE_H_GAP;
-            if (ns > ne) continue;
-            writeRun(final_++, rRow[i], ns, ne);
-        }
-        return final_;
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Step 5: RLE connected-component labeling
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /**
-     * Single-pass union-find CCL over the run-length representation.
-     *
-     * Algorithm (Wang et al. 2010, adapted):
-     *
-     *   Phase A — Merge:
-     *     Iterate runs in sorted order. For each run on row R, scan all runs
-     *     on row R-1 (maintained via a sliding window pointer). Any run on
-     *     R-1 that overlaps horizontally is unioned with the current run.
-     *     Union-find with path-halving + union-by-rank gives amortized O(α(N))
-     *     per operation — effectively O(1) for realistic run counts.
-     *
-     *   Phase B — Accumulate:
-     *     Second pass over runs. For each run, resolve its canonical label
-     *     via find(), then add the run's contribution to that label's
-     *     centroid sum, area, and bounding box. No pixel-level second scan.
-     *
-     * Returns the number of distinct components found.
-     */
-    private int rleLabel() {
-        if (rCount == 0) return 0;
-        sortRuns(rCount);
-
-        // Initialise union-find
-        for (int i = 0; i < rCount; i++) { ufParent[i] = i; ufRank[i] = 0; }
-
-        // Phase A: merge adjacent-row overlapping runs
-        int prevStart = 0; // sliding window into runs on (curRow - 1)
-        for (int i = 0; i < rCount; i++) {
-            int curRow = rRow[i];
-            // Advance window past rows older than curRow-1
-            while (prevStart < i && rRow[prevStart] < curRow - 1) prevStart++;
-            // Scan window for horizontal overlap
-            for (int j = prevStart; j < i; j++) {
-                if (rRow[j] != curRow - 1) continue;
-                if (rStart[j] > rEnd[i] || rEnd[j] < rStart[i]) continue;
-                ufUnion(i, j);
-            }
-        }
-
-        // Phase B: accumulate per-component statistics
-        for (int i = 0; i < rCount; i++) {
-            cSumX[i] = cSumY[i] = cArea[i] = 0;
-            cMinX[i] = cMinY[i] = Integer.MAX_VALUE;
-            cMaxX[i] = cMaxY[i] = Integer.MIN_VALUE;
-        }
-        for (int i = 0; i < rCount; i++) {
-            int    root = ufFind(i);
-            int    len  = rEnd[i] - rStart[i] + 1;
-            long   midX = rStart[i] + len / 2L;
-            cArea[root] += len;
-            cSumX[root] += midX * len;
-            cSumY[root] += (long) rRow[i] * len;
-            if (rStart[i] < cMinX[root]) cMinX[root] = rStart[i];
-            if (rRow[i]   < cMinY[root]) cMinY[root] = rRow[i];
-            if (rEnd[i]   > cMaxX[root]) cMaxX[root] = rEnd[i];
-            if (rRow[i]   > cMaxY[root]) cMaxY[root] = rRow[i];
-        }
-
-        int n = 0;
-        for (int i = 0; i < rCount; i++) if (ufFind(i) == i && cArea[i] > 0) n++;
-        return n;
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Step 6: Filter components and merge spatially close ones into Clumps
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private List<Clump> buildClumps(int numBlobs, int W) {
-        // Collect valid components
-        List<double[]> comps = new ArrayList<>(numBlobs);
-        for (int i = 0; i < rCount; i++) {
-            if (ufFind(i) != i || cArea[i] == 0) continue;
-            double area = cArea[i];
-            if (area < MIN_AREA || area > MAX_AREA) continue;
-            int bw = cMaxX[i] - cMinX[i] + 1;
-            int bh = cMaxY[i] - cMinY[i] + 1;
-            if (bh == 0) continue;
-            double asp = (double) bw / bh;
-            if (asp > MAX_ASPECT || asp < 1.0 / MAX_ASPECT) continue;
-            double cx = (double) cSumX[i] / area;
-            double cy = (double) cSumY[i] / area;
-            // [cx, cy, area, x1, y1, x2, y2]
-            comps.add(new double[]{cx, cy, area, cMinX[i], cMinY[i], cMaxX[i], cMaxY[i]});
-        }
-
-        // Spatial merge: union components whose bounding boxes are within CLUMP_MERGE_GAP
-        int n = comps.size();
-        int[] p = new int[n];
-        for (int i = 0; i < n; i++) p[i] = i;
-        for (int i = 0; i < n; i++)
-            for (int j = i + 1; j < n; j++)
-                if (boxesClose(comps.get(i), comps.get(j))) smallUnion(p, i, j);
-
-        // Accumulate per-clump stats
-        double[] ax = new double[n], ay = new double[n], ar = new double[n];
-        double[] x1 = new double[n], y1 = new double[n];
-        double[] x2 = new double[n], y2 = new double[n];
-        for (int i = 0; i < n; i++) { x1[i] = y1[i] = Double.MAX_VALUE; x2[i] = y2[i] = -Double.MAX_VALUE; }
-        for (int i = 0; i < n; i++) {
-            int r = smallFind(p, i);
-            double[] c = comps.get(i);
-            ar[r] += c[2];
-            ax[r] += c[0] * c[2];
-            ay[r] += c[1] * c[2];
-            if (c[3] < x1[r]) x1[r] = c[3];
-            if (c[4] < y1[r]) y1[r] = c[4];
-            if (c[5] > x2[r]) x2[r] = c[5];
-            if (c[6] > y2[r]) y2[r] = c[6];
-        }
-
-        List<Clump> out = new ArrayList<>();
-        for (int i = 0; i < n; i++) {
-            if (smallFind(p, i) != i || ar[i] < MIN_AREA) continue;
-            double cx = ax[i] / ar[i];
-            double cy = ay[i] / ar[i];
-            int bx = (int) x1[i], by = (int) y1[i];
-            int bw = (int)(x2[i] - x1[i]) + 1;
-            int bh = (int)(y2[i] - y1[i]) + 1;
-            out.add(new Clump(cx, cy, ar[i], bx, by, bw, bh, W));
-        }
-        return out;
-    }
-
-    private boolean boxesClose(double[] a, double[] b) {
-        int g = CLUMP_MERGE_GAP;
-        return a[3]-g < b[5] && a[5]+g > b[3] && a[4]-g < b[6] && a[6]+g > b[4];
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Annotation
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private static final Scalar GREEN  = new Scalar(  0, 255,  80);
-    private static final Scalar AMBER  = new Scalar(255, 190,   0);
-    private static final Scalar WHITE  = new Scalar(255, 255, 255);
-    private static final Scalar BLUE   = new Scalar( 80, 160, 255);
-    private static final Scalar DARK   = new Scalar( 25,  25,  25);
-
-    private void drawAnnotations(Mat frame, List<Clump> clumps, int W, int H) {
-        // Vertical center reference
-        Imgproc.line(frame, new Point(W/2, 0), new Point(W/2, H), WHITE, 1, Imgproc.LINE_AA, 0);
-
-        for (int i = 0; i < clumps.size(); i++) {
-            Clump  c   = clumps.get(i);
-            Scalar col = (i == 0) ? GREEN : AMBER;
-            int    th  = (i == 0) ? 3 : 1;
-
-            // Bounding box
-            Imgproc.rectangle(frame,
-                    new Point(c.boundX, c.boundY),
-                    new Point(c.boundX + c.boundW, c.boundY + c.boundH),
-                    col, th, Imgproc.LINE_AA, 0);
-
-            // Centroid dot
-            Imgproc.circle(frame, new Point(c.centerX, c.centerY),
-                    6, col, -1, Imgproc.LINE_AA, 0);
-
-            // Label (with dark background for readability on any field colour)
-            String text = "~" + c.estimatedBallCount
-                    + (c.estimatedBallCount == 1 ? " ball" : " balls");
-            int[] bl = {0};
-            Size  ts = Imgproc.getTextSize(text, Imgproc.FONT_HERSHEY_SIMPLEX, 0.52, 2, bl);
-            Point tl = new Point(c.boundX + 4, c.boundY - 7);
-            Imgproc.rectangle(frame,
-                    new Point(tl.x - 2, tl.y - ts.height - 2),
-                    new Point(tl.x + ts.width + 2, tl.y + 2),
-                    DARK, -1);
-            Imgproc.putText(frame, text, tl,
-                    Imgproc.FONT_HERSHEY_SIMPLEX, 0.52, col, 2, Imgproc.LINE_AA, false);
-
-            // Steering arrow for the primary target only
-            if (i == 0) {
-                int ay = H - 20;
-                Imgproc.arrowedLine(frame,
-                        new Point(W/2, ay), new Point(c.centerX, ay),
-                        BLUE, 2, Imgproc.LINE_AA, 0, 0.15);
-                Imgproc.putText(frame,
-                        String.format("err=%.3f", c.steeringError),
-                        new Point(8, H - 6),
-                        Imgproc.FONT_HERSHEY_SIMPLEX, 0.4, BLUE, 1, Imgproc.LINE_AA, false);
-            }
+    public boolean hasTarget() {
+        synchronized (lock) {
+            return best != null;
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Union-find — path-halving + union by rank (near-O(1) amortized)
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private int ufFind(int x) {
-        // Path halving: point every other node directly at its grandparent.
-        // Equivalent to path compression in practice, no recursion needed.
-        while (ufParent[x] != x) {
-            ufParent[x] = ufParent[ufParent[x]];
-            x           = ufParent[x];
-        }
-        return x;
-    }
-
-    private void ufUnion(int a, int b) {
-        int ra = ufFind(a), rb = ufFind(b);
-        if (ra == rb) return;
-        // Union by rank: attach smaller tree under larger
-        if      (ufRank[ra] < ufRank[rb]) ufParent[ra] = rb;
-        else if (ufRank[ra] > ufRank[rb]) ufParent[rb] = ra;
-        else { ufParent[rb] = ra; ufRank[ra]++; }
-    }
-
-    // Simple union-find for the small clump-merge step (no rank needed)
-    private int smallFind(int[] p, int i) {
-        while (p[i] != i) { p[i] = p[p[i]]; i = p[i]; } return i;
-    }
-    private void smallUnion(int[] p, int a, int b) {
-        a = smallFind(p, a); b = smallFind(p, b); if (a != b) p[b] = a;
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Run array helpers
-    // ─────────────────────────────────────────────────────────────────────────
-
-    private void writeRun(int i, int row, int start, int end) {
-        rRow[i] = row; rStart[i] = start; rEnd[i] = end;
-    }
-
-    private void copyRun(int from, int to) {
-        rRow[to] = rRow[from]; rStart[to] = rStart[from]; rEnd[to] = rEnd[from];
-    }
-
-    /**
-     * In-place insertion sort of the run arrays by (row ASC, start ASC).
-     *
-     * Insertion sort chosen deliberately:
-     *   • Runs are nearly sorted between consecutive frames (the scene changes
-     *     little in 33ms), making insertion sort O(N + k) where k = inversions.
-     *   • For noisy frames with ~2000 runs, worst-case is still fast enough
-     *     (~0.3ms) because the constant factor is tiny (3 array reads/writes).
-     *   • Zero heap allocation — no Comparator, no Integer boxing.
-     */
-    private void sortRuns(int count) {
-        for (int i = 1; i < count; i++) {
-            int kr = rRow[i], ks = rStart[i], ke = rEnd[i];
-            int j  = i - 1;
-            while (j >= 0 && (rRow[j] > kr || (rRow[j] == kr && rStart[j] > ks))) {
-                rRow[j+1]   = rRow[j];
-                rStart[j+1] = rStart[j];
-                rEnd[j+1]   = rEnd[j];
-                j--;
-            }
-            rRow[j+1]   = kr;
-            rStart[j+1] = ks;
-            rEnd[j+1]   = ke;
+    public Detection getBestDetection() {
+        synchronized (lock) {
+            return best;
         }
     }
 
-    private static final Comparator<Clump> CLUMP_ORDER =
-            new Comparator<Clump>() {
-                @Override public int compare(Clump a, Clump b) {
-                    return Integer.compare(b.estimatedBallCount, a.estimatedBallCount);
-                }
-            };
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // Public accessors — thread-safe, callable from the robot loop
-    // ─────────────────────────────────────────────────────────────────────────
-
-    /**
-     * The highest-priority (most balls) clump detected this frame.
-     * Returns null when no pollen is visible.
-     */
-    public Clump getBestClump() {
-        synchronized (lock) { return best; }
+    public List<Detection> getDetections() {
+        synchronized (lock) {
+            return new ArrayList<>(detections);
+        }
     }
 
-    /**
-     * Signed horizontal offset toward the best clump, normalized to [-1, +1].
-     * Negative = clump is left of frame center; positive = right.
-     * Returns 0.0 when no clump is visible.
-     *
-     * Ready to feed into a P-controller:
-     *   double power = KP * pipeline.getSteeringError();
-     */
     public double getSteeringError() {
-        synchronized (lock) { return steeringError; }
+        synchronized (lock) {
+            return steeringError;
+        }
     }
 
-    /** True if at least one pollen clump is visible this frame. */
-    public boolean isPollenVisible() {
-        synchronized (lock) { return best != null; }
+    public int getMaskPixels() {
+        synchronized (lock) {
+            return maskPixels;
+        }
     }
 
-    /** Snapshot of all clumps this frame, sorted by estimated ball count. */
-    public List<Clump> getAllClumps() {
-        synchronized (lock) { return new ArrayList<>(results); }
+    private void buildMask(Mat rgb, Mat hsvOut, Mat maskOut) {
+        Imgproc.cvtColor(rgb, hsvOut, Imgproc.COLOR_RGB2HSV);
+        Core.inRange(hsvOut, HSV_STRICT_LOW, HSV_STRICT_HIGH, strictMask);
+        Core.inRange(hsvOut, HSV_WIDE_LOW, HSV_WIDE_HIGH, wideMask);
+
+        rgbYellowMask.create(rgb.rows(), rgb.cols(), CvType.CV_8UC1);
+        byte[] rgbBytes = new byte[(int) (rgb.total() * rgb.channels())];
+        byte[] hsvBytes = new byte[(int) (hsvOut.total() * hsvOut.channels())];
+        byte[] yellowBytes = new byte[(int) rgb.total()];
+        rgb.get(0, 0, rgbBytes);
+        hsvOut.get(0, 0, hsvBytes);
+
+        for (int pixel = 0; pixel < yellowBytes.length; pixel++) {
+            int rgbIndex = pixel * 3;
+            int hsvIndex = pixel * 3;
+            int r = rgbBytes[rgbIndex] & 0xFF;
+            int g = rgbBytes[rgbIndex + 1] & 0xFF;
+            int b = rgbBytes[rgbIndex + 2] & 0xFF;
+            int saturation = hsvBytes[hsvIndex + 1] & 0xFF;
+            double score = yellowScore(r, g, b, saturation);
+            boolean yellow =
+                    r >= RGB_MIN_R
+                            && g >= RGB_MIN_G
+                            && b <= RGB_MAX_B
+                            && Math.min(r, g) - b >= YELLOW_MARGIN
+                            && score >= MIN_YELLOW_SCORE;
+            yellowBytes[pixel] = yellow ? (byte) 255 : 0;
+        }
+        rgbYellowMask.put(0, 0, yellowBytes);
+
+        Core.bitwise_and(wideMask, rgbYellowMask, maskOut);
+        Core.bitwise_or(strictMask, maskOut, maskOut);
+        Imgproc.medianBlur(maskOut, maskOut, 3);
+        Imgproc.morphologyEx(maskOut, maskOut, Imgproc.MORPH_OPEN, openKernel);
+        Imgproc.morphologyEx(maskOut, maskOut, Imgproc.MORPH_CLOSE, closeKernel);
     }
 
-    // ─────────────────────────────────────────────────────────────────────────
-    // Lifecycle
-    // ─────────────────────────────────────────────────────────────────────────
+    private Detection candidateFromContour(
+            Mat rgb,
+            Mat hsvMat,
+            Mat cleanedMask,
+            MatOfPoint contour,
+            int fullFrameWidth,
+            int top,
+            double maxArea
+    ) {
+        double area = Imgproc.contourArea(contour);
+        if (area < MIN_AREA_PX || area > maxArea) {
+            return null;
+        }
 
-    /**
-     * Free OpenCV Mats. Call in your OpMode's stop() or a try-finally block.
-     *
-     *   try { ... } finally { pipeline.release(); visionPortal.close(); }
-     */
-    public void release() {
-        hsvMat.release();
-        maskA.release();
-        maskB.release();
-        mask.release();
+        Rect rect = Imgproc.boundingRect(contour);
+        if (rect.width <= 0 || rect.height <= 0 || rect.y <= 1) {
+            return null;
+        }
+
+        double aspect = rect.width / (double) rect.height;
+        if (aspect > MAX_ASPECT || aspect < 1.0 / MAX_ASPECT) {
+            return null;
+        }
+
+        double perimeter = contourPerimeter(contour);
+        double circularity = perimeter <= 0.0 ? 0.0 : 4.0 * Math.PI * area / (perimeter * perimeter);
+        double extent = area / (rect.width * (double) rect.height);
+
+        Point[] points = contour.toArray();
+        MatOfPoint2f contour2f = new MatOfPoint2f(points);
+        Point circleCenter = new Point();
+        float[] radiusHolder = new float[1];
+        Imgproc.minEnclosingCircle(contour2f, circleCenter, radiusHolder);
+        contour2f.release();
+        double radius = radiusHolder[0];
+        double circleArea = radius > 0.0 ? Math.PI * radius * radius : 1.0;
+        double fillRatio = area / circleArea;
+
+        if (extent < MIN_EXTENT || fillRatio < MIN_FILL_RATIO) {
+            return null;
+        }
+        if (circularity < MIN_CIRCULARITY && aspect < 1.55) {
+            return null;
+        }
+
+        Mat contourMask = contourMask(contour, rect);
+        Mat cleanedRoi = cleanedMask.submat(rect);
+        Mat covered = new Mat();
+        Core.bitwise_and(cleanedRoi, contourMask, covered);
+        int contourPixels = Math.max(1, Core.countNonZero(contourMask));
+        double maskCoverage = Core.countNonZero(covered) / (double) contourPixels;
+        cleanedRoi.release();
+        covered.release();
+        if (maskCoverage < 0.22) {
+            contourMask.release();
+            return null;
+        }
+
+        Mat rgbPatch = rgb.submat(rect);
+        Mat hsvPatch = hsvMat.submat(rect);
+        Scalar meanRgb = Core.mean(rgbPatch, contourMask);
+        Scalar meanHsv = Core.mean(hsvPatch, contourMask);
+        rgbPatch.release();
+        hsvPatch.release();
+        contourMask.release();
+
+        Double colorConfidence = colorConfidence(meanRgb, meanHsv);
+        if (colorConfidence == null) {
+            return null;
+        }
+
+        double circularityScore = clamp((circularity - 0.20) / 0.62, 0.0, 1.0);
+        double aspectScore = 1.0 - clamp(Math.abs(Math.log(Math.max(0.01, aspect))) / Math.log(MAX_ASPECT), 0.0, 1.0);
+        double fillScore = clamp((fillRatio - 0.15) / 0.55, 0.0, 1.0);
+        double extentScore = clamp((extent - MIN_EXTENT) / 0.42, 0.0, 1.0);
+        double coverageScore = clamp((maskCoverage - 0.22) / 0.58, 0.0, 1.0);
+        double shapeConfidence =
+                0.34 * circularityScore
+                        + 0.24 * aspectScore
+                        + 0.22 * fillScore
+                        + 0.20 * extentScore;
+        double confidence = 0.58 * colorConfidence + 0.30 * shapeConfidence + 0.12 * coverageScore;
+        if (confidence < MIN_CONFIDENCE) {
+            return null;
+        }
+
+        Moments moments = Imgproc.moments(contour);
+        double centerX = Math.abs(moments.m00) > 1e-6 ? moments.m10 / moments.m00 : circleCenter.x;
+        double centerYInRoi = Math.abs(moments.m00) > 1e-6 ? moments.m01 / moments.m00 : circleCenter.y;
+
+        MemberEstimate estimate = estimateClumpMembers(cleanedMask, contour, rect, area, top);
+        if (estimate.estimatedCount > 1 && !estimate.centers.isEmpty()) {
+            centerX = meanX(estimate.centers);
+            centerYInRoi = meanY(estimate.centers) - top;
+        }
+
+        double fullCenterY = centerYInRoi + top;
+        double steering = (centerX - fullFrameWidth * 0.5) / (fullFrameWidth * 0.5);
+        return new Detection(
+                centerX,
+                fullCenterY,
+                area,
+                rect.x,
+                rect.y + top,
+                rect.width,
+                rect.height,
+                estimate.estimatedCount,
+                steering,
+                confidence,
+                fillRatio,
+                aspect,
+                estimate.estimatedCount > 1 ? estimate.radiusPx : radius,
+                circularity,
+                extent,
+                maskCoverage,
+                estimate.countConfidence,
+                estimate.centers,
+                estimate.estimatedCount > 1
+        );
+    }
+
+    private Detection candidateFromClumpContour(
+            Mat rgb,
+            Mat hsvMat,
+            Mat cleanedMask,
+            MatOfPoint contour,
+            int fullFrameWidth,
+            int top,
+            double maxArea
+    ) {
+        double area = Imgproc.contourArea(contour);
+        if (area < MIN_AREA_PX * 1.35 || area > maxArea) {
+            return null;
+        }
+
+        Rect rect = Imgproc.boundingRect(contour);
+        if (rect.width <= 0 || rect.height <= 0 || rect.y <= 1) {
+            return null;
+        }
+
+        double aspect = rect.width / (double) rect.height;
+        double inverseAspect = rect.height / (double) rect.width;
+        if (aspect > CLUMP_MAX_ASPECT || inverseAspect > CLUMP_MAX_ASPECT) {
+            return null;
+        }
+
+        double extent = area / (rect.width * (double) rect.height);
+        if (extent < Math.max(0.10, MIN_EXTENT * 0.45)) {
+            return null;
+        }
+
+        double perimeter = contourPerimeter(contour);
+        double circularity = perimeter <= 0.0 ? 0.0 : 4.0 * Math.PI * area / (perimeter * perimeter);
+
+        Mat contourMask = contourMask(contour, rect);
+        Mat cleanedRoi = cleanedMask.submat(rect);
+        Mat covered = new Mat();
+        Core.bitwise_and(cleanedRoi, contourMask, covered);
+        int contourPixels = Math.max(1, Core.countNonZero(contourMask));
+        double maskCoverage = Core.countNonZero(covered) / (double) contourPixels;
+        cleanedRoi.release();
+        covered.release();
+        if (maskCoverage < 0.34) {
+            contourMask.release();
+            return null;
+        }
+
+        Mat rgbPatch = rgb.submat(rect);
+        Mat hsvPatch = hsvMat.submat(rect);
+        Scalar meanRgb = Core.mean(rgbPatch, contourMask);
+        Scalar meanHsv = Core.mean(hsvPatch, contourMask);
+        rgbPatch.release();
+        hsvPatch.release();
+        contourMask.release();
+
+        Double colorConfidence = colorConfidence(meanRgb, meanHsv);
+        if (colorConfidence == null || colorConfidence < MIN_CONFIDENCE * 0.58) {
+            return null;
+        }
+
+        MemberEstimate estimate = estimateClumpMembers(cleanedMask, contour, rect, area, top);
+        if (estimate.estimatedCount <= 1) {
+            return null;
+        }
+
+        double centerX;
+        double centerY;
+        if (!estimate.centers.isEmpty()) {
+            centerX = meanX(estimate.centers);
+            centerY = meanY(estimate.centers);
+        } else {
+            Moments moments = Imgproc.moments(contour);
+            if (Math.abs(moments.m00) > 1e-6) {
+                centerX = moments.m10 / moments.m00;
+                centerY = moments.m01 / moments.m00 + top;
+            } else {
+                centerX = rect.x + rect.width * 0.5;
+                centerY = rect.y + rect.height * 0.5 + top;
+            }
+        }
+
+        double equivalentRadius = Math.sqrt(area / Math.max(1.0, Math.PI * estimate.estimatedCount));
+        double fillRatio = clamp(equivalentRadius / Math.max(1.0, estimate.radiusPx), 0.0, 1.4);
+        double coverageScore = clamp((maskCoverage - 0.34) / 0.54, 0.0, 1.0);
+        double extentScore = clamp((extent - 0.10) / 0.46, 0.0, 1.0);
+        double confidence = 0.56 * colorConfidence + 0.18 * coverageScore + 0.12 * extentScore + 0.14 * estimate.countConfidence;
+        if (confidence < MIN_CONFIDENCE * 0.78) {
+            return null;
+        }
+
+        double steering = (centerX - fullFrameWidth * 0.5) / (fullFrameWidth * 0.5);
+        return new Detection(
+                centerX,
+                centerY,
+                area,
+                rect.x,
+                rect.y + top,
+                rect.width,
+                rect.height,
+                estimate.estimatedCount,
+                steering,
+                confidence,
+                fillRatio,
+                aspect,
+                estimate.radiusPx,
+                circularity,
+                extent,
+                maskCoverage,
+                estimate.countConfidence,
+                estimate.centers,
+                true
+        );
+    }
+
+    private List<PollenBall> detectVisibleBallCircles(Mat rgb, Mat hsvMat, Mat pollenMask, int top) {
+        Mat value = new Mat();
+        Mat saturation = new Mat();
+        Mat valueEqualized = new Mat();
+        Mat saturationEqualized = new Mat();
+        Mat circleImage = new Mat();
+        Mat edges = new Mat();
+        Mat circles = new Mat();
+
+        Core.extractChannel(hsvMat, value, 2);
+        Core.extractChannel(hsvMat, saturation, 1);
+        Imgproc.equalizeHist(value, valueEqualized);
+        Imgproc.equalizeHist(saturation, saturationEqualized);
+        Core.addWeighted(valueEqualized, 0.55, saturationEqualized, 0.45, 0.0, circleImage);
+        Imgproc.GaussianBlur(circleImage, circleImage, new org.opencv.core.Size(5, 5), 1.1);
+        Imgproc.Canny(circleImage, edges, 70, 150);
+
+        Imgproc.HoughCircles(
+                circleImage,
+                circles,
+                Imgproc.HOUGH_GRADIENT,
+                1.2,
+                12.0,
+                90.0,
+                CIRCLE_HOUGH_PARAM2,
+                CIRCLE_MIN_RADIUS_PX,
+                CIRCLE_MAX_RADIUS_PX
+        );
+
+        List<PollenBall> result = new ArrayList<>();
+        if (circles.empty()) {
+            value.release();
+            saturation.release();
+            valueEqualized.release();
+            saturationEqualized.release();
+            circleImage.release();
+            edges.release();
+            circles.release();
+            return result;
+        }
+
+        int rows = rgb.rows();
+        int cols = rgb.cols();
+        byte[] rgbBytes = new byte[(int) (rgb.total() * rgb.channels())];
+        byte[] hsvBytes = new byte[(int) (hsvMat.total() * hsvMat.channels())];
+        byte[] maskBytes = new byte[(int) pollenMask.total()];
+        byte[] edgeBytes = new byte[(int) edges.total()];
+        rgb.get(0, 0, rgbBytes);
+        hsvMat.get(0, 0, hsvBytes);
+        pollenMask.get(0, 0, maskBytes);
+        edges.get(0, 0, edgeBytes);
+
+        float[] circleData = new float[(int) (circles.total() * circles.channels())];
+        circles.get(0, 0, circleData);
+        List<PollenBall> scored = new ArrayList<>();
+        for (int i = 0; i + 2 < circleData.length; i += 3) {
+            double circleX = circleData[i];
+            double circleY = circleData[i + 1];
+            double radius = circleData[i + 2];
+            if (circleY <= 2.0) {
+                continue;
+            }
+
+            int minX = Math.max(0, (int) Math.floor(circleX - radius * 1.08));
+            int maxX = Math.min(cols - 1, (int) Math.ceil(circleX + radius * 1.08));
+            int minY = Math.max(0, (int) Math.floor(circleY - radius * 1.08));
+            int maxY = Math.min(rows - 1, (int) Math.ceil(circleY + radius * 1.08));
+            int diskPixels = 0;
+            int ringPixels = 0;
+            int yellowPixels = 0;
+            int strictPixels = 0;
+            int edgePixels = 0;
+            double sumH = 0.0;
+            double sumS = 0.0;
+            double sumV = 0.0;
+            double radiusSq = radius * radius;
+            double outerRingSq = (radius * 1.07) * (radius * 1.07);
+            double innerRingSq = (radius * 0.82) * (radius * 0.82);
+
+            for (int y = minY; y <= maxY; y++) {
+                double dy = y - circleY;
+                for (int x = minX; x <= maxX; x++) {
+                    double dx = x - circleX;
+                    double distanceSq = dx * dx + dy * dy;
+                    int index = y * cols + x;
+                    int rgbIndex = index * 3;
+                    int hsvIndex = index * 3;
+                    int r = rgbBytes[rgbIndex] & 0xFF;
+                    int g = rgbBytes[rgbIndex + 1] & 0xFF;
+                    int b = rgbBytes[rgbIndex + 2] & 0xFF;
+                    int hue = hsvBytes[hsvIndex] & 0xFF;
+                    int sat = hsvBytes[hsvIndex + 1] & 0xFF;
+                    int val = hsvBytes[hsvIndex + 2] & 0xFF;
+
+                    if (distanceSq <= radiusSq) {
+                        diskPixels++;
+                        sumH += hue;
+                        sumS += sat;
+                        sumV += val;
+                        boolean yellowish =
+                                hue >= 10
+                                        && hue <= 45
+                                        && sat >= 45
+                                        && val >= 55
+                                        && Math.min(r, g) - b > 12;
+                        if (yellowish) {
+                            yellowPixels++;
+                        }
+                        if ((maskBytes[index] & 0xFF) > 0) {
+                            strictPixels++;
+                        }
+                    }
+                    if (distanceSq <= outerRingSq && distanceSq >= innerRingSq) {
+                        ringPixels++;
+                        if ((edgeBytes[index] & 0xFF) > 0) {
+                            edgePixels++;
+                        }
+                    }
+                }
+            }
+
+            if (diskPixels <= 0 || ringPixels <= 0) {
+                continue;
+            }
+
+            double yellowFraction = yellowPixels / (double) diskPixels;
+            double strictFraction = strictPixels / (double) diskPixels;
+            double edgeFraction = edgePixels / (double) ringPixels;
+            double meanH = sumH / diskPixels;
+            double meanS = sumS / diskPixels;
+            double meanV = sumV / diskPixels;
+            if (yellowFraction < CIRCLE_MIN_YELLOW_FRACTION || meanS < 70.0 || meanV < 65.0) {
+                continue;
+            }
+            if (radius > 28.0 && (meanH > 38.0 || yellowFraction < 0.72)) {
+                continue;
+            }
+
+            double hueScore = Math.max(0.0, 1.0 - Math.abs(meanH - 25.0) / 22.0);
+            double score =
+                    0.42 * Math.min(yellowFraction / 0.55, 1.0)
+                            + 0.18 * Math.min(strictFraction / 0.24, 1.0)
+                            + 0.22 * Math.min(edgeFraction / 0.08, 1.0)
+                            + 0.18 * hueScore;
+            if (score >= CIRCLE_MIN_SCORE) {
+                scored.add(new PollenBall(circleX, circleY + top, radius, score));
+            }
+        }
+
+        Collections.sort(scored, (left, right) -> Double.compare(right.confidence, left.confidence));
+        for (PollenBall ball : scored) {
+            boolean overlapsExisting = false;
+            for (PollenBall other : result) {
+                double distance = Math.hypot(ball.centerX - other.centerX, ball.centerY - other.centerY);
+                if (distance < Math.max(12.0, Math.min(ball.radiusPx, other.radiusPx) * 0.78)
+                        || distance < (ball.radiusPx + other.radiusPx) * 0.42) {
+                    overlapsExisting = true;
+                    break;
+                }
+            }
+            if (!overlapsExisting) {
+                result.add(ball);
+            }
+        }
+
+        value.release();
+        saturation.release();
+        valueEqualized.release();
+        saturationEqualized.release();
+        circleImage.release();
+        edges.release();
+        circles.release();
+        return result;
+    }
+
+    private void refineFragmentedCandidatesWithCircles(List<Detection> candidates, List<PollenBall> balls, int fullFrameWidth) {
+        if (balls.isEmpty()) {
+            return;
+        }
+
+        Collections.sort(balls, (left, right) -> Double.compare(right.confidence, left.confidence));
+        List<List<PollenBall>> assignments = new ArrayList<>();
+        for (int i = 0; i < candidates.size(); i++) {
+            assignments.add(new ArrayList<>());
+        }
+
+        for (PollenBall ball : balls) {
+            int bestIndex = -1;
+            double bestArea = Double.POSITIVE_INFINITY;
+            for (int i = 0; i < candidates.size(); i++) {
+                Detection candidate = candidates.get(i);
+                boolean inside =
+                        candidate.boundX <= ball.centerX
+                                && ball.centerX <= candidate.boundX + candidate.boundW
+                                && candidate.boundY <= ball.centerY
+                                && ball.centerY <= candidate.boundY + candidate.boundH;
+                if (!inside) {
+                    continue;
+                }
+                double boxArea = candidate.boundW * (double) candidate.boundH;
+                if (boxArea < bestArea) {
+                    bestArea = boxArea;
+                    bestIndex = i;
+                }
+            }
+            if (bestIndex >= 0) {
+                assignments.get(bestIndex).add(ball);
+            }
+        }
+
+        for (int i = 0; i < candidates.size(); i++) {
+            List<PollenBall> assigned = assignments.get(i);
+            if (assigned.isEmpty()) {
+                continue;
+            }
+
+            Detection candidate = candidates.get(i);
+            double aspect = Math.max(candidate.boundW, candidate.boundH) / (double) Math.max(1, Math.min(candidate.boundW, candidate.boundH));
+            boolean shouldOverride = candidateIsFragmented(candidate)
+                    || (aspect <= 2.4 && candidate.estimatedCount > assigned.size());
+            if (!shouldOverride) {
+                continue;
+            }
+
+            List<Center> centers = new ArrayList<>();
+            double centerX = 0.0;
+            double centerY = 0.0;
+            double minConfidence = 1.0;
+            List<Double> radii = new ArrayList<>();
+            for (PollenBall ball : assigned) {
+                centers.add(new Center(ball.centerX, ball.centerY));
+                centerX += ball.centerX;
+                centerY += ball.centerY;
+                minConfidence = Math.min(minConfidence, ball.confidence);
+                radii.add(ball.radiusPx);
+            }
+            centerX /= assigned.size();
+            centerY /= assigned.size();
+            Collections.sort(radii);
+            double radius = radii.get(radii.size() / 2);
+            if (radii.size() % 2 == 0) {
+                radius = (radii.get(radii.size() / 2 - 1) + radii.get(radii.size() / 2)) * 0.5;
+            }
+
+            candidates.set(i, new Detection(
+                    centerX,
+                    centerY,
+                    candidate.areaPx,
+                    candidate.boundX,
+                    candidate.boundY,
+                    candidate.boundW,
+                    candidate.boundH,
+                    assigned.size(),
+                    (centerX - fullFrameWidth * 0.5) / (fullFrameWidth * 0.5),
+                    candidate.confidence,
+                    candidate.fillRatio,
+                    candidate.aspectRatio,
+                    radius,
+                    candidate.circularity,
+                    candidate.extent,
+                    candidate.maskCoverage,
+                    Math.max(candidate.countConfidence, minConfidence),
+                    centers,
+                    assigned.size() > 1
+            ));
+        }
+    }
+
+    private boolean hasFragmentedCandidate(List<Detection> candidates) {
+        for (Detection candidate : candidates) {
+            if (candidateIsFragmented(candidate)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private boolean candidateIsFragmented(Detection candidate) {
+        double minorAxis = Math.max(1.0, Math.min(candidate.boundW, candidate.boundH));
+        return candidate.estimatedCount > 1
+                && minorAxis >= CLUMP_FRAGMENT_MIN_MINOR_PX
+                && candidate.radiusPx / minorAxis < CLUMP_FRAGMENT_RADIUS_FRACTION;
+    }
+
+    private MemberEstimate estimateClumpMembers(Mat cleanedMask, MatOfPoint contour, Rect rect, double area, int top) {
+        Mat roiMask = contourMask(contour, rect);
+        Mat distance = new Mat();
+        Imgproc.distanceTransform(roiMask, distance, Imgproc.DIST_L2, 5);
+
+        Core.MinMaxLocResult minMax = Core.minMaxLoc(distance);
+        double maxRadius = minMax.maxVal;
+        if (maxRadius < CLUMP_PEAK_MIN_RADIUS_PX) {
+            roiMask.release();
+            distance.release();
+            return new MemberEstimate(new ArrayList<>(), 1, 0.25, Math.max(1.0, Math.min(rect.width, rect.height) * 0.5));
+        }
+
+        Mat dilated = new Mat();
+        Imgproc.dilate(distance, dilated, Mat.ones(5, 5, CvType.CV_8U));
+
+        float[] distanceData = new float[(int) distance.total()];
+        float[] dilatedData = new float[(int) dilated.total()];
+        byte[] maskData = new byte[(int) roiMask.total()];
+        distance.get(0, 0, distanceData);
+        dilated.get(0, 0, dilatedData);
+        roiMask.get(0, 0, maskData);
+
+        double threshold = Math.max(CLUMP_PEAK_MIN_RADIUS_PX, maxRadius * CLUMP_PEAK_THRESHOLD_FRACTION);
+        Mat localMaxMask = Mat.zeros(rect.height, rect.width, CvType.CV_8UC1);
+        byte[] localMaxData = new byte[(int) roiMask.total()];
+        int width = rect.width;
+        for (int index = 0; index < distanceData.length; index++) {
+            double radius = distanceData[index];
+            if ((maskData[index] & 0xFF) == 0 || radius < threshold || radius < dilatedData[index] - 1e-5) {
+                continue;
+            }
+            localMaxData[index] = (byte) 255;
+        }
+        localMaxMask.put(0, 0, localMaxData);
+
+        Mat labels = new Mat();
+        Mat stats = new Mat();
+        Mat centroids = new Mat();
+        int componentCount = Imgproc.connectedComponentsWithStats(localMaxMask, labels, stats, centroids, 8, CvType.CV_32S);
+        int[] labelData = new int[(int) labels.total()];
+        double[] centroidData = new double[(int) (centroids.total() * centroids.channels())];
+        labels.get(0, 0, labelData);
+        centroids.get(0, 0, centroidData);
+
+        List<Peak> peaks = new ArrayList<>();
+        for (int label = 1; label < componentCount; label++) {
+            double bestRadius = 0.0;
+            for (int index = 0; index < labelData.length; index++) {
+                if (labelData[index] != label) {
+                    continue;
+                }
+                bestRadius = Math.max(bestRadius, distanceData[index]);
+            }
+            double peakX = centroidData[label * 2];
+            double peakY = centroidData[label * 2 + 1];
+            peaks.add(new Peak(bestRadius, rect.x + peakX, rect.y + peakY + top));
+        }
+        Collections.sort(peaks, (left, right) -> Double.compare(right.radius, left.radius));
+
+        double radiusEstimate = medianRadius(peaks, maxRadius);
+        radiusEstimate = Math.max(CLUMP_PEAK_MIN_RADIUS_PX, radiusEstimate);
+        double minPeakDistance = Math.max(3.0, radiusEstimate * CLUMP_PEAK_MIN_DISTANCE_RADIUS);
+
+        List<Peak> selected = new ArrayList<>();
+        for (Peak peak : peaks) {
+            boolean farEnough = true;
+            for (Peak other : selected) {
+                if (Math.hypot(peak.x - other.x, peak.y - other.y) < minPeakDistance) {
+                    farEnough = false;
+                    break;
+                }
+            }
+            if (farEnough) {
+                selected.add(peak);
+            }
+        }
+
+        int peakCount = selected.size();
+        double singleArea = Math.PI * radiusEstimate * radiusEstimate * CLUMP_AREA_FILL_ESTIMATE;
+        double areaEstimate = area / Math.max(1.0, singleArea);
+        double majorAxis = Math.max(rect.width, rect.height);
+        double minorAxis = Math.max(1.0, Math.min(rect.width, rect.height));
+        double lineEstimate = majorAxis / Math.max(1.0, radiusEstimate * CLUMP_WIDTH_SPACING_RADIUS);
+
+        List<Double> estimates = new ArrayList<>();
+        if (peakCount > 0) {
+            estimates.add((double) peakCount);
+        }
+        if (areaEstimate >= 0.75) {
+            estimates.add(areaEstimate);
+        }
+        if (majorAxis / minorAxis > 1.35) {
+            estimates.add(lineEstimate);
+        }
+        if (estimates.isEmpty()) {
+            estimates.add(1.0);
+        }
+        Collections.sort(estimates);
+
+        double rawCount;
+        int middle = estimates.size() / 2;
+        if (estimates.size() % 2 == 1) {
+            rawCount = estimates.get(middle);
+        } else {
+            rawCount = (estimates.get(middle - 1) + estimates.get(middle)) * 0.5;
+        }
+        int estimatedCount = Math.max(1, (int) Math.round(rawCount));
+
+        if (estimatedCount > 1 && peakCount <= 1 && majorAxis / minorAxis > 1.35) {
+            estimatedCount = Math.max(estimatedCount, (int) Math.round(lineEstimate));
+        }
+
+        boolean usedFragmentGuard = false;
+        double radiusFraction = radiusEstimate / Math.max(1.0, minorAxis);
+        if (estimatedCount > 1 && minorAxis >= CLUMP_FRAGMENT_MIN_MINOR_PX && radiusFraction < CLUMP_FRAGMENT_RADIUS_FRACTION) {
+            double guardRadius = Math.max(radiusEstimate, minorAxis * (CLUMP_FRAGMENT_RADIUS_FRACTION + 0.01));
+            double guardedAreaEstimate = area / Math.max(1.0, Math.PI * guardRadius * guardRadius * CLUMP_AREA_FILL_ESTIMATE);
+            double guardedLineEstimate = majorAxis / Math.max(1.0, guardRadius * CLUMP_WIDTH_SPACING_RADIUS);
+            double guardedRawCount;
+            if (majorAxis / minorAxis > 2.8) {
+                guardedRawCount = Math.max(guardedAreaEstimate, guardedLineEstimate);
+            } else {
+                guardedRawCount = Math.max(guardedAreaEstimate, Math.min(guardedLineEstimate, guardedAreaEstimate * 1.35));
+            }
+            int guardedCount = Math.max(1, (int) Math.round(guardedRawCount));
+            if (guardedCount < estimatedCount) {
+                estimatedCount = guardedCount;
+                usedFragmentGuard = true;
+            }
+        }
+
+        List<Center> centers = new ArrayList<>();
+        if (usedFragmentGuard) {
+            if (majorAxis / minorAxis <= 2.4) {
+                centers = synthesizeGridMemberCenters(contour, rect, estimatedCount, top);
+            } else {
+                centers = synthesizeMemberCenters(contour, estimatedCount, Math.max(radiusEstimate, minorAxis * 0.22), top);
+            }
+        } else if (!selected.isEmpty()) {
+            for (int i = 0; i < Math.min(estimatedCount, selected.size()); i++) {
+                Peak peak = selected.get(i);
+                centers.add(new Center(peak.x, peak.y));
+            }
+        }
+        if (centers.size() < estimatedCount) {
+            centers = synthesizeMemberCenters(contour, estimatedCount, radiusEstimate, top);
+        }
+
+        double meanEstimate = 0.0;
+        for (double estimate : estimates) {
+            meanEstimate += estimate;
+        }
+        meanEstimate /= estimates.size();
+        double agreement = 0.0;
+        if (meanEstimate > 0.0) {
+            double variance = 0.0;
+            for (double estimate : estimates) {
+                double delta = estimate - meanEstimate;
+                variance += delta * delta;
+            }
+            variance /= estimates.size();
+            agreement = 1.0 - clamp(Math.sqrt(variance) / Math.max(1.0, meanEstimate * 0.55), 0.0, 1.0);
+        }
+        double peakSupport = clamp(peakCount / (double) Math.max(1, estimatedCount), 0.0, 1.0);
+        double sizeSupport = clamp(maxRadius / Math.max(1.0, minorAxis * 0.42), 0.0, 1.0);
+        double countConfidence = 0.52 * agreement + 0.34 * peakSupport + 0.14 * sizeSupport;
+        if (usedFragmentGuard) {
+            countConfidence = Math.min(countConfidence, 0.56);
+        }
+
+        roiMask.release();
+        distance.release();
+        dilated.release();
+        localMaxMask.release();
+        labels.release();
+        stats.release();
+        centroids.release();
+        return new MemberEstimate(centers, estimatedCount, countConfidence, radiusEstimate);
+    }
+
+    private List<Center> synthesizeGridMemberCenters(MatOfPoint contour, Rect rect, int estimatedCount, int top) {
+        List<Center> points = new ArrayList<>();
+        if (estimatedCount <= 0) {
+            return points;
+        }
+
+        Moments moments = Imgproc.moments(contour);
+        if (estimatedCount == 1) {
+            if (Math.abs(moments.m00) > 1e-6) {
+                points.add(new Center(moments.m10 / moments.m00, moments.m01 / moments.m00 + top));
+            } else {
+                points.add(new Center(rect.x + rect.width * 0.5, rect.y + rect.height * 0.5 + top));
+            }
+            return points;
+        }
+
+        double aspect = Math.max(0.35, Math.min(2.8, rect.width / Math.max(1.0, (double) rect.height)));
+        int columns = Math.max(1, (int) Math.round(Math.sqrt(estimatedCount * aspect)));
+        int rows = Math.max(1, (int) Math.ceil(estimatedCount / (double) columns));
+        double xMargin = columns > 1 ? 0.20 : 0.5;
+        double yMargin = rows > 1 ? 0.24 : 0.5;
+
+        for (int row = 0; row < rows; row++) {
+            double rowFraction = rows == 1 ? 0.5 : yMargin + (1.0 - 2.0 * yMargin) * row / (rows - 1);
+            for (int column = 0; column < columns; column++) {
+                double columnFraction = columns == 1 ? 0.5 : xMargin + (1.0 - 2.0 * xMargin) * column / (columns - 1);
+                points.add(new Center(rect.x + rect.width * columnFraction, rect.y + rect.height * rowFraction + top));
+                if (points.size() >= estimatedCount) {
+                    return points;
+                }
+            }
+        }
+        return points;
+    }
+
+    private List<Center> synthesizeMemberCenters(MatOfPoint contour, int estimatedCount, double radius, int top) {
+        List<Center> points = new ArrayList<>();
+        if (estimatedCount <= 0) {
+            return points;
+        }
+
+        MatOfPoint2f contour2f = new MatOfPoint2f(contour.toArray());
+        RotatedRect rotated = Imgproc.minAreaRect(contour2f);
+        contour2f.release();
+        if (estimatedCount == 1) {
+            points.add(new Center(rotated.center.x, rotated.center.y + top));
+            return points;
+        }
+
+        double rectW = rotated.size.width;
+        double rectH = rotated.size.height;
+        double majorLength;
+        double angleDegrees;
+        if (rectW >= rectH) {
+            majorLength = rectW;
+            angleDegrees = rotated.angle;
+        } else {
+            majorLength = rectH;
+            angleDegrees = rotated.angle + 90.0;
+        }
+
+        double angle = Math.toRadians(angleDegrees);
+        double usableSpan = Math.max(radius * (estimatedCount - 1), majorLength - radius * 1.4);
+        double step = usableSpan / Math.max(1, estimatedCount - 1);
+        double start = -usableSpan * 0.5;
+        double ux = Math.cos(angle);
+        double uy = Math.sin(angle);
+
+        for (int index = 0; index < estimatedCount; index++) {
+            double offset = start + index * step;
+            points.add(new Center(rotated.center.x + ux * offset, rotated.center.y + uy * offset + top));
+        }
+        return points;
+    }
+
+    private Mat contourMask(MatOfPoint contour, Rect rect) {
+        Mat roiMask = Mat.zeros(rect.height, rect.width, CvType.CV_8UC1);
+        Point[] points = contour.toArray();
+        Point[] shifted = new Point[points.length];
+        for (int i = 0; i < points.length; i++) {
+            shifted[i] = new Point(points[i].x - rect.x, points[i].y - rect.y);
+        }
+        MatOfPoint shiftedContour = new MatOfPoint(shifted);
+        List<MatOfPoint> shiftedContours = new ArrayList<>();
+        shiftedContours.add(shiftedContour);
+        Imgproc.drawContours(roiMask, shiftedContours, -1, new Scalar(255), -1);
+        shiftedContour.release();
+        return roiMask;
+    }
+
+    private double contourPerimeter(MatOfPoint contour) {
+        MatOfPoint2f contour2f = new MatOfPoint2f(contour.toArray());
+        double perimeter = Imgproc.arcLength(contour2f, true);
+        contour2f.release();
+        return perimeter;
+    }
+
+    private Detection largestClump(List<Detection> candidates) {
+        Detection bestClump = null;
+        for (Detection detection : candidates) {
+            if (detection.estimatedCount <= 1) {
+                continue;
+            }
+            if (bestClump == null || LARGEST_CLUMP_ORDER.compare(detection, bestClump) < 0) {
+                bestClump = detection;
+            }
+        }
+        return bestClump;
+    }
+
+    private Double colorConfidence(Scalar meanRgb, Scalar meanHsv) {
+        double meanR = meanRgb.val[0];
+        double meanG = meanRgb.val[1];
+        double meanB = meanRgb.val[2];
+        double meanH = meanHsv.val[0];
+        double meanS = meanHsv.val[1];
+        double meanV = meanHsv.val[2];
+        double meanYellowScore = Math.min(meanR, meanG) - meanB;
+        double redGreenDelta = Math.abs(meanR - meanG);
+        if (meanH < 17.0 && meanR - meanG > 105.0) {
+            return null;
+        }
+
+        double hueScore = 1.0 - clamp(Math.abs(meanH - 27.0) / 24.0, 0.0, 1.0);
+        double saturationScore = clamp((meanS - 45.0) / 150.0, 0.0, 1.0);
+        double valueScore = clamp((meanV - 35.0) / 170.0, 0.0, 1.0);
+        double rgbScore = clamp((meanYellowScore - 20.0) / 95.0, 0.0, 1.0);
+        double balanceScore = 1.0 - clamp((redGreenDelta - 28.0) / 95.0, 0.0, 1.0);
+
+        return 0.34 * hueScore
+                + 0.20 * saturationScore
+                + 0.16 * valueScore
+                + 0.16 * rgbScore
+                + 0.14 * balanceScore;
+    }
+
+    private static double yellowScore(int r, int g, int b, int saturation) {
+        double yellow = Math.min(r, g) - b;
+        double balanceBonus = Math.max(0, 80 - Math.abs(r - g)) * 0.12;
+        double saturationBonus = saturation * 0.08;
+        return yellow + balanceBonus + saturationBonus;
+    }
+
+    private void drawLabel(Canvas canvas, String label, float x, float y, int color) {
+        textPaint.setColor(color);
+        float textWidth = textPaint.measureText(label);
+        float clampedX = Math.max(4.0f, Math.min(x, canvas.getWidth() - textWidth - 10.0f));
+        float clampedY = Math.max(38.0f, Math.min(y, canvas.getHeight() - 8.0f));
+        canvas.drawRect(clampedX - 5.0f, clampedY - 34.0f, clampedX + textWidth + 8.0f, clampedY + 8.0f, textBackgroundPaint);
+        canvas.drawText(label, clampedX, clampedY, textPaint);
+    }
+
+    private static double meanX(List<Center> centers) {
+        double sum = 0.0;
+        for (Center center : centers) {
+            sum += center.x;
+        }
+        return sum / Math.max(1, centers.size());
+    }
+
+    private static double meanY(List<Center> centers) {
+        double sum = 0.0;
+        for (Center center : centers) {
+            sum += center.y;
+        }
+        return sum / Math.max(1, centers.size());
+    }
+
+    private static double medianRadius(List<Peak> peaks, double fallback) {
+        if (peaks.isEmpty()) {
+            return fallback;
+        }
+        int count = Math.min(8, peaks.size());
+        List<Double> radii = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            radii.add(peaks.get(i).radius);
+        }
+        Collections.sort(radii);
+        int middle = radii.size() / 2;
+        if (radii.size() % 2 == 1) {
+            return radii.get(middle);
+        }
+        return (radii.get(middle - 1) + radii.get(middle)) * 0.5;
+    }
+
+    private static int computeRoiTop(int height) {
+        return Math.max(0, Math.min(height - 1, (int) Math.round(height * ROI_TOP_FRACTION)));
+    }
+
+    private static int oddKernelSize(int value, int minimum) {
+        int size = Math.max(minimum, value);
+        return size % 2 == 0 ? size + 1 : size;
+    }
+
+    private static double clamp(double value, double low, double high) {
+        return Math.max(low, Math.min(high, value));
+    }
+
+    private static String formatShort(double value) {
+        return String.format(Locale.US, "%.2f", value);
+    }
+
+    public static class Detection {
+        public final double centerX;
+        public final double centerY;
+        public final double areaPx;
+        public final int boundX;
+        public final int boundY;
+        public final int boundW;
+        public final int boundH;
+        public final int estimatedCount;
+        public final double steeringError;
+        public final double confidence;
+        public final double fillRatio;
+        public final double aspectRatio;
+        public final double radiusPx;
+        public final double circularity;
+        public final double extent;
+        public final double maskCoverage;
+        public final double countConfidence;
+        public final List<Center> memberCenters;
+        public final boolean isClump;
+
+        private Detection(double centerX, double centerY, double areaPx,
+                          int boundX, int boundY, int boundW, int boundH,
+                          int estimatedCount, double steeringError,
+                          double confidence, double fillRatio, double aspectRatio,
+                          double radiusPx, double circularity, double extent,
+                          double maskCoverage, double countConfidence,
+                          List<Center> memberCenters, boolean isClump) {
+            this.centerX = centerX;
+            this.centerY = centerY;
+            this.areaPx = areaPx;
+            this.boundX = boundX;
+            this.boundY = boundY;
+            this.boundW = boundW;
+            this.boundH = boundH;
+            this.estimatedCount = estimatedCount;
+            this.steeringError = steeringError;
+            this.confidence = confidence;
+            this.fillRatio = fillRatio;
+            this.aspectRatio = aspectRatio;
+            this.radiusPx = radiusPx;
+            this.circularity = circularity;
+            this.extent = extent;
+            this.maskCoverage = maskCoverage;
+            this.countConfidence = countConfidence;
+            this.memberCenters = Collections.unmodifiableList(new ArrayList<>(memberCenters));
+            this.isClump = isClump;
+        }
+
+        public String direction() {
+            if (steeringError < -0.03) {
+                return "left";
+            }
+            if (steeringError > 0.03) {
+                return "right";
+            }
+            return "center";
+        }
+
+        @Override
+        public String toString() {
+            return String.format(Locale.US, "Detection{~%d center=(%.0f, %.0f) err=%s area=%.0f conf=%.2f}",
+                    estimatedCount, centerX, centerY, formatShort(steeringError), areaPx, confidence);
+        }
+    }
+
+    public static class Center {
+        public final double x;
+        public final double y;
+
+        private Center(double x, double y) {
+            this.x = x;
+            this.y = y;
+        }
+    }
+
+    private static class Peak {
+        final double radius;
+        final double x;
+        final double y;
+
+        Peak(double radius, double x, double y) {
+            this.radius = radius;
+            this.x = x;
+            this.y = y;
+        }
+    }
+
+    private static class PollenBall {
+        final double centerX;
+        final double centerY;
+        final double radiusPx;
+        final double confidence;
+
+        PollenBall(double centerX, double centerY, double radiusPx, double confidence) {
+            this.centerX = centerX;
+            this.centerY = centerY;
+            this.radiusPx = radiusPx;
+            this.confidence = confidence;
+        }
+    }
+
+    private static class MemberEstimate {
+        final List<Center> centers;
+        final int estimatedCount;
+        final double countConfidence;
+        final double radiusPx;
+
+        MemberEstimate(List<Center> centers, int estimatedCount, double countConfidence, double radiusPx) {
+            this.centers = centers;
+            this.estimatedCount = estimatedCount;
+            this.countConfidence = countConfidence;
+            this.radiusPx = radiusPx;
+        }
     }
 }
