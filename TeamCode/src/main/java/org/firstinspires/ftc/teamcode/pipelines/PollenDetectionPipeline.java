@@ -734,8 +734,7 @@ public class PollenDetectionPipeline implements VisionProcessor {
     }
 
     /** Snapshot of all clumps this frame, sorted by estimated ball count. */
-    public List<Clump> getAllClumps() {
-        synchronized (lock) { return new ArrayList<>(results); }
+    public List<Clump> getAllClumps() {        synchronized (lock) { return new ArrayList<>(results); }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
