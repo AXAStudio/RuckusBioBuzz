@@ -4,7 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Pollen Camera Tester</title>
-    <link rel="stylesheet" href="styles.css">
+    <link rel="stylesheet" href="styles.css?v=20260521-4">
   </head>
   <body>
     <main class="shell">
@@ -20,14 +20,27 @@
       </section>
 
       <aside class="panel">
-        <div class="group">
+        <div class="group launch-group">
           <label for="cameraSelect">Camera</label>
           <select id="cameraSelect"></select>
+          <label for="pipelineSelect">Pipeline</label>
+          <select id="pipelineSelect">
+            <option value="improved">Ruckus Improved</option>
+            <option value="teamcode">TeamCode blobDetection.java</option>
+          </select>
           <button id="startButton" type="button">Start Camera</button>
           <button id="snapshotButton" type="button" disabled>Snapshot</button>
         </div>
 
         <div class="group metrics">
+          <div>
+            <span>Pipeline</span>
+            <strong id="pipelineLabel">Ruckus Improved</strong>
+          </div>
+          <div>
+            <span>Mask</span>
+            <strong id="maskLabel">0 px</strong>
+          </div>
           <div>
             <span>Clumps</span>
             <strong id="clumpCount">0</strong>
@@ -44,49 +57,73 @@
             <span>FPS</span>
             <strong id="fpsLabel">0</strong>
           </div>
+          <div>
+            <span>Best Pixel</span>
+            <strong id="bestPixelLabel">none</strong>
+          </div>
+          <div>
+            <span>Sample</span>
+            <strong id="sampleLabel">click video</strong>
+          </div>
         </div>
 
         <div class="group">
           <label>
             <span>Minimum Area</span>
-            <input id="minArea" type="range" min="50" max="3000" step="25" value="350">
-            <output id="minAreaValue">350</output>
+            <input id="minArea" type="range" min="25" max="3000" step="25" value="250">
+            <output id="minAreaValue">250</output>
           </label>
           <label>
             <span>Single Ball Area</span>
-            <input id="singleBallArea" type="range" min="200" max="6000" step="50" value="1600">
-            <output id="singleBallAreaValue">1600</output>
+            <input id="singleBallArea" type="range" min="500" max="20000" step="100" value="8500">
+            <output id="singleBallAreaValue">8500</output>
           </label>
           <label>
             <span>Merge Gap</span>
-            <input id="mergeGap" type="range" min="0" max="80" step="1" value="28">
-            <output id="mergeGapValue">28</output>
+            <input id="mergeGap" type="range" min="0" max="100" step="1" value="24">
+            <output id="mergeGapValue">24</output>
+          </label>
+          <label>
+            <span>Floor ROI Top</span>
+            <input id="roiTop" type="range" min="0" max="80" step="1" value="45">
+            <output id="roiTopValue">45</output>
+          </label>
+        </div>
+
+        <div class="group">
+          <label>
+            <span>Minimum Brightness</span>
+            <input id="minBrightness" type="range" min="20" max="220" step="1" value="105">
+            <output id="minBrightnessValue">105</output>
+          </label>
+          <label>
+            <span>Minimum Saturation</span>
+            <input id="minSaturation" type="range" min="10" max="220" step="1" value="110">
+            <output id="minSaturationValue">110</output>
+          </label>
+          <label>
+            <span>Yellow Score</span>
+            <input id="yellowScore" type="range" min="-20" max="180" step="1" value="75">
+            <output id="yellowScoreValue">75</output>
           </label>
         </div>
 
         <div class="group">
           <div class="constant-row">
-            <span>HSV Range A</span>
-            <strong>15,90,70 - 38,255,255</strong>
+            <span>TeamCode mode</span>
+            <strong>15x15, r&gt;150, g&gt;150, b&lt;50</strong>
           </div>
           <div class="constant-row">
-            <span>HSV Range B</span>
-            <strong>12,60,45 - 42,255,255</strong>
+            <span>Improved mode</span>
+            <strong>floor ROI + yellow components</strong>
           </div>
-          <div class="constant-row">
-            <span>RLE Open</span>
-            <strong>3 px</strong>
-          </div>
-          <div class="constant-row">
-            <span>RLE Close</span>
-            <strong>16 x 12 px</strong>
-          </div>
-        </div>
-
-        <div class="group">
           <label class="check">
-            <input id="showMask" type="checkbox">
+            <input id="showMask" type="checkbox" checked>
             <span>Show threshold mask</span>
+          </label>
+          <label class="check">
+            <input id="showGrid" type="checkbox">
+            <span>Show TeamCode grid</span>
           </label>
           <label class="check">
             <input id="mirrorVideo" type="checkbox">
@@ -94,10 +131,10 @@
           </label>
         </div>
 
-        <p class="note">Use this at <strong>localhost</strong>. Browser camera access will not work from a plain file URL.</p>
+        <p id="statusLabel" class="note">Use this at <strong>localhost</strong>. Browser camera access will not work from a plain file URL.</p>
       </aside>
     </main>
 
-    <script src="tester.js"></script>
+    <script src="tester.js?v=20260521-4"></script>
   </body>
 </html>

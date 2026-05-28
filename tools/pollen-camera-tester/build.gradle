@@ -22,11 +22,45 @@ idea {
 tasks.register('serve', Exec) {
     group = 'pollen camera tester'
     description = 'Start the pollen camera tester at http://localhost:8787/.'
+    workingDir projectDir
     commandLine 'python3', '-m', 'http.server', '8787'
 }
 
 tasks.register('serveLocalhost', Exec) {
     group = 'pollen camera tester'
     description = 'Start the pollen camera tester at http://127.0.0.1:8787/.'
+    workingDir projectDir
     commandLine 'python3', '-m', 'http.server', '8787', '--bind', '127.0.0.1'
+}
+
+tasks.register('tester', Exec) {
+    group = 'pollen camera tester'
+    description = 'Start the pollen camera tester and open it in your browser.'
+    workingDir projectDir
+    commandLine 'python3', '-c', '''
+import functools
+import http.server
+import socketserver
+import threading
+import time
+import webbrowser
+
+PORT = 8787
+URL = f"http://127.0.0.1:{PORT}/"
+
+handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=".")
+
+class ReusableTcpServer(socketserver.TCPServer):
+    allow_reuse_address = True
+
+server = ReusableTcpServer(("127.0.0.1", PORT), handler)
+
+def open_browser():
+    time.sleep(0.5)
+    webbrowser.open(URL)
+
+threading.Thread(target=open_browser, daemon=True).start()
+print(f"Pollen camera tester running at {URL}")
+server.serve_forever()
+'''
 }

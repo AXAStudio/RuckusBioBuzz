@@ -5,31 +5,40 @@ const emptyState = document.getElementById("emptyState");
 const cameraSelect = document.getElementById("cameraSelect");
 const startButton = document.getElementById("startButton");
 const snapshotButton = document.getElementById("snapshotButton");
+const pipelineSelect = document.getElementById("pipelineSelect");
 const showMask = document.getElementById("showMask");
+const showGrid = document.getElementById("showGrid");
 const mirrorVideo = document.getElementById("mirrorVideo");
 const videoWrap = document.querySelector(".video-wrap");
+const APP_VERSION = "20260521-4";
 
 const controls = {
   minArea: bindRange("minArea"),
   singleBallArea: bindRange("singleBallArea"),
   mergeGap: bindRange("mergeGap"),
+  roiTop: bindRange("roiTop"),
+  minBrightness: bindRange("minBrightness"),
+  minSaturation: bindRange("minSaturation"),
+  yellowScore: bindRange("yellowScore"),
 };
 
-const HSV_LO_A = [15, 90, 70];
-const HSV_HI_A = [38, 255, 255];
-const HSV_LO_B = [12, 60, 45];
-const HSV_HI_B = [42, 255, 255];
-const OPEN_RADIUS = 3;
-const CLOSE_H_GAP = 16;
-const CLOSE_V_RADIUS = 12;
-const MAX_AREA = 100000;
-const MAX_ASPECT = 5;
-const MAX_RUNS = 32000;
+const TEAMCODE_GRID = 15;
+const TEAMCODE_R_MIN = 150;
+const TEAMCODE_G_MIN = 150;
+const TEAMCODE_B_MAX = 50;
+const MAX_AREA = 160000;
+const MAX_ASPECT = 6;
+const MAX_COMPONENTS = 4096;
 
 const clumpCount = document.getElementById("clumpCount");
 const bestLabel = document.getElementById("bestLabel");
 const steeringLabel = document.getElementById("steeringLabel");
 const fpsLabel = document.getElementById("fpsLabel");
+const pipelineLabel = document.getElementById("pipelineLabel");
+const maskLabel = document.getElementById("maskLabel");
+const bestPixelLabel = document.getElementById("bestPixelLabel");
+const sampleLabel = document.getElementById("sampleLabel");
+const statusLabel = document.getElementById("statusLabel");
 
 let stream = null;
 let sourceCanvas = document.createElement("canvas");
@@ -37,6 +46,9 @@ let sourceCtx = sourceCanvas.getContext("2d", { willReadFrequently: true });
 let animationId = 0;
 let lastFpsTime = performance.now();
 let frames = 0;
+let lastFrame = null;
+let lastResult = null;
+let sampledPixel = null;
 
 function bindRange(id) {
   const input = document.getElementById(id);
@@ -73,8 +85,8 @@ async function startCamera() {
   const deviceId = cameraSelect.value;
   const constraints = {
     video: {
-      width: { ideal: 640 },
-      height: { ideal: 480 },
+      width: { ideal: 960 },
+      height: { ideal: 720 },
       frameRate: { ideal: 30 },
       ...(deviceId ? { deviceId: { exact: deviceId } } : {}),
     },
@@ -101,8 +113,8 @@ function stopCamera() {
 }
 
 function resizeCanvases() {
-  const width = video.videoWidth || 640;
-  const height = video.videoHeight || 480;
+  const width = video.videoWidth || 960;
+  const height = video.videoHeight || 720;
   if (overlay.width !== width || overlay.height !== height) {
     overlay.width = width;
     overlay.height = height;
@@ -118,31 +130,309 @@ function processFrame(now) {
 
   sourceCtx.drawImage(video, 0, 0, width, height);
   const frame = sourceCtx.getImageData(0, 0, width, height);
-  const mask = buildMask(frame.data, width, height);
-  const runs = rleClose(rleOpen(buildRle(mask, width, height), width), width);
-  const labeled = labelRuns(runs);
-  const clumps = buildClumps(labeled.components, width);
-  const displayMask = showMask.checked ? runsToMask(runs, width, height) : mask;
-  draw(frame, displayMask, clumps, width, height);
-  updateMetrics(clumps, now);
+  lastFrame = frame;
+  const result = pipelineSelect.value === "teamcode"
+    ? runTeamCodePipeline(frame.data, width, height)
+    : runImprovedPipeline(frame.data, width, height);
 
+  lastResult = result;
+  draw(frame, result, width, height);
+  updateMetrics(result, now);
   animationId = requestAnimationFrame(processFrame);
 }
 
-function buildMask(data, width, height) {
+function runImprovedPipeline(data, width, height) {
+  const threshold = buildImprovedMask(data, width, height);
+  const components = labelMaskComponents(threshold.mask, width, height);
+  const clumps = buildClumps(components, width);
+  return {
+    name: "Ruckus Improved",
+    type: "improved",
+    mask: threshold.mask,
+    clumps,
+    grid: [],
+    maskPixels: threshold.maskPixels,
+    debug: threshold.debug,
+  };
+}
+
+function runTeamCodePipeline(data, width, height) {
   const mask = new Uint8Array(width * height);
+  const clumps = [];
+  const cellW = width / TEAMCODE_GRID;
+  const cellH = height / TEAMCODE_GRID;
+
+  for (let row = 0; row < TEAMCODE_GRID; row++) {
+    for (let col = 0; col < TEAMCODE_GRID; col++) {
+      const x1 = Math.floor((width * col) / TEAMCODE_GRID);
+      const y1 = Math.floor((height * row) / TEAMCODE_GRID);
+      const x2 = Math.min(width, Math.floor((width * (col + 1)) / TEAMCODE_GRID));
+      const y2 = Math.min(height, Math.floor((height * (row + 1)) / TEAMCODE_GRID));
+      const mean = meanRgb(data, width, x1, y1, x2, y2);
+      const detected = mean.r > TEAMCODE_R_MIN && mean.g > TEAMCODE_G_MIN && mean.b < TEAMCODE_B_MAX;
+
+      if (!detected) continue;
+      fillMaskRect(mask, width, x1, y1, x2, y2);
+      const area = (x2 - x1) * (y2 - y1);
+      const centerX = x1 + (x2 - x1) / 2;
+      const centerY = y1 + (y2 - y1) / 2;
+      clumps.push({
+        x1,
+        y1,
+        x2: x2 - 1,
+        y2: y2 - 1,
+        centerX,
+        centerY,
+        area,
+        estimatedBallCount: 1,
+        steeringError: (centerX - width / 2) / (width / 2),
+        label: `${col},${row}`,
+        mean,
+      });
+    }
+  }
+
+  return {
+    name: "TeamCode blobDetection",
+    type: "teamcode",
+    mask,
+    clumps: mergeTeamCodeCells(clumps, width),
+    grid: clumps,
+    maskPixels: countMask(mask),
+    debug: findBestYellowPixel(data, width, height),
+    cellW,
+    cellH,
+  };
+}
+
+function buildImprovedMask(data, width, height) {
+  const mask = new Uint8Array(width * height);
+  const minBrightness = Number(controls.minBrightness.value);
+  const minSaturation = Number(controls.minSaturation.value);
+  const minYellowScore = Number(controls.yellowScore.value);
+  const roiTop = Math.floor(height * Number(controls.roiTop.value) / 100);
+  const best = { score: -Infinity, x: 0, y: 0, r: 0, g: 0, b: 0, h: 0, s: 0, v: 0 };
 
   for (let i = 0, p = 0; i < data.length; i += 4, p++) {
-    const [h, s, v] = rgbToOpenCvHsv(data[i], data[i + 1], data[i + 2]);
-    if (inRange([h, s, v], HSV_LO_A, HSV_HI_A) || inRange([h, s, v], HSV_LO_B, HSV_HI_B)) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const [h, s, v] = rgbToOpenCvHsv(r, g, b);
+    const yellowScore = computeYellowScore(r, g, b, s);
+    if (yellowScore > best.score) {
+      best.score = yellowScore;
+      best.x = p % width;
+      best.y = Math.floor(p / width);
+      best.r = r;
+      best.g = g;
+      best.b = b;
+      best.h = h;
+      best.s = s;
+      best.v = v;
+    }
+
+    const y = Math.floor(p / width);
+    if (y < roiTop) continue;
+
+    const yellowDominant = r >= 150 && g >= 115 && b <= 140 && Math.min(r, g) - b >= 45;
+    const saturatedYellow = h >= 16 && h <= 31 && s >= minSaturation && v >= minBrightness;
+    const rgbYellow = yellowDominant && yellowScore >= minYellowScore;
+
+    if (saturatedYellow && rgbYellow) {
       mask[p] = 1;
     }
   }
-  return mask;
+
+  const cleaned = suppressTinyNoise(mask, width, height);
+  const cleanedPixels = countMask(cleaned);
+  const rawPixels = countMask(mask);
+
+  return {
+    mask: cleanedPixels > 0 || rawPixels === 0 ? cleaned : mask,
+    maskPixels: rawPixels,
+    debug: best,
+  };
 }
 
-function inRange(hsv, low, high) {
-  return hsv[0] >= low[0] && hsv[0] <= high[0] && hsv[1] >= low[1] && hsv[1] <= high[1] && hsv[2] >= low[2] && hsv[2] <= high[2];
+function labelMaskComponents(mask, width, height) {
+  const visited = new Uint8Array(mask.length);
+  const components = [];
+  const queue = new Int32Array(mask.length);
+  const minArea = Math.max(1, Math.floor(Number(controls.minArea.value) / 3));
+
+  for (let start = 0; start < mask.length && components.length < MAX_COMPONENTS; start++) {
+    if (!mask[start] || visited[start]) continue;
+
+    let head = 0;
+    let tail = 0;
+    let area = 0;
+    let sumX = 0;
+    let sumY = 0;
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    visited[start] = 1;
+    queue[tail++] = start;
+
+    while (head < tail) {
+      const p = queue[head++];
+      const x = p % width;
+      const y = Math.floor(p / width);
+      area++;
+      sumX += x;
+      sumY += y;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+
+      enqueueNeighbor(p - 1, x > 0);
+      enqueueNeighbor(p + 1, x < width - 1);
+      enqueueNeighbor(p - width, y > 0);
+      enqueueNeighbor(p + width, y < height - 1);
+    }
+
+    if (area >= minArea) {
+      components.push({ area, sumX, sumY, minX, minY, maxX, maxY });
+    }
+  }
+
+  return components;
+
+  function enqueueNeighbor(index, inBounds) {
+    if (!inBounds || visited[index] || !mask[index]) return;
+    visited[index] = 1;
+    queue[tail++] = index;
+  }
+}
+
+function computeYellowScore(r, g, b, saturation) {
+  const yellow = Math.min(r, g) - b;
+  const balanceBonus = Math.max(0, 80 - Math.abs(r - g)) * 0.12;
+  const saturationBonus = saturation * 0.08;
+  return Math.round(yellow + balanceBonus + saturationBonus);
+}
+
+function findBestYellowPixel(data, width, height) {
+  const best = { score: -Infinity, x: 0, y: 0, r: 0, g: 0, b: 0, h: 0, s: 0, v: 0 };
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    const r = data[i];
+    const g = data[i + 1];
+    const b = data[i + 2];
+    const [h, s, v] = rgbToOpenCvHsv(r, g, b);
+    const score = computeYellowScore(r, g, b, s);
+    if (score > best.score) {
+      best.score = score;
+      best.x = p % width;
+      best.y = Math.floor(p / width);
+      best.r = r;
+      best.g = g;
+      best.b = b;
+      best.h = h;
+      best.s = s;
+      best.v = v;
+    }
+  }
+  return best;
+}
+
+function suppressTinyNoise(mask, width, height) {
+  const cleaned = new Uint8Array(mask.length);
+  for (let y = 1; y < height - 1; y++) {
+    const row = y * width;
+    for (let x = 1; x < width - 1; x++) {
+      const p = row + x;
+      if (!mask[p]) continue;
+      const neighbors =
+        mask[p - 1] + mask[p + 1] +
+        mask[p - width] + mask[p + width] +
+        mask[p - width - 1] + mask[p - width + 1] +
+        mask[p + width - 1] + mask[p + width + 1];
+      if (neighbors >= 2) cleaned[p] = 1;
+    }
+  }
+  return cleaned;
+}
+
+function meanRgb(data, width, x1, y1, x2, y2) {
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  let count = 0;
+
+  for (let y = y1; y < y2; y++) {
+    for (let x = x1; x < x2; x++) {
+      const i = (y * width + x) * 4;
+      r += data[i];
+      g += data[i + 1];
+      b += data[i + 2];
+      count++;
+    }
+  }
+
+  return {
+    r: Math.round(r / count),
+    g: Math.round(g / count),
+    b: Math.round(b / count),
+  };
+}
+
+function fillMaskRect(mask, width, x1, y1, x2, y2) {
+  for (let y = y1; y < y2; y++) {
+    const base = y * width;
+    for (let x = x1; x < x2; x++) {
+      mask[base + x] = 1;
+    }
+  }
+}
+
+function mergeTeamCodeCells(cells, frameWidth) {
+  const gap = Number(controls.mergeGap.value);
+  const parent = cells.map((_, index) => index);
+  const rank = cells.map(() => 0);
+
+  for (let i = 0; i < cells.length; i++) {
+    for (let j = i + 1; j < cells.length; j++) {
+      if (boxesClose(cells[i], cells[j], gap)) union(parent, rank, i, j);
+    }
+  }
+
+  const groups = new Map();
+  cells.forEach((cell, index) => {
+    const root = find(parent, index);
+    const group = groups.get(root) || {
+      weightedX: 0,
+      weightedY: 0,
+      area: 0,
+      x1: Infinity,
+      y1: Infinity,
+      x2: -Infinity,
+      y2: -Infinity,
+      cells: 0,
+    };
+    group.weightedX += cell.centerX * cell.area;
+    group.weightedY += cell.centerY * cell.area;
+    group.area += cell.area;
+    group.x1 = Math.min(group.x1, cell.x1);
+    group.y1 = Math.min(group.y1, cell.y1);
+    group.x2 = Math.max(group.x2, cell.x2);
+    group.y2 = Math.max(group.y2, cell.y2);
+    group.cells++;
+    groups.set(root, group);
+  });
+
+  return [...groups.values()].map((group) => {
+    const centerX = group.weightedX / group.area;
+    const centerY = group.weightedY / group.area;
+    return {
+      ...group,
+      centerX,
+      centerY,
+      estimatedBallCount: group.cells,
+      steeringError: (centerX - frameWidth / 2) / (frameWidth / 2),
+    };
+  }).sort((a, b) => b.area - a.area);
 }
 
 function rgbToOpenCvHsv(r, g, b) {
@@ -163,138 +453,6 @@ function rgbToOpenCvHsv(r, g, b) {
   if (h < 0) h += 360;
   const s = max === 0 ? 0 : delta / max;
   return [Math.round(h / 2), Math.round(s * 255), Math.round(max * 255)];
-}
-
-function buildRle(mask, width, height) {
-  const runs = [];
-  for (let y = 0; y < height && runs.length < MAX_RUNS - 1; y++) {
-    const base = y * width;
-    let inside = false;
-    let start = 0;
-    for (let x = 0; x < width; x++) {
-      const foreground = mask[base + x] !== 0;
-      if (foreground && !inside) {
-        start = x;
-        inside = true;
-      } else if (!foreground && inside) {
-        runs.push({ row: y, start, end: x - 1 });
-        inside = false;
-      }
-    }
-    if (inside) runs.push({ row: y, start, end: width - 1 });
-  }
-  return runs;
-}
-
-function rleOpen(inputRuns, width) {
-  if (inputRuns.length === 0) return [];
-  const runs = sortRuns(inputRuns);
-  const opened = [];
-
-  for (let i = 0; i < runs.length; i++) {
-    const run = runs[i];
-    const nextStart = run.start + OPEN_RADIUS;
-    const nextEnd = run.end - OPEN_RADIUS;
-    if (nextStart > nextEnd) continue;
-
-    let hasNeighbor = false;
-    for (let j = 0; j < runs.length && !hasNeighbor; j++) {
-      const other = runs[j];
-      const dy = other.row - run.row;
-      if (dy === 0 || dy < -OPEN_RADIUS) continue;
-      if (dy > OPEN_RADIUS) break;
-      if (other.start <= nextEnd && other.end >= nextStart) hasNeighbor = true;
-    }
-    if (!hasNeighbor) continue;
-
-    opened.push({
-      row: run.row,
-      start: Math.max(0, nextStart - OPEN_RADIUS),
-      end: Math.min(width - 1, nextEnd + OPEN_RADIUS),
-    });
-  }
-
-  return opened;
-}
-
-function rleClose(inputRuns, width) {
-  if (inputRuns.length === 0) return [];
-  const dilated = inputRuns.map((run) => ({
-    row: run.row,
-    start: Math.max(0, run.start - CLOSE_H_GAP),
-    end: Math.min(width - 1, run.end + CLOSE_H_GAP),
-  }));
-
-  const runs = sortRuns(dilated);
-  const merged = [];
-  for (const run of runs) {
-    if (merged.length === 0) {
-      merged.push({ ...run });
-      continue;
-    }
-
-    const previous = merged[merged.length - 1];
-    const dy = run.row - previous.row;
-    if (dy <= CLOSE_V_RADIUS && run.start <= previous.end + 1) {
-      if (run.end > previous.end) previous.end = run.end;
-    } else {
-      merged.push({ ...run });
-    }
-  }
-
-  const closed = [];
-  for (const run of merged) {
-    const nextStart = run.start + CLOSE_H_GAP;
-    const nextEnd = run.end - CLOSE_H_GAP;
-    if (nextStart <= nextEnd) {
-      closed.push({ row: run.row, start: nextStart, end: nextEnd });
-    }
-  }
-  return closed;
-}
-
-function labelRuns(inputRuns) {
-  const runs = sortRuns(inputRuns);
-  const parent = runs.map((_, index) => index);
-  const rank = runs.map(() => 0);
-
-  let previousStart = 0;
-  for (let i = 0; i < runs.length; i++) {
-    const currentRow = runs[i].row;
-    while (previousStart < i && runs[previousStart].row < currentRow - 1) previousStart++;
-    for (let j = previousStart; j < i; j++) {
-      if (runs[j].row !== currentRow - 1) continue;
-      if (runs[j].start > runs[i].end || runs[j].end < runs[i].start) continue;
-      union(parent, rank, i, j);
-    }
-  }
-
-  const components = new Map();
-  for (let i = 0; i < runs.length; i++) {
-    const root = find(parent, i);
-    const run = runs[i];
-    const length = run.end - run.start + 1;
-    const midX = run.start + Math.floor(length / 2);
-    const component = components.get(root) || {
-      sumX: 0,
-      sumY: 0,
-      area: 0,
-      minX: Infinity,
-      minY: Infinity,
-      maxX: -Infinity,
-      maxY: -Infinity,
-    };
-    component.area += length;
-    component.sumX += midX * length;
-    component.sumY += run.row * length;
-    component.minX = Math.min(component.minX, run.start);
-    component.minY = Math.min(component.minY, run.row);
-    component.maxX = Math.max(component.maxX, run.end);
-    component.maxY = Math.max(component.maxY, run.row);
-    components.set(root, component);
-  }
-
-  return { runs, components: [...components.values()] };
 }
 
 function buildClumps(components, frameWidth) {
@@ -353,27 +511,21 @@ function buildClumps(components, frameWidth) {
     groups.set(root, group);
   });
 
-  return [...groups.values()]
-    .map((group) => {
-      const centerX = group.weightedX / group.area;
-      const centerY = group.weightedY / group.area;
-      return {
-        ...group,
-        centerX,
-        centerY,
-        estimatedBallCount: Math.max(1, Math.round(group.area / singleBallArea)),
-        steeringError: (centerX - frameWidth / 2) / (frameWidth / 2),
-      };
-    })
-    .sort((a, b) => b.estimatedBallCount - a.estimatedBallCount);
+  return [...groups.values()].map((group) => {
+    const centerX = group.weightedX / group.area;
+    const centerY = group.weightedY / group.area;
+    return {
+      ...group,
+      centerX,
+      centerY,
+      estimatedBallCount: Math.max(1, Math.round(group.area / singleBallArea)),
+      steeringError: (centerX - frameWidth / 2) / (frameWidth / 2),
+    };
+  }).sort((a, b) => b.area - a.area);
 }
 
 function boxesClose(a, b, gap) {
-  return a.x1 - gap < b.x2 && a.x2 + gap > b.x1 && a.y1 - gap < b.y2 && a.y2 + gap > b.y1;
-}
-
-function sortRuns(runs) {
-  return [...runs].sort((a, b) => a.row - b.row || a.start - b.start);
+  return a.x1 - gap <= b.x2 && a.x2 + gap >= b.x1 && a.y1 - gap <= b.y2 && a.y2 + gap >= b.y1;
 }
 
 function find(parent, index) {
@@ -396,39 +548,79 @@ function union(parent, rank, a, b) {
   }
 }
 
-function runsToMask(runs, width, height) {
-  const mask = new Uint8Array(width * height);
-  for (const run of runs) {
-    const base = run.row * width;
-    for (let x = run.start; x <= run.end && x < width; x++) {
-      if (run.row >= 0 && run.row < height) mask[base + x] = 1;
-    }
-  }
-  return mask;
+function countMask(mask) {
+  let count = 0;
+  for (const value of mask) count += value ? 1 : 0;
+  return count;
 }
 
-function draw(frame, mask, clumps, width, height) {
+function draw(frame, result, width, height) {
   ctx.clearRect(0, 0, width, height);
 
   if (showMask.checked) {
-    const maskImage = ctx.createImageData(width, height);
-    for (let p = 0, i = 0; p < mask.length; p++, i += 4) {
-      const on = mask[p] ? 255 : 0;
-      maskImage.data[i] = on;
-      maskImage.data[i + 1] = on;
-      maskImage.data[i + 2] = on;
-      maskImage.data[i + 3] = 180;
-    }
-    ctx.putImageData(maskImage, 0, 0);
+    drawMask(result.mask, width, height);
   }
 
-  ctx.strokeStyle = "rgba(255,255,255,0.8)";
+  drawCenterLine(width, height);
+  if (result.type === "improved") {
+    drawRoiLine(width, height);
+  }
+  if (showGrid.checked || result.type === "teamcode") {
+    drawGrid(width, height, result.grid);
+  }
+  drawClumps(result.clumps, width, height, result.type);
+}
+
+function drawRoiLine(width, height) {
+  const y = Math.floor(height * Number(controls.roiTop.value) / 100);
+  ctx.strokeStyle = "rgba(90,167,255,0.95)";
+  ctx.lineWidth = 2;
+  ctx.setLineDash([10, 7]);
+  ctx.beginPath();
+  ctx.moveTo(0, y);
+  ctx.lineTo(width, y);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
+function drawMask(mask, width, height) {
+  const maskImage = ctx.createImageData(width, height);
+  for (let p = 0, i = 0; p < mask.length; p++, i += 4) {
+    if (mask[p]) {
+      maskImage.data[i] = 255;
+      maskImage.data[i + 1] = 220;
+      maskImage.data[i + 2] = 40;
+      maskImage.data[i + 3] = 145;
+    }
+  }
+  ctx.putImageData(maskImage, 0, 0);
+}
+
+function drawCenterLine(width, height) {
+  ctx.strokeStyle = "rgba(255,255,255,0.72)";
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(width / 2, 0);
   ctx.lineTo(width / 2, height);
   ctx.stroke();
+}
 
+function drawGrid(width, height, detectedCells) {
+  const detected = new Set(detectedCells.map((cell) => `${cell.x1}:${cell.y1}`));
+  ctx.lineWidth = 1;
+  for (let row = 0; row < TEAMCODE_GRID; row++) {
+    for (let col = 0; col < TEAMCODE_GRID; col++) {
+      const x = Math.floor((width * col) / TEAMCODE_GRID);
+      const y = Math.floor((height * row) / TEAMCODE_GRID);
+      const x2 = Math.floor((width * (col + 1)) / TEAMCODE_GRID);
+      const y2 = Math.floor((height * (row + 1)) / TEAMCODE_GRID);
+      ctx.strokeStyle = detected.has(`${x}:${y}`) ? "rgba(94,226,122,0.95)" : "rgba(255,255,255,0.18)";
+      ctx.strokeRect(x, y, x2 - x, y2 - y);
+    }
+  }
+}
+
+function drawClumps(clumps, width, height, type) {
   clumps.forEach((clump, index) => {
     const primary = index === 0;
     const color = primary ? "#5ee27a" : "#ffc247";
@@ -441,14 +633,10 @@ function draw(frame, mask, clumps, width, height) {
     ctx.arc(clump.centerX, clump.centerY, 6, 0, Math.PI * 2);
     ctx.fill();
 
-    const label = `~${clump.estimatedBallCount} ${clump.estimatedBallCount === 1 ? "ball" : "balls"}`;
-    ctx.font = "16px system-ui, sans-serif";
-    const textWidth = ctx.measureText(label).width;
-    const labelY = Math.max(22, clump.y1 - 8);
-    ctx.fillStyle = "rgba(10,12,14,0.85)";
-    ctx.fillRect(clump.x1 + 3, labelY - 18, textWidth + 9, 23);
-    ctx.fillStyle = color;
-    ctx.fillText(label, clump.x1 + 8, labelY);
+    const unit = type === "teamcode" ? "cells" : "balls";
+    const count = clump.estimatedBallCount;
+    const label = `${count} ${count === 1 ? unit.replace(/s$/, "") : unit}`;
+    drawLabel(label, clump.x1, Math.max(22, clump.y1 - 8), color);
   });
 
   if (clumps[0]) {
@@ -463,6 +651,15 @@ function draw(frame, mask, clumps, width, height) {
   }
 }
 
+function drawLabel(label, x, y, color) {
+  ctx.font = "16px system-ui, sans-serif";
+  const textWidth = ctx.measureText(label).width;
+  ctx.fillStyle = "rgba(10,12,14,0.86)";
+  ctx.fillRect(x + 3, y - 18, textWidth + 9, 23);
+  ctx.fillStyle = color;
+  ctx.fillText(label, x + 8, y);
+}
+
 function drawArrow(x1, y1, x2, y2) {
   const angle = Math.atan2(y2 - y1, x2 - x1);
   const headLength = 12;
@@ -475,11 +672,16 @@ function drawArrow(x1, y1, x2, y2) {
   ctx.stroke();
 }
 
-function updateMetrics(clumps, now) {
-  const best = clumps[0];
-  clumpCount.textContent = String(clumps.length);
-  bestLabel.textContent = best ? `~${best.estimatedBallCount} / ${Math.round(best.area)}px` : "none";
+function updateMetrics(result, now) {
+  const best = result.clumps[0];
+  clumpCount.textContent = String(result.clumps.length);
+  bestLabel.textContent = best ? `${best.estimatedBallCount} / ${Math.round(best.area)}px` : "none";
   steeringLabel.textContent = best ? best.steeringError.toFixed(3) : "0.000";
+  pipelineLabel.textContent = result.name;
+  maskLabel.textContent = `${result.maskPixels} px`;
+  bestPixelLabel.textContent = result.debug ? formatPixelDebug(result.debug) : "none";
+  sampleLabel.textContent = sampledPixel ? formatPixelDebug(sampledPixel) : "click video";
+  statusLabel.textContent = buildStatus(result);
 
   frames++;
   if (now - lastFpsTime >= 500) {
@@ -487,6 +689,50 @@ function updateMetrics(clumps, now) {
     frames = 0;
     lastFpsTime = now;
   }
+}
+
+function buildStatus(result) {
+  if (result.clumps.length > 0) {
+    return `${result.name} active. Version ${APP_VERSION}.`;
+  }
+  if (result.maskPixels > 0) {
+    return `${result.name} sees yellow-colored pixels, but none passed the area/shape filters. Lower Minimum Area or enable Show threshold mask. Version ${APP_VERSION}.`;
+  }
+  if (result.debug && Number.isFinite(result.debug.score)) {
+    return `${result.name} sees no pixels passing the threshold. Best yellow score is ${result.debug.score}; lower Yellow Score, Brightness, or Saturation if the target is visible. Version ${APP_VERSION}.`;
+  }
+  return `${result.name} active. Version ${APP_VERSION}.`;
+}
+
+function formatPixelDebug(pixel) {
+  return `rgb ${pixel.r},${pixel.g},${pixel.b} hsv ${pixel.h},${pixel.s},${pixel.v} score ${pixel.score}`;
+}
+
+function sampleAtClientPoint(event) {
+  if (!lastFrame) return;
+  const rect = videoWrap.getBoundingClientRect();
+  let x = Math.round(((event.clientX - rect.left) / rect.width) * lastFrame.width);
+  const y = Math.round(((event.clientY - rect.top) / rect.height) * lastFrame.height);
+  if (mirrorVideo.checked) x = lastFrame.width - x;
+  x = Math.max(0, Math.min(lastFrame.width - 1, x));
+  const yy = Math.max(0, Math.min(lastFrame.height - 1, y));
+  const i = (yy * lastFrame.width + x) * 4;
+  const r = lastFrame.data[i];
+  const g = lastFrame.data[i + 1];
+  const b = lastFrame.data[i + 2];
+  const [h, s, v] = rgbToOpenCvHsv(r, g, b);
+  sampledPixel = {
+    x,
+    y: yy,
+    r,
+    g,
+    b,
+    h,
+    s,
+    v,
+    score: computeYellowScore(r, g, b, s),
+  };
+  sampleLabel.textContent = formatPixelDebug(sampledPixel);
 }
 
 function saveSnapshot() {
@@ -509,9 +755,25 @@ startButton.addEventListener("click", () => {
   });
 });
 snapshotButton.addEventListener("click", saveSnapshot);
+pipelineSelect.addEventListener("change", () => {
+  const activeName = pipelineSelect.value === "teamcode" ? "TeamCode blobDetection" : "Ruckus Improved";
+  pipelineLabel.textContent = activeName;
+  statusLabel.textContent = `${activeName} selected. Version ${APP_VERSION}.`;
+  if (lastFrame) {
+    const result = pipelineSelect.value === "teamcode"
+      ? runTeamCodePipeline(lastFrame.data, lastFrame.width, lastFrame.height)
+      : runImprovedPipeline(lastFrame.data, lastFrame.width, lastFrame.height);
+    lastResult = result;
+    draw(lastFrame, result, lastFrame.width, lastFrame.height);
+    updateMetrics(result, performance.now());
+  }
+});
 mirrorVideo.addEventListener("change", () => {
   videoWrap.classList.toggle("mirrored", mirrorVideo.checked);
 });
+videoWrap.addEventListener("click", sampleAtClientPoint);
+statusLabel.textContent = `Loaded Pollen Camera Tester ${APP_VERSION}.`;
+window.__pollenCameraTesterVersion = APP_VERSION;
 
 if (!navigator.mediaDevices?.getUserMedia) {
   emptyState.innerHTML = "<h1>Camera unavailable</h1><p>This browser does not support webcam access.</p>";

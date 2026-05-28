@@ -27,3 +27,9 @@ tasks.register('visualizer') {
     description = 'Start the Pedro visualizer and open it in your browser.'
     dependsOn ':PedroVisualizer:visualizer'
 }
+
+tasks.register('pollenCameraTester') {
+    group = 'pollen camera tester'
+    description = 'Start the pollen camera tester and open it in your browser.'
+    dependsOn ':PollenCameraTester:tester'
+}
