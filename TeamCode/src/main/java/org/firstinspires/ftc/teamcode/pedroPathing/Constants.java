@@ -65,8 +65,8 @@ public class Constants {
     private static double kFFront = 0.0130;
     private static double kFBack = 0.0190;
 
-    private static double dtLength = 271.148; //distance from robot center to front/back pod center
-    private static double dtWidth = 270.7; // distance from robot center to left/right pod center
+    private static double dtLength = 146.420; //distance from robot center to front/back pod center
+    private static double dtWidth = 154.240; // distance from robot center to left/right pod center
 
     private static CoaxialPod leftFront(HardwareMap hardwareMap) {
         CoaxialPod pod = new CoaxialPod(hardwareMap, "sm2", "ss2", "se2",
