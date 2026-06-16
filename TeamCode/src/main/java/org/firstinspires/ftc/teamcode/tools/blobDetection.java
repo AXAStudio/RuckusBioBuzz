@@ -1,5 +1,7 @@
 package org.firstinspires.ftc.teamcode.tools;
 
+import static java.lang.Double.NaN;
+
 import org.firstinspires.ftc.robotcore.internal.camera.calibration.CameraCalibration;
 import org.firstinspires.ftc.vision.VisionProcessor;
 import org.opencv.core.Core;
@@ -11,6 +13,11 @@ import java.util.ArrayList;
 import java.util.List;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+
+import com.qualcomm.robotcore.eventloop.opmode.Disabled;
+
+@Disabled
 
 public class blobDetection implements VisionProcessor {
     public String hex = "";
@@ -38,23 +45,27 @@ public class blobDetection implements VisionProcessor {
     @Override
     public Object processFrame(Mat frame, long captureTimeNanoes) {
         xList.clear();
+        lastLeftX = frameWidth;
+        lastTopY = frameHeight;
+        lastBottomY= 0;
+        lastRightX = 0;
 
 
         Mat rgb = new Mat();
-        Imgproc.cvtColor(frame, rgb, Imgproc.COLOR_YCrCb2RGB);
+        Imgproc.cvtColor(frame, rgb, Imgproc.COLOR_RGBA2RGB);
         for (int i = 0; i < res; i++) {
             for (int u = 0; u < res; u++) {
-                x = Math.round(frameWidth * i / res);
-                y = Math.round(frameHeight * u / res);
-                x2 = Math.round(x + frameWidth / res);
-                y2 = Math.round(y + frameHeight / res);
+                x = (int)Math.round(frameWidth * i / res);
+                y = (int)Math.round(frameHeight * u / res);
+                x2 = (int)Math.round(x + frameWidth / res);
+                y2 = (int)Math.round(y + frameHeight / res);
                 Mat patch = rgb.submat(y, y2, x, x2);
                 Scalar mean = Core.mean(patch);
                 int r = (int) mean.val[0];
                 int g = (int) mean.val[1];
                 int b = (int) mean.val[2];
 
-                if (r > 150 && g > 150 && b < 50) {
+                if (r > 130 && g > 130 && b < 100) { // must tune on field before using this code
                     xList.add((x+x2)/2);
                     //UNNECESSARY TESTING MASK EFFICIENCY BOOST:
                     if(y < lastTopY) {
@@ -67,7 +78,7 @@ public class blobDetection implements VisionProcessor {
                     if(x< lastLeftX ){
                         lastLeftX =x;
                     }
-                    if(x2< lastRightX ){
+                    if(x2> lastRightX ){
                         lastRightX = x2;
                     }
 
@@ -77,11 +88,14 @@ public class blobDetection implements VisionProcessor {
         //Quartile Logic
         //Get Median
         rgb.release();
-        Mat patch = rgb.submat(y, y2, x, x2);
-        Scalar mean = Core.mean(patch);
-        patch.release();  // add this
-        median = getMedian.getMedianDown(xList);
-        rawAngle = -(frameWidth/2-median);
+        if(!xList.isEmpty()) {
+            median = getMedian.getMedianDown(xList);
+            rawAngle = -(frameWidth/2-median);
+        }else{
+            rawAngle = NaN;
+        }
+
+
 
         return null;
     }
@@ -91,19 +105,21 @@ public class blobDetection implements VisionProcessor {
                             float scaleBmpPxToCanvasPx, float scaleCanvasDensity, Object userContext) {
         int lineWidth = 5;
         android.graphics.Paint paint = new android.graphics.Paint();
-// where you should put the line stuff
-// Correct parameter order: (startX, startY, stopX, stopY)
         paint.setColor(Color.BLACK);
         paint.setStrokeWidth(lineWidth);
-        paint.setStyle(android.graphics.Paint.Style.FILL);
-        canvas.drawLine(lastLeftX - lineWidth, lastTopY - lineWidth, lastLeftX - lineWidth, lastBottomY + lineWidth, paint);
-        canvas.drawLine(lastLeftX - lineWidth, lastTopY - lineWidth, lastRightX + lineWidth, lastTopY - lineWidth, paint);
-        canvas.drawLine(lastRightX + lineWidth, lastTopY - lineWidth, lastRightX + lineWidth, lastBottomY + lineWidth, paint);
-        canvas.drawLine(lastLeftX - lineWidth, lastBottomY + lineWidth, lastRightX + lineWidth, lastBottomY + lineWidth, paint);
-        android.graphics.Paint paint2 = new android.graphics.Paint();
-        paint.setColor(Color.RED);
-        paint.setStrokeWidth(lineWidth);
-        paint.setStyle(android.graphics.Paint.Style.FILL);
-        canvas.drawLine((float)median,0,(float)median, (float)frameHeight, paint2);
+        paint.setStyle(Paint.Style.STROKE);
+        if(rawAngle != NaN && !xList.isEmpty()) {
+            canvas.drawRect((lastLeftX - lineWidth) * scaleBmpPxToCanvasPx, (lastTopY - lineWidth) * scaleBmpPxToCanvasPx, (lastRightX + lineWidth) * scaleBmpPxToCanvasPx, (lastBottomY + lineWidth) * scaleBmpPxToCanvasPx, paint);
+        }
+        int lineWidth2 = 10;
+        Paint paint2 = new Paint();
+        paint2.setColor(Color.RED);
+        paint2.setStrokeWidth(lineWidth2);
+        paint2.setStyle(Paint.Style.FILL);
+        if(rawAngle != NaN && !xList.isEmpty()) {
+            canvas.drawLine((float) median*scaleBmpPxToCanvasPx, 0, (float) median*scaleBmpPxToCanvasPx, (float) frameHeight*scaleBmpPxToCanvasPx, paint2);
+        }
+
     }
 }
+

@@ -12,6 +12,10 @@ import java.util.ArrayList;
 import java.util.List;
 import android.graphics.Canvas;
 import android.graphics.Color;
+import android.graphics.Paint;
+
+import com.qualcomm.robotcore.eventloop.opmode.Disabled;
+
 
 public class colorTuner implements VisionProcessor {
 
@@ -45,34 +49,52 @@ public class colorTuner implements VisionProcessor {
 
     @Override
     public Object processFrame(Mat frame, long captureTimeNanoes) {
-        xList.clear();
-
+        if (frameWidth == 0 || frameHeight == 0) return null;
+        if (frame == null || frame.empty()) return null;
 
         Mat rgb = new Mat();
-        Imgproc.cvtColor(frame, rgb, Imgproc.COLOR_YCrCb2RGB);
-        x = frameWidth/2-frameWidth/10;
-        x2 = frameWidth/2+frameWidth/10;
-        y = frameHeight/2-frameHeight/10;
-        y2 = frameHeight/2+frameHeight/10;
+        Imgproc.cvtColor(frame, rgb, Imgproc.COLOR_RGBA2RGB);
+
+        x  = (int)(frameWidth  * 0.4f);
+        x2 = (int)(frameWidth  * 0.6f);
+        y  = (int)(frameHeight * 0.4f);
+        y2 = (int)(frameHeight * 0.6f);
+
+        if (x < 0 || y < 0 || x2 > rgb.cols() || y2 > rgb.rows()) {
+            rgb.release();
+            return null;
+        }
+
         Mat patch = rgb.submat(y, y2, x, x2);
         Scalar mean = Core.mean(patch);
-        r= (int)mean.val[0];
-        g= (int)mean.val[1];
-        b= (int)mean.val[2];
+        r = (int) mean.val[0];
+        g = (int) mean.val[1];
+        b = (int) mean.val[2];
+
         telemetry.addData("r", r);
         telemetry.addData("g", g);
         telemetry.addData("b", b);
+        telemetry.update();
 
-
-        //Get Median
+        patch.release();
         rgb.release();
-        patch.release();  // add this
-
         return null;
     }
     //also not used
     @Override
     public void onDrawFrame(Canvas canvas, int onscreenWidth, int onscreenHeight,
                             float scaleBmpPxToCanvasPx, float scaleCanvasDensity, Object userContext) {
+
+        Paint paint = new Paint();
+        paint.setColor(Color.BLACK);
+        paint.setStrokeWidth(3f);
+        paint.setStyle(Paint.Style.STROKE);
+
+        float left   = onscreenWidth  * 0.4f;
+        float right  = onscreenWidth  * 0.6f;
+        float top    = onscreenHeight * 0.4f;
+        float bottom = onscreenHeight * 0.6f;
+
+        canvas.drawRect(left, top, right, bottom, paint);
     }
 }
