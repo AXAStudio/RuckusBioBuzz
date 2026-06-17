@@ -108,7 +108,7 @@ public class blobDetection implements VisionProcessor {
         paint.setColor(Color.BLACK);
         paint.setStrokeWidth(lineWidth);
         paint.setStyle(Paint.Style.STROKE);
-        if(rawAngle != NaN && !xList.isEmpty()) {
+        if(!Double.isNaN(rawAngle) && !xList.isEmpty()) {
             canvas.drawRect((lastLeftX - lineWidth) * scaleBmpPxToCanvasPx, (lastTopY - lineWidth) * scaleBmpPxToCanvasPx, (lastRightX + lineWidth) * scaleBmpPxToCanvasPx, (lastBottomY + lineWidth) * scaleBmpPxToCanvasPx, paint);
         }
         int lineWidth2 = 10;
@@ -116,7 +116,7 @@ public class blobDetection implements VisionProcessor {
         paint2.setColor(Color.RED);
         paint2.setStrokeWidth(lineWidth2);
         paint2.setStyle(Paint.Style.FILL);
-        if(rawAngle != NaN && !xList.isEmpty()) {
+        if(!Double.isNaN(rawAngle) && !xList.isEmpty()) {
             canvas.drawLine((float) median*scaleBmpPxToCanvasPx, 0, (float) median*scaleBmpPxToCanvasPx, (float) frameHeight*scaleBmpPxToCanvasPx, paint2);
         }
 
