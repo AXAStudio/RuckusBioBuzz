@@ -18,7 +18,7 @@ import java.util.List;
  * Detects clumps of BIOBUZZ Pollen — yellow plastic balls ~2.8" diameter
  * — on the FTC foam field surface.
  *
- * Drop into:  TeamCode/src/main/java/…/teamcode/vision/
+ * Drop into:  TeamCode/src/main/java/…/teamcode
  *
  * ── Why this architecture ────────────────────────────────────────────
  *

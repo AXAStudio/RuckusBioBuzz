@@ -1,128 +1,120 @@
 package org.firstinspires.ftc.teamcode.pedroPathing;
 
-import com.pedropathing.VectorCalculator;
-import com.pedropathing.control.FilteredPIDFCoefficients;
-import com.pedropathing.control.PIDFCoefficients;
-import com.pedropathing.control.PredictiveBrakingCoefficients;
 import com.pedropathing.follower.Follower;
-import com.pedropathing.follower.FollowerConstants;
-import com.pedropathing.ftc.FollowerBuilder;
-import com.pedropathing.ftc.drivetrains.CoaxialPod;
-import com.pedropathing.ftc.drivetrains.SwerveConstants;
-import com.pedropathing.ftc.localization.constants.PinpointConstants;
-import com.pedropathing.geometry.Pose;
-import com.pedropathing.paths.PathConstraints;
-import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
-import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
-import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
+import org.json.JSONException;
+import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+
+/**
+ * Picks which drivetrain's Pedro Pathing constants to build the Follower from, based on
+ * the "drivetrain" field in config.jsonc (next to this package, at
+ * teamcode/config.jsonc). Every OpMode should keep calling Constants.createFollower(...)
+ * exactly as before; only this file needs to know that other drivetrains exist.
+ */
 public class Constants {
-    public static FollowerConstants followerConstants = new FollowerConstants()
-            .forwardZeroPowerAcceleration(-197.1)
-            .lateralZeroPowerAcceleration(-197.1)
-            .useSecondaryDrivePIDF(true).useSecondaryHeadingPIDF(true)
-            .useSecondaryTranslationalPIDF(true)
+    private static final String CONFIG_RESOURCE_PATH = "/org/firstinspires/ftc/teamcode/config.jsonc";
+    private static final String DRIVETRAIN_KEY = "drivetrain";
 
-            .translationalPIDFCoefficients(new PIDFCoefficients(0.125, 0, 0.008, 0))
-            .secondaryTranslationalPIDFCoefficients(new PIDFCoefficients(0.0825, 0, 0.008, 0))
-
-            .headingPIDFCoefficients(new PIDFCoefficients(1.75, 0, 0.003, 0))
-            .secondaryHeadingPIDFCoefficients(new PIDFCoefficients(0.8, 0, 0.015, 0))
-
-            .drivePIDFCoefficients(new FilteredPIDFCoefficients(0.005, 0, 0.00003, 0.6, 0.13))
-            .secondaryDrivePIDFCoefficients(
-                    new FilteredPIDFCoefficients(0.004, 0, 0.000002, 0.6, 0.13))
-
-
-            // .drivePIDFCoefficients(new FilteredPIDFCoefficients(0,0,0,0,0))
-            // .secondaryDrivePIDFCoefficients(new FilteredPIDFCoefficients(0,0,0,0,0))
-
-            // .predictiveBrakingCoefficients(new PredictiveBrakingCoefficients(
-            // 0.05, //0.05 to 0.3
-            // 0,//0.38735914623969386,
-            // 0.002)
-            // )
-            .centripetalScaling(0.0005).
-            mass(13.732);
-
-    public static PinpointConstants localizerConstants = new PinpointConstants()
-            .forwardPodY(-2.9350393701) //-74.5mm
-            .strafePodX(-5.9133858268) //-150.2
-            .distanceUnit(DistanceUnit.INCH).hardwareMapName("pinpoint")
-            .encoderResolution(GoBildaPinpointDriver.GoBildaOdometryPods.goBILDA_4_BAR_POD)
-            .forwardEncoderDirection(GoBildaPinpointDriver.EncoderDirection.FORWARD)
-            .strafeEncoderDirection(GoBildaPinpointDriver.EncoderDirection.REVERSED);
-
-    public static SwerveConstants swerveConstants = new SwerveConstants()
-            .velocity(73.9)
-            .zeroPowerBehavior(SwerveConstants.ZeroPowerBehavior.X_LOCK)
-            .useBrakeModeInTeleOp(true);
-
-    private static double kP = 0.0055 * 180 / Math.PI;
-    private static double kD = 0.00015 * 180 / Math.PI;
-    private static double kFFront = 0.0130;
-    private static double kFBack = 0.0190;
-
-    private static double dtLength = 146.420; //distance from robot center to front/back pod center
-    private static double dtWidth = 154.240; // distance from robot center to left/right pod center
-
-    private static CoaxialPod leftFront(HardwareMap hardwareMap) {
-        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm2", "ss2", "se2",
-                new PIDFCoefficients(kP, 0, kD, kFFront), DcMotorSimple.Direction.REVERSE,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(353.1), new Pose(dtLength, dtWidth),
-                0.025, 3.290, false);
-        pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(0.05);
-        return pod;
-    }
-
-    private static CoaxialPod rightFront(HardwareMap hardwareMap) {
-        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm1", "ss1", "se1",
-                new PIDFCoefficients(kP, 0, kD, kFFront), DcMotorSimple.Direction.FORWARD,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(348.2), new Pose(dtLength, -dtWidth),
-                0.018, 3.288, false);
-        pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(0.05);
-        return pod;
-    }
-
-    private static CoaxialPod leftBack(HardwareMap hardwareMap) {
-        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm3", "ss3", "se3",
-                new PIDFCoefficients(kP, 0, kD, kFBack), DcMotorSimple.Direction.REVERSE,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(179.3), new Pose(-dtLength, dtWidth),
-                0.029, 3.307, false);
-        pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(0.05);
-        return pod;
-    }
-
-    private static CoaxialPod rightBack(HardwareMap hardwareMap) {
-        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm0", "ss0", "se0",
-                new PIDFCoefficients(kP, 0, kD, kFBack), DcMotorSimple.Direction.FORWARD,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(289.5), new Pose(-dtLength, -dtWidth),
-                0.014, 3.301, false);
-        pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(0.05);
-        return pod;
-    }
-
-    public static PathConstraints pathConstraints =
-            new PathConstraints(
-                    0.9,
-                    2,
-                    2,
-                    0.03,
-                    50,
-                    1,
-                    10,
-                    1
-            );
     public static Follower createFollower(HardwareMap hardwareMap) {
-        return new FollowerBuilder(followerConstants, hardwareMap).pathConstraints(pathConstraints)
-                .swerveDrivetrain(swerveConstants, leftFront(hardwareMap), rightFront(hardwareMap),
-                        leftBack(hardwareMap), rightBack(hardwareMap))
-                .pinpointLocalizer(localizerConstants).build();
+        String drivetrain = readDrivetrain();
+
+        switch (drivetrain) {
+            case "swerve":
+                return SwerveDrivetrainConstants.createFollower(hardwareMap);
+            case "mecanum":
+                return MecanumDrivetrainConstants.createFollower(hardwareMap);
+            default:
+                throw new IllegalStateException("Unknown \"" + DRIVETRAIN_KEY + "\" value \""
+                        + drivetrain + "\" in config.jsonc. Expected \"swerve\" or \"mecanum\".");
+        }
+    }
+
+    private static String readDrivetrain() {
+        String json = stripLineComments(readConfigResource());
+
+        JSONObject config;
+        try {
+            config = new JSONObject(json);
+        } catch (JSONException e) {
+            throw new IllegalStateException("config.jsonc is not valid JSON once comments are "
+                    + "stripped. Contents after stripping: " + json, e);
+        }
+
+        if (!config.has(DRIVETRAIN_KEY)) {
+            throw new IllegalStateException("config.jsonc is missing the \"" + DRIVETRAIN_KEY
+                    + "\" field.");
+        }
+
+        return config.optString(DRIVETRAIN_KEY, "").trim().toLowerCase();
+    }
+
+    private static String readConfigResource() {
+        try (InputStream in = Constants.class.getResourceAsStream(CONFIG_RESOURCE_PATH)) {
+            if (in == null) {
+                throw new IllegalStateException("Could not find " + CONFIG_RESOURCE_PATH
+                        + " on the classpath. Check that TeamCode/build.gradle's sourceSets "
+                        + "still adds 'src/main/java' as a resources dir, and that config.jsonc "
+                        + "is at TeamCode/src/main/java/org/firstinspires/ftc/teamcode/config.jsonc.");
+            }
+
+            ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+            byte[] chunk = new byte[1024];
+            int read;
+            while ((read = in.read(chunk)) != -1) {
+                buffer.write(chunk, 0, read);
+            }
+            return buffer.toString("UTF-8");
+        } catch (IOException e) {
+            throw new IllegalStateException("Failed to read " + CONFIG_RESOURCE_PATH, e);
+        }
+    }
+
+    /**
+     * Strips "// ..." line comments (JSONC) so the remainder can be parsed as plain JSON.
+     * Ignores "//" that appears inside a quoted string.
+     */
+    private static String stripLineComments(String jsonc) {
+        StringBuilder result = new StringBuilder(jsonc.length());
+        boolean inString = false;
+        boolean escaped = false;
+
+        for (int i = 0; i < jsonc.length(); i++) {
+            char c = jsonc.charAt(i);
+
+            if (inString) {
+                result.append(c);
+                if (escaped) {
+                    escaped = false;
+                } else if (c == '\\') {
+                    escaped = true;
+                } else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+
+            if (c == '"') {
+                inString = true;
+                result.append(c);
+                continue;
+            }
+
+            if (c == '/' && i + 1 < jsonc.length() && jsonc.charAt(i + 1) == '/') {
+                while (i < jsonc.length() && jsonc.charAt(i) != '\n') {
+                    i++;
+                }
+                result.append('\n');
+                continue;
+            }
+
+            result.append(c);
+        }
+
+        return result.toString();
     }
 }

@@ -8,6 +8,14 @@ android {
     packagingOptions {
         jniLibs.useLegacyPackaging true
     }
+
+    // Lets non-.java files that live next to the source (e.g. config.jsonc) get bundled onto the
+    // runtime classpath so they can be read on-device via Class#getResourceAsStream at OpMode init.
+    sourceSets {
+        main {
+            resources.srcDirs += ['src/main/java']
+        }
+    }
 }
 
 dependencies {
