@@ -970,6 +970,14 @@ public class ${autoClassName} extends OpMode {
         startEvent(eventName);
 
         long clampedDurationMs = Math.max(0L, durationMs);
+        if (clampedDurationMs == 0L) {
+            // A zero duration means "fire once" -- finish immediately instead of leaving the
+            // event permanently active, since updateParallelEvents() never finishes an event
+            // with a non-positive duration.
+            finishEvent(eventName);
+            return;
+        }
+
         long now = System.currentTimeMillis();
         int slot = -1;
 

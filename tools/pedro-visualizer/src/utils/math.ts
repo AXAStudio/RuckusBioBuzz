@@ -33,7 +33,10 @@ export function getMousePos(evt: MouseEvent, canvas: any) {
 }
 
 export function transformAngle(angle: number) {
-  return ((angle + 180) % 360) - 180;
+  // JS `%` preserves the dividend's sign, so a plain `(angle + 180) % 360` would return a
+  // negative result for angle < -180 (e.g. transformAngle(-181) => -181 instead of 179).
+  // Normalizing through a second `+ 360) % 360` keeps the result in (-180, 180] for any input.
+  return (((angle + 180) % 360) + 360) % 360 - 180;
 }
 
 /**

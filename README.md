@@ -14,6 +14,14 @@ To program your robot in Blocks or OnBot Java, you do not need Android Studio.
 Open the project in Android Studio, then run the `Pedro Visualizer` run configuration or the Gradle task `visualizer`.
 It installs the visualizer dependencies, starts `tools/pedro-visualizer`, and opens http://127.0.0.1:5173/ in your browser.
 
+### One-time setup: a bare `visualizer` terminal command
+To just type `visualizer` in any terminal (no Android Studio, no `./gradlew` prefix) after cloning this repo, run the setup script for your OS **once**:
+
+* macOS / Linux / Git Bash on Windows: `./scripts/install-visualizer-command.sh`
+* Native Windows (PowerShell or cmd.exe, no Git Bash needed): `powershell -ExecutionPolicy Bypass -File scripts\install-visualizer-command.ps1`
+
+This installs the visualizer's npm dependencies and adds `scripts/` to your PATH (re-running it is safe). Open a new terminal afterward and type `visualizer` — it starts the dev server (reusing it if already running), waits until it's actually responding, and opens it in your browser. `Ctrl+C` stops the server.
+
 ## Pollen Camera Tester
 Open the project in Android Studio, then run the `Pollen Camera Tester` run configuration or the Gradle task `pollenCameraTester`.
 It starts `tools/pollen-camera-tester`, opens http://127.0.0.1:8787/ in your browser, and lets you switch between the improved detector and the `blobDetection.java` grid detector.

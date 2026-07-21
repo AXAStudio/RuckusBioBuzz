@@ -973,12 +973,12 @@
                     Distance in inches between each robot body trace
                   </div>
                   <div class="mt-3">
-                    <label class="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">
+                    <label for="onion-layer-color" class="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1">
                       Onion Layer Color
                       <div class="text-xs text-neutral-500 dark:text-neutral-400">Color used to draw onion-layer colliders</div>
                     </label>
                     <div class="flex items-center gap-3">
-                      <input type="color" bind:value={settings.onionColor} class="w-10 h-10 p-0 border rounded" />
+                      <input id="onion-layer-color" type="color" bind:value={settings.onionColor} class="w-10 h-10 p-0 border rounded" />
                       <input type="text" bind:value={settings.onionColor} class="px-2 py-1 rounded border bg-white dark:bg-neutral-800" />
                     </div>
                   </div>
@@ -1128,11 +1128,12 @@
                   
                   <!-- Arrow Length -->
                   <div class="mb-3">
-                    <label class="block text-sm text-neutral-700 dark:text-neutral-300 mb-1">
+                    <label for="heading-arrow-length" class="block text-sm text-neutral-700 dark:text-neutral-300 mb-1">
                       Arrow Length
                     </label>
                     <div class="flex items-center gap-2">
                       <input
+                        id="heading-arrow-length"
                         type="range"
                         min="10"
                         max="100"
@@ -1150,11 +1151,12 @@
 
                   <!-- Arrow Color -->
                   <div class="mb-3">
-                    <label class="block text-sm text-neutral-700 dark:text-neutral-300 mb-1">
+                    <label for="heading-arrow-color" class="block text-sm text-neutral-700 dark:text-neutral-300 mb-1">
                       Arrow Color
                     </label>
                     <div class="flex items-center gap-3">
                       <input
+                        id="heading-arrow-color"
                         type="color"
                         bind:value={settings.headingArrowColor}
                         class="w-10 h-10 p-0 border rounded cursor-pointer"
@@ -1169,11 +1171,12 @@
 
                   <!-- Arrow Thickness -->
                   <div>
-                    <label class="block text-sm text-neutral-700 dark:text-neutral-300 mb-1">
+                    <label for="heading-arrow-thickness" class="block text-sm text-neutral-700 dark:text-neutral-300 mb-1">
                       Arrow Thickness
                     </label>
                     <div class="flex items-center gap-2">
                       <input
+                        id="heading-arrow-thickness"
                         type="range"
                         min="1"
                         max="10"
@@ -1196,11 +1199,12 @@
               <div
                 class="p-3 bg-white dark:bg-neutral-800 rounded-lg border border-neutral-200 dark:border-neutral-700"
               >
-                <label class="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
+                <label for="path-opacity" class="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-2">
                   Path Opacity
                 </label>
                 <div class="flex items-center gap-2">
                   <input
+                    id="path-opacity"
                     type="range"
                     min="0.1"
                     max="1"

@@ -246,12 +246,26 @@
           message: `Path ${index + 1} has zero distance.`,
         });
       }
+
+      line.eventMarkers?.forEach((marker, markerIndex) => {
+        if (Number(marker.durationMs ?? 0) <= 0) {
+          messages.push({
+            level: "warning",
+            message: `Event "${marker.name || `#${markerIndex + 1}`}" on Path ${index + 1} has no duration and will start and finish instantly.`,
+          });
+        }
+      });
     });
 
     const firstPathIndex = sequence.findIndex(
       (item) => item.kind === "path" || (item.kind === "repeat" && item.lineIds.length > 0),
     );
-    if (firstPathIndex > 0) {
+    if (firstPathIndex === -1) {
+      messages.push({
+        level: "warning",
+        message: "The sequence has no paths, so the robot will never move.",
+      });
+    } else if (firstPathIndex > 0) {
       messages.push({
         level: "warning",
         message: "The sequence starts with a wait/event before the first path.",

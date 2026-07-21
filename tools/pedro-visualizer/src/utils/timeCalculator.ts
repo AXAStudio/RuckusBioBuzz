@@ -81,23 +81,39 @@ export function calculateMotionProfileTime(
   maxAcc: number,
   maxDec?: number,
 ): number {
-  const deceleration = maxDec || maxAcc;
+  const totalDistance = Math.max(0, Number(distance) || 0);
+  const velocity = Math.max(0, Number(maxVel) || 0);
+  const acceleration = Math.max(0, Number(maxAcc) || 0);
+  const deceleration = Math.max(0, Number(maxDec ?? maxAcc) || 0);
 
-  const accDist = (maxVel * maxVel) / (2 * maxAcc);
-  const decDist = (maxVel * maxVel) / (2 * deceleration);
+  // Matches the degenerate-input contract of calculateMotionProfileDistanceAtTime /
+  // calculateMotionProfileTimeAtDistance: a zero distance/velocity/acceleration/deceleration
+  // would otherwise divide by zero (NaN/Infinity), which then poisons every downstream
+  // accumulated timeline value.
+  if (
+    totalDistance <= 0 ||
+    velocity <= 0 ||
+    acceleration <= 0 ||
+    deceleration <= 0
+  ) {
+    return 0;
+  }
 
-  if (distance >= accDist + decDist) {
-    const accTime = maxVel / maxAcc;
-    const decTime = maxVel / deceleration;
-    const constDist = distance - accDist - decDist;
-    const constTime = constDist / maxVel;
+  const accDist = (velocity * velocity) / (2 * acceleration);
+  const decDist = (velocity * velocity) / (2 * deceleration);
+
+  if (totalDistance >= accDist + decDist) {
+    const accTime = velocity / acceleration;
+    const decTime = velocity / deceleration;
+    const constDist = totalDistance - accDist - decDist;
+    const constTime = constDist / velocity;
 
     return accTime + constTime + decTime;
   } else {
     const vPeak = Math.sqrt(
-      (2 * distance * maxAcc * deceleration) / (maxAcc + deceleration),
+      (2 * totalDistance * acceleration * deceleration) / (acceleration + deceleration),
     );
-    const accTime = vPeak / maxAcc;
+    const accTime = vPeak / acceleration;
     const decTime = vPeak / deceleration;
 
     return accTime + decTime;

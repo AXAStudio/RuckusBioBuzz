@@ -3161,7 +3161,7 @@
         totalDuration = pathTime?.totalTime || 0;
       }
 
-      if (totalDuration <= 0) {
+      if (!Number.isFinite(totalDuration) || totalDuration <= 0) {
         alert("Path duration is too short to export.");
         exportingGif = false;
         return;
@@ -4605,9 +4605,6 @@
   {optimizeAllLines}
   {optimizingAll}
   {twoElement}
-  bind:playing
-  {play}
-  {pause}
   {exportPathAsGif}
 />
 

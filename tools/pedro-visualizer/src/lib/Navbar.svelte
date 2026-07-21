@@ -65,9 +65,6 @@
   export let optimizeAllLines: () => Promise<void>;
   export let optimizingAll: boolean = false;
   export let twoElement: HTMLDivElement | null = null;
-  export let playing: boolean = false;
-  export let play: () => void;
-  export let pause: () => void;
   export let exportPathAsGif: () => Promise<void>;
 
   let fileManagerOpen = false;

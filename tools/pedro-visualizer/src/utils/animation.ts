@@ -718,7 +718,7 @@ export function generateOnionLayers(
             line.endPoint.headingCurve,
           );
         } else if (line.endPoint.heading === "constant") {
-          heading = -line.endPoint.degrees;
+          heading = line.endPoint.degrees;
         } else if (line.endPoint.heading === "tangential") {
           // Calculate tangent direction
           const nextT = Math.min(
