@@ -75,6 +75,107 @@ async function compileTeamCodeAuto(): Promise<{
   }
 }
 
+/**
+ * Serves the robot's tuned PedroPathing constants to the settings dialog.
+ *
+ * The numbers driving the time estimate are otherwise all hand-typed, while the
+ * measured ones sit in TeamCode a few directories away. Reading them here beats
+ * asking anyone to copy figures between two files and keep them in step.
+ */
+function teamCodeConstantsReader(): Plugin {
+  const teamCodePackageDir = path.resolve(
+    repoRoot,
+    "TeamCode",
+    "src",
+    "main",
+    "java",
+    "org",
+    "firstinspires",
+    "ftc",
+    "teamcode",
+  );
+
+  return {
+    name: "ruckus-teamcode-constants-reader",
+    configureServer(server: ViteDevServer) {
+      server.middlewares.use(
+        "/api/teamcode-constants",
+        (req: IncomingMessage, res: ServerResponse, next: () => void) => {
+          if (req.method !== "GET") {
+            next();
+            return;
+          }
+
+          res.setHeader("Content-Type", "application/json");
+
+          try {
+            const configPath = path.resolve(teamCodePackageDir, "config.jsonc");
+            if (!fs.existsSync(configPath)) {
+              res.statusCode = 404;
+              res.end(
+                JSON.stringify({
+                  error: `No config.jsonc at ${path.relative(repoRoot, configPath)}.`,
+                }),
+              );
+              return;
+            }
+
+            const config = fs.readFileSync(configPath, "utf8");
+            const match = /"drivetrain"\s*:\s*"([a-z]+)"/i.exec(config);
+            const drivetrain = match?.[1]?.toLowerCase();
+
+            if (drivetrain !== "swerve" && drivetrain !== "mecanum") {
+              res.statusCode = 400;
+              res.end(
+                JSON.stringify({
+                  error: `config.jsonc declares drivetrain "${drivetrain ?? ""}"; expected "swerve" or "mecanum".`,
+                }),
+              );
+              return;
+            }
+
+            const className =
+              drivetrain === "swerve"
+                ? "SwerveDrivetrainConstants"
+                : "MecanumDrivetrainConstants";
+            const sourcePath = path.resolve(
+              teamCodePackageDir,
+              "pedroPathing",
+              `${className}.java`,
+            );
+
+            if (!fs.existsSync(sourcePath)) {
+              res.statusCode = 404;
+              res.end(
+                JSON.stringify({
+                  error: `config.jsonc selects "${drivetrain}" but ${path.relative(repoRoot, sourcePath)} does not exist.`,
+                }),
+              );
+              return;
+            }
+
+            res.statusCode = 200;
+            res.end(
+              JSON.stringify({
+                drivetrain,
+                sourceFile: path.relative(repoRoot, sourcePath),
+                source: fs.readFileSync(sourcePath, "utf8"),
+              }),
+            );
+          } catch (error) {
+            res.statusCode = 500;
+            res.end(
+              JSON.stringify({
+                error: error instanceof Error ? error.message : String(error),
+              }),
+            );
+          }
+        },
+      );
+    },
+  };
+}
+
 function teamCodeAutoWriter(): Plugin {
   return {
     name: "ruckus-teamcode-auto-writer",
@@ -168,7 +269,7 @@ function teamCodeAutoWriter(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [svelte(), teamCodeAutoWriter()],
+  plugins: [svelte(), teamCodeAutoWriter(), teamCodeConstantsReader()],
   build: {
     outDir: "dist",
     // Increase chunk size warning limit to 1.2 MB to avoid noisy warnings

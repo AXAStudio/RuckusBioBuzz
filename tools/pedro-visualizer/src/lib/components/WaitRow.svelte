@@ -23,6 +23,9 @@
   export let canMoveUp: boolean = true;
   export let canMoveDown: boolean = true;
   export let label: "Wait" | "Event" = "Wait";
+  /** Drag handle wiring: lets this step be dropped into a loop or if block. */
+  export let onPointerDown: (event: PointerEvent) => void = () => {};
+  export let dragging = false;
 
   function handleNameChange(e: Event) {
     const target = e.currentTarget as HTMLInputElement;
@@ -49,6 +52,38 @@
   class="flex w-full items-center justify-between gap-2 px-2 py-1 rounded border border-neutral-200 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-900"
 >
   <div class="flex items-center gap-2">
+    <!-- Drag handle: drop this step into any repeat loop or if block -->
+    <span
+      role="button"
+      tabindex={locked ? -1 : 0}
+      draggable="false"
+      on:pointerdown={onPointerDown}
+      on:dragstart|preventDefault
+      title={locked
+        ? `Locked ${label.toLowerCase()}s cannot be dragged`
+        : "Drag into a repeat loop or if block"}
+      aria-label="Drag {label.toLowerCase()}"
+      class="shrink-0 select-none touch-none rounded px-1 py-0.5 text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 hover:bg-neutral-200/70 dark:hover:bg-neutral-800 {locked
+        ? 'cursor-not-allowed opacity-40'
+        : dragging
+          ? 'cursor-grabbing'
+          : 'cursor-grab'}"
+    >
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="currentColor"
+        class="size-4 pointer-events-none"
+      >
+        <circle cx="9" cy="6" r="1.6" />
+        <circle cx="15" cy="6" r="1.6" />
+        <circle cx="9" cy="12" r="1.6" />
+        <circle cx="15" cy="12" r="1.6" />
+        <circle cx="9" cy="18" r="1.6" />
+        <circle cx="15" cy="18" r="1.6" />
+      </svg>
+    </span>
+
     <span
       class={label === "Event"
         ? "px-1.5 py-0.5 text-xs rounded bg-purple-200 text-purple-800 dark:bg-purple-900 dark:text-purple-200"

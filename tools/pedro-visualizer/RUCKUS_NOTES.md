@@ -15,6 +15,7 @@ Local customization:
 - The control panel supports path variables that store a reusable copy of a selected path chain and can insert that stored path back into the route.
 - Endpoints assigned to pose variables still allow editable heading mode, linear start heading, and heading curve while the pose controls the final position/heading.
 - Individual paths can be duplicated, selected groups of paths can be wrapped in repeat loops, and path chains can be looped as a group.
+- Repeat loops and `if` blocks hold paths, waits and events in one ordered list, so a pause or a mechanism trigger can sit between two paths inside a loop and run on every pass. Drag any of them in by its handle.
 - Number variables store reusable numeric constants for repeat counts, waits/events, path speed, and event marker values. TeamCode export emits them as Java constants.
 - Each path has a `Path Speed` scale from `0.05` to `1.0`; TeamCode export passes it to PedroPathing as the per-path max power.
 - Each path can define parallel event markers. TeamCode export turns them into PedroPathing parametric, temporal, or pose callbacks so mechanisms can start while the path is still running, with optional timed finish handling.
@@ -26,6 +27,7 @@ Local customization:
 - The control panel includes `Mirror X` and `Mirror Y` actions for switching alliances by flipping path coordinates and headings on either field axis.
 - Paths are checked against the obstacles and the field walls using the robot's own footprint at the heading it holds. Path rows show `Hits <thing>` or the clearance in inches, the field draws the robot where it is in trouble, and the export warns before the auto reaches a match. The chip is a button that moves a control point, an endpoint or the starting point until the robot clears.
 - Number fields drag: hover a literal for an `ew-resize` cursor and drag sideways to adjust it, with Shift for coarse and Alt for fine. Fields driven by a variable do not drag — scrub the variable itself in the Variables tab.
+- `Settings → Motion Parameters` can read the robot's tuned PedroPathing constants straight out of TeamCode, showing each value, what it changes it from, and which Java call it came from — plus what PedroPathing does not measure, so the remaining guesses stay visible.
 - The TeamCode exporter validates generated autos, can download a `.java` file, and can save directly to `TeamCode/src/main/java/org/firstinspires/ftc/teamcode/auto/` while running from Vite. Direct saves run `:TeamCode:compileDebugJavaWithJavac` and restore the previous file if the generated Java does not compile.
 
 Path chaining:
@@ -314,6 +316,92 @@ Dragging numbers:
   a drag out and back lands exactly where it began instead of drifting by the
   rounding of every frame between. It commits once at the end, so a drag is one
   entry on the undo stack rather than one per frame.
+
+Tuned constants from TeamCode (`src/utils/teamcodeConstants.ts`):
+
+- `Settings → Motion Parameters → Load from TeamCode` reads the robot's own
+  PedroPathing constants instead of asking anyone to guess them. Tuning already
+  measures several of these on the real robot, and they were sitting two
+  directories away while the visualizer ran on hand-typed defaults.
+- On the first auto this ran against, `maxVelocity` was set to 40 in/s against a
+  tuned 73.9, and `maxDeceleration` to 30 in/s² against a measured 197.1 — off by
+  1.85x and 6.6x. The auto's estimate went 30.99s to 25.07s, which changed the
+  answer to the only question that matters about it: it did not fit in 30
+  seconds, and it does.
+- `config.jsonc` picks the drivetrain, and the matching constants file is read.
+  A swerve states one top speed; a mecanum is tuned forward and sideways
+  separately, and paths are driven forward, so `xVelocity` is the cap and the
+  sideways figure is shown as context only.
+- Comments are stripped before anything is read. These files park alternates
+  behind `//`, and picking one up would silently import a number the robot is
+  not using.
+- Nothing is applied until it is shown: the dialog lists each value, what it
+  changes it from, and the Java call it came from.
+- What PedroPathing does *not* measure is listed just as explicitly, so the
+  guessed numbers stay visibly guessed. There is no acceleration limit in the
+  model at all (it is PIDF plus a power cap), no stated turn rate, nothing
+  matching this tool's turn coupling, and `centripetalScaling` is a correction
+  gain rather than a sliding limit, so it does not convert to cornering grip.
+- `forwardZeroPowerAcceleration` is flagged as a ceiling rather than applied
+  silently. It is how hard the robot slows with *no power applied*, which is the
+  most it can brake, not what the follower holds while still tracking a line —
+  taken as-is the estimate leans optimistic.
+- The endpoint only exists under the dev server, since that is the only place
+  the repo is on disk to read from, and the dialog says so if it is missing.
+
+Onion layers:
+
+- The bodies drawn along the route are for judging clearance by eye, so they use
+  the robot's real outline when CAD has given us one rather than a bounding box.
+  Drawing a box around a robot whose shape is known would show the wrong shape
+  for the one job they have, and would disagree with both the picture on the
+  field and the clearance check.
+- `getVisibleOnionLayers` takes the playback position as an argument instead of
+  reading it from the component. Svelte works out what a reactive block depends
+  on from the names appearing in it, and reading `percent` inside the helper left
+  the blocks that draw the bodies with no dependency on it: with `Next point
+  only` on they froze on whichever path was current when something else last
+  changed, while the swerve overlay — whose block does mention the playback
+  position — kept following the robot. The two drifted apart on screen.
+- The geometry and the filter are separate reactive steps, because only the
+  filter depends on playback. Walking the route to place every body is the
+  expensive half and it was being redone on every animation frame for a result
+  that had not changed — at a 1in spacing that alone blocked the main thread for
+  37ms a frame, 55ms with swerve modules on, which is 18fps before anything else
+  on the page gets a turn. Split, and with the Two.js bodies rebuilt only when
+  the visible set actually changes, the same scene costs 4-5ms a frame, the same
+  as having them switched off.
+- Svelte treats any assignment of an object as a change, so the block that builds
+  the bodies still runs every frame; what stops it allocating a few thousand
+  anchors for an identical picture is an explicit guard on the layer array's
+  identity, the selected path, the colour and the field scale.
+- Spacing is measured along the route, so the honest check is how many bodies
+  each path gets for its length. Straight-line distance between consecutive
+  bodies is shorter wherever the route doubles back, which is not a spacing
+  error — on the first real auto this ran against, three joins reverse and read
+  as 0.17in, 0.75in and 2.08in gaps against a 3in spacing while every path's
+  count was exact.
+
+Waits and events inside a loop or an `if`:
+
+- A repeat loop or an `if` block holds an ordered list of members that can be
+  paths, waits or events. It used to hold a bare list of path ids, so a pause
+  between two paths inside a loop was not representable at all — which is why
+  dragging one in did nothing. Files written before this are converted on load,
+  and the old field stays on the type as deprecated so a project saved months
+  ago still opens.
+- A wait inside a three-pass loop happens three times, in its place in the
+  order: `path, wait, path` becomes
+  `path wait path  path wait path  path wait path`. A loop that cannot run
+  spends none of them.
+- In the generated Java a hold takes a slot in the loop's `PathChain[]` with a
+  null chain, and a parallel `long[]` carries its duration; `followRepeatStep`
+  reads a null chain as "hold here" rather than something to drive. An event
+  member fires the same generated method a top-level one would. Verified by
+  compiling the output against the real SDK.
+- Only paths are reconciled against `lines`. A wait carries its own data, so
+  there is nothing for it to have gone stale against, and dropping one there
+  would quietly delete a step from inside a loop.
 
 Route invariants (`src/utils/sequence.ts`):
 

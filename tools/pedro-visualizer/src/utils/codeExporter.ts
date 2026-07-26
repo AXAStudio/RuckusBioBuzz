@@ -27,6 +27,7 @@ import {
   buildLineStartPoints,
   buildRoute,
   conditionalChainPredecessors,
+  groupMembers,
   type ChainRun,
   type RoutePathStep,
 } from "./sequence";
@@ -794,6 +795,12 @@ export async function generateTeamCodeAutoCode(
   const exportSteps: ExportStep[] = [];
   const groupChainFields: string[][] = [];
   const groupChainSpeeds: string[][] = [];
+  /** Per member slot: how long a hold lasts, `0` for a path. */
+  const groupHoldMs: string[][] = [];
+  /** Per member slot: the event a hold fires, `null` for a path or a plain wait. */
+  const groupHoldEvents: string[][] = [];
+  /** Event names used only inside a group, registered with the rest below. */
+  const groupEventNames: string[] = [];
 
   let pendingTopLevelLineIds: string[] = [];
   const flushTopLevelPaths = () => {
@@ -837,17 +844,58 @@ export async function generateTeamCodeAutoCode(
     // Repeat loops and `if` blocks both wrap a group of paths, so they share the
     // same PathChain[] fields and the same followRepeatStep runtime helper —
     // an `if` block is simply a group run once, behind a guard.
-    const validLineIds = (item.lineIds || []).filter((lineId) =>
-      lineById.has(lineId),
+    // A group runs its members in order, and a wait or an event between two
+    // paths is the reason for putting it inside rather than beside. Each member
+    // becomes one slot the generated loop steps through; a hold has no chain, so
+    // its slot carries a duration instead.
+    const members = groupMembers(item).filter((member) =>
+      member.kind === "path" ? lineById.has(member.lineId) : true,
     );
-    if (validLineIds.length === 0) return;
+    if (members.length === 0) return;
+    if (!members.some((member) => member.kind === "path")) return;
 
-    const declared = declareChains(validLineIds, item.id);
+    const fields: string[] = [];
+    const speeds: string[] = [];
+    const holdMs: string[] = [];
+    const holdEvents: string[] = [];
+
+    members.forEach((member) => {
+      if (member.kind === "path") {
+        // One member at a time so a hold between two paths is not chained past.
+        const declared = declareChains([member.lineId], item.id);
+        declared.forEach((entry) => {
+          fields.push(entry.field);
+          speeds.push(pathSpeedExpression(entry.run.steps[0].line));
+          holdMs.push("0");
+          holdEvents.push("null");
+        });
+        return;
+      }
+
+      fields.push("null");
+      speeds.push("1.0");
+      holdMs.push(
+        numberExpression(
+          member.durationExpression,
+          String(Math.max(0, Math.round(Number(member.durationMs) || 0))),
+          "long",
+        ),
+      );
+
+      if (member.kind === "event") {
+        const eventName = member.name?.trim() || "Event";
+        groupEventNames.push(eventName);
+        holdEvents.push(JSON.stringify(eventName));
+      } else {
+        holdEvents.push("null");
+      }
+    });
+
     const slot = groupChainFields.length;
-    groupChainFields.push(declared.map((entry) => entry.field));
-    groupChainSpeeds.push(
-      declared.map((entry) => pathSpeedExpression(entry.run.steps[0].line)),
-    );
+    groupChainFields.push(fields);
+    groupChainSpeeds.push(speeds);
+    groupHoldMs.push(holdMs);
+    groupHoldEvents.push(holdEvents);
     exportSteps.push({ kind: "group", item, slot });
   });
   flushTopLevelPaths();
@@ -860,13 +908,17 @@ export async function generateTeamCodeAutoCode(
   const repeatFieldDeclarations = groupChainFields
     .map(
       (_, slot) => `private PathChain[] repeat${slot + 1}Paths;
-    private double[] repeat${slot + 1}PathSpeeds;`,
+    private double[] repeat${slot + 1}PathSpeeds;
+    private long[] repeat${slot + 1}HoldMs;
+    private String[] repeat${slot + 1}HoldEvents;`,
     )
     .join("\n    ");
   const repeatAssignments = groupChainFields
     .map(
       (fields, slot) => `repeat${slot + 1}Paths = new PathChain[] { ${fields.join(", ")} };
-      repeat${slot + 1}PathSpeeds = new double[] { ${groupChainSpeeds[slot].join(", ")} };`,
+      repeat${slot + 1}PathSpeeds = new double[] { ${groupChainSpeeds[slot].join(", ")} };
+      repeat${slot + 1}HoldMs = new long[] { ${groupHoldMs[slot].join(", ")} };
+      repeat${slot + 1}HoldEvents = new String[] { ${groupHoldEvents[slot].join(", ")} };`,
     )
     .join("\n\n      ");
   const eventItems = sequenceItems.filter((item) => item.kind === "event");
@@ -896,6 +948,11 @@ export async function generateTeamCodeAutoCode(
   eventItems.forEach((item, idx) => {
     const eventName = item.name?.trim() || `Event ${idx + 1}`;
     registerEventMethod(eventName, `Event${idx + 1}`);
+  });
+
+  // An event inside a loop needs the same generated method as one beside it.
+  groupEventNames.forEach((eventName, idx) => {
+    registerEventMethod(eventName, `GroupEvent${idx + 1}`);
   });
 
   pathEventMarkers.forEach((marker, idx) => {
@@ -965,7 +1022,7 @@ export async function generateTeamCodeAutoCode(
       if (item.kind === "repeat") {
         return guardedCase(
           idx,
-          `followRepeatStep(${fieldName}Paths, ${fieldName}PathSpeeds, ${numberExpression(item.countExpression, `${Math.max(1, Math.min(20, Math.round(Number(item.count) || 1)))}`, "int")}, ${step.slot});`,
+          `followRepeatStep(${fieldName}Paths, ${fieldName}PathSpeeds, ${fieldName}HoldMs, ${fieldName}HoldEvents, ${numberExpression(item.countExpression, `${Math.max(1, Math.min(20, Math.round(Number(item.count) || 1)))}`, "int")}, ${step.slot});`,
           item.enabledExpression,
         );
       }
@@ -990,7 +1047,7 @@ export async function generateTeamCodeAutoCode(
 
       return guardedCase(
         idx,
-        `followRepeatStep(${fieldName}Paths, ${fieldName}PathSpeeds, 1, ${step.slot});`,
+        `followRepeatStep(${fieldName}Paths, ${fieldName}PathSpeeds, ${fieldName}HoldMs, ${fieldName}HoldEvents, 1, ${step.slot});`,
         combineConditions(...earlier, item.condition),
       );
     })
@@ -1160,6 +1217,8 @@ public class ${autoClassName} extends OpMode {
     private void followRepeatStep(
         PathChain[] repeatPaths,
         double[] repeatPathSpeeds,
+        long[] repeatHoldMs,
+        String[] repeatHoldEvents,
         int repeatCount,
         int repeatSlot
     ) {
@@ -1180,6 +1239,47 @@ public class ${autoClassName} extends OpMode {
             repeatPathSpeeds != null && pathIndex < repeatPathSpeeds.length
                 ? repeatPathSpeeds[pathIndex]
                 : 1.0;
+
+        // A null chain marks a wait or an event sitting between two paths: the
+        // slot holds a duration instead of something to drive.
+        if (path == null) {
+            long holdMs =
+                repeatHoldMs != null && pathIndex < repeatHoldMs.length
+                    ? repeatHoldMs[pathIndex]
+                    : 0L;
+
+            if (!stepStarted) {
+                stepStartTime = System.currentTimeMillis();
+                stepStarted = true;
+
+                String eventName =
+                    repeatHoldEvents != null && pathIndex < repeatHoldEvents.length
+                        ? repeatHoldEvents[pathIndex]
+                        : null;
+                if (eventName != null) {
+                    startParallelEvent(eventName, holdMs);
+                }
+            }
+
+            if (System.currentTimeMillis() - stepStartTime < holdMs) {
+                return;
+            }
+
+            stepStarted = false;
+            repeatLoopPathIndexes[repeatSlot]++;
+
+            if (repeatLoopPathIndexes[repeatSlot] >= repeatPaths.length) {
+                repeatLoopPathIndexes[repeatSlot] = 0;
+                repeatLoopIterations[repeatSlot]++;
+            }
+
+            if (repeatLoopIterations[repeatSlot] >= repeatCount) {
+                repeatLoopIterations[repeatSlot] = 0;
+                repeatLoopPathIndexes[repeatSlot] = 0;
+                advanceSequence();
+            }
+            return;
+        }
 
         if (!stepStarted) {
             follower.followPath(path, clampPathSpeed(pathSpeed), true);

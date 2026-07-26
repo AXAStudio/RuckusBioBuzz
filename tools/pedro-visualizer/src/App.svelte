@@ -62,6 +62,7 @@
     getCurvePoint,
     getRandomColor,
     migrateLine,
+    migrateSequenceGroups,
     migrateSequenceItem,
     migrateVariables,
     poseVariablesOf,
@@ -241,7 +242,9 @@
     sourceVariables: Variable[],
   ): SequenceItem[] {
     const scope = buildExpressionScope(sourceVariables);
-    return sourceSequence.map((item) =>
+    // Groups used to hold a bare list of path ids; convert once on the way in so
+    // nothing downstream has to know that.
+    return migrateSequenceGroups(sourceSequence).map((item) =>
       resolveSequenceItemExpressions(
         migrateSequenceItem(item, sourceVariables),
         sourceVariables,
@@ -1369,15 +1372,33 @@
     }));
   }
 
-  function getVisibleOnionLayers(
+  /**
+   * `playbackPercent` is passed in rather than read from the component, because
+   * Svelte works out what a reactive block depends on from the names that
+   * appear in it. Reading `percent` inside this helper left the blocks that draw
+   * the onion bodies with no dependency on it, so with "next point only" on they
+   * froze on whichever path was current when something else last changed — while
+   * the swerve overlay, whose block does mention the playback position, kept
+   * following the robot. The two drifted apart on screen.
+   */
+  /**
+   * Where the onion bodies sit. Depends on the route and the robot, and on
+   * nothing about playback.
+   *
+   * Kept apart from the filter below because it is the expensive half — it walks
+   * every path twice and builds a body for each interval — and it was being
+   * redone on every animation frame for a result that had not changed. At a 1in
+   * spacing that alone blocked the main thread for 37ms a frame, which is 27fps
+   * before anything else on the page gets a turn.
+   */
+  function buildOnionLayers(
     sourceStartPoint: Point,
     sourceLines: Line[],
-    timePrediction: TimePrediction | null | undefined,
     routeSettings: Settings,
     sourceStartPoints?: Map<string, BasePoint>,
     sourceHeadingTransitions?: Map<string, { entryHeading: number; catchUp: number }>,
   ): OnionLayerState[] {
-    let layers = generateOnionLayers(
+    return generateOnionLayers(
       sourceStartPoint,
       sourceLines,
       routeSettings.rWidth,
@@ -1385,40 +1406,50 @@
       routeSettings.onionLayerSpacing || 6,
       sourceStartPoints,
       sourceHeadingTransitions,
+      // The bodies are for judging clearance by eye, so they draw the robot's
+      // real shape when CAD has given us one.
+      footprintFromSettings(routeSettings),
     ) as OnionLayerState[];
+  }
 
-    if (
-      routeSettings.onionNextPointOnly &&
-      timePrediction?.timeline?.length
-    ) {
-      const currentTime = (timePrediction.totalTime || 0) * (percent / 100);
-      const travelEvents = timePrediction.timeline.filter(
-        (event) => event.type === "travel",
-      );
-      let selectedLineIndex: number | null = null;
-      const currentTravel = travelEvents.find(
-        (event) => event.startTime <= currentTime && event.endTime >= currentTime,
-      );
-
-      if (currentTravel) {
-        selectedLineIndex = currentTravel.lineIndex as number;
-      } else {
-        const nextTravel = travelEvents.find(
-          (event) => event.startTime > currentTime,
-        );
-        if (nextTravel) {
-          selectedLineIndex = nextTravel.lineIndex as number;
-        } else if (travelEvents.length) {
-          selectedLineIndex = travelEvents[travelEvents.length - 1].lineIndex as number;
-        }
-      }
-
-      if (selectedLineIndex !== null) {
-        layers = layers.filter((layer) => layer.lineIndex === selectedLineIndex);
-      }
+  /**
+   * Which path `Next point only` should show, from where playback has got to.
+   * This is the half that does depend on the clock, and it is a scan of the
+   * timeline rather than any geometry.
+   */
+  function selectedOnionLineIndex(
+    timePrediction: TimePrediction | null | undefined,
+    routeSettings: Settings,
+    playbackPercent: number,
+  ): number | null {
+    if (!routeSettings.onionNextPointOnly || !timePrediction?.timeline?.length) {
+      return null;
     }
 
-    return layers;
+    const currentTime = (timePrediction.totalTime || 0) * (playbackPercent / 100);
+    const travelEvents = timePrediction.timeline.filter(
+      (event) => event.type === "travel",
+    );
+
+    const currentTravel = travelEvents.find(
+      (event) => event.startTime <= currentTime && event.endTime >= currentTime,
+    );
+    if (currentTravel) return currentTravel.lineIndex as number;
+
+    const nextTravel = travelEvents.find((event) => event.startTime > currentTime);
+    if (nextTravel) return nextTravel.lineIndex as number;
+
+    return travelEvents.length
+      ? (travelEvents[travelEvents.length - 1].lineIndex as number)
+      : null;
+  }
+
+  function filterOnionLayers(
+    layers: OnionLayerState[],
+    selectedLineIndex: number | null,
+  ): OnionLayerState[] {
+    if (selectedLineIndex === null) return layers;
+    return layers.filter((layer) => layer.lineIndex === selectedLineIndex);
   }
 
   function buildOnionSwerveModules(
@@ -1991,6 +2022,47 @@
   $: robotFootprint = footprintFromSettings(settings);
 
   /**
+   * Onion bodies, split so the animation does not pay for them.
+   *
+   * The geometry depends on the route and the robot; only which slice of it is
+   * shown depends on the clock. Recomputing the geometry every frame is what
+   * made playback stutter once the spacing got fine.
+   */
+  $: onionLayersEnabled =
+    $activePaths.length === 0 && settings.showOnionLayers && lines.length > 0;
+  $: allOnionLayers = onionLayersEnabled
+    ? buildOnionLayers(startPoint, lines, settings, lineStartPoints, headingTransitions)
+    : [];
+  $: onionSelectedLineIndex = selectedOnionLineIndex(timePrediction, settings, percent);
+  $: visibleOnionLayers = filterOnionLayers(allOnionLayers, onionSelectedLineIndex);
+
+  $: secondOnionLayersEnabled =
+    $activePaths.length === 0 &&
+    $dualPathMode &&
+    settings.showOnionLayers &&
+    secondLines.length > 0 &&
+    Boolean(secondStartPoint);
+  $: allSecondOnionLayers =
+    secondOnionLayersEnabled && secondStartPoint
+      ? buildOnionLayers(
+          secondStartPoint,
+          secondLines,
+          settings,
+          secondLineStartPoints,
+          secondHeadingTransitions,
+        )
+      : [];
+  $: secondOnionSelectedLineIndex = selectedOnionLineIndex(
+    secondTimePrediction,
+    settings,
+    percent,
+  );
+  $: visibleSecondOnionLayers = filterOnionLayers(
+    allSecondOnionLayers,
+    secondOnionSelectedLineIndex,
+  );
+
+  /**
    * Where the robot is closer to an obstacle or a wall than the safety margin
    * allows, checked at the heading the robot is really holding — a path that is
    * clear driving straight can clip a corner once the robot turns on it.
@@ -2470,14 +2542,7 @@
     }
 
     if (settings.showOnionLayers) {
-      const mainLayers = getVisibleOnionLayers(
-        startPoint,
-        lines,
-        timePrediction,
-        settings,
-        lineStartPoints,
-        headingTransitions,
-      );
+      const mainLayers = visibleOnionLayers;
       overlays.push(
         ...buildOnionSwerveModules(
           "main",
@@ -2491,14 +2556,7 @@
       );
 
       if ($dualPathMode && secondStartPoint && secondLines.length > 0 && secondTimePrediction) {
-        const secondLayers = getVisibleOnionLayers(
-          secondStartPoint,
-          secondLines,
-          secondTimePrediction,
-          settings,
-          secondLineStartPoints,
-          secondHeadingTransitions,
-        );
+        const secondLayers = visibleSecondOnionLayers;
         overlays.push(
           ...buildOnionSwerveModules(
             "second",
@@ -2806,21 +2864,39 @@
     return ghostPaths;
   })();
 
+  /**
+   * Two.js bodies for the onion layers, rebuilt only when the visible set
+   * actually changes.
+   *
+   * Svelte treats any assignment of an object as a change, so this block still
+   * runs on every frame; the guard is what keeps it from allocating a few
+   * thousand anchors each time for an identical picture.
+   */
+  let onionElementCacheSource: OnionLayerState[] | null = null;
+  let onionElementCacheSelected: number | null = null;
+  let onionElementCacheColor = "";
+  let onionElementCacheScale = 0;
+  let onionElementCache: Path[] = [];
+
   $: onionLayerElements = (() => {
+    const color = settings.onionColor || "#dc2626";
+    // The scale changes when the field is resized, and the bodies are built in
+    // screen units, so it belongs in the key.
+    const scale = x(1);
+
+    if (
+      onionElementCacheSource === allOnionLayers &&
+      onionElementCacheSelected === onionSelectedLineIndex &&
+      onionElementCacheColor === color &&
+      onionElementCacheScale === scale
+    ) {
+      return onionElementCache;
+    }
+
     let onionLayers: Path[] = [];
 
-    // Don't show onion layers in multi-path mode
-    if ($activePaths.length === 0 && settings.showOnionLayers && lines.length > 0) {
-      // Same helper the swerve overlay uses, so the two can never disagree
-      // about which layers are visible.
-      const layers = getVisibleOnionLayers(
-        startPoint,
-        lines,
-        timePrediction,
-        settings,
-        lineStartPoints,
-        headingTransitions,
-      );
+    if (onionLayersEnabled) {
+      const layers = visibleOnionLayers;
 
       layers.forEach((layer, idx) => {
         // Create a rectangle from the robot corners
@@ -2870,7 +2946,7 @@
 
         let onionRect = new Two.Path(vertices);
         onionRect.id = `onion-layer-${idx}`;
-        onionRect.stroke = settings.onionColor || "#dc2626";
+        onionRect.stroke = color;
         onionRect.noFill();
         // Increase opacity so colliders are more visible
         onionRect.opacity = 0.9;
@@ -2881,6 +2957,11 @@
       });
     }
 
+    onionElementCacheSource = allOnionLayers;
+    onionElementCacheSelected = onionSelectedLineIndex;
+    onionElementCacheColor = color;
+    onionElementCacheScale = scale;
+    onionElementCache = onionLayers;
     return onionLayers;
   })();
 
@@ -2942,14 +3023,7 @@
 
     // Don't show second onion layers in multi-path mode
     if ($activePaths.length === 0 && $dualPathMode && settings.showOnionLayers && secondLines.length > 0 && secondStartPoint) {
-      const layers = getVisibleOnionLayers(
-        secondStartPoint,
-        secondLines,
-        secondTimePrediction,
-        settings,
-        secondLineStartPoints,
-        secondHeadingTransitions,
-      );
+      const layers = visibleSecondOnionLayers;
 
       layers.forEach((layer, idx) => {
         let vertices: any[] = [];

@@ -25,6 +25,7 @@
     buildExpressionScope,
     getRandomColor,
     migrateLine,
+    migrateSequenceGroups,
     migrateSequenceItem,
     migrateVariables,
     mirrorPathData,
@@ -244,7 +245,9 @@
     sourceVariables: Variable[],
   ): SequenceItem[] {
     const scope = buildExpressionScope(sourceVariables);
-    return sourceSequence.map((item) =>
+    // Groups used to hold a bare list of path ids; convert once on the way in so
+    // nothing downstream has to know that.
+    return migrateSequenceGroups(sourceSequence).map((item) =>
       resolveSequenceItemExpressions(
         migrateSequenceItem(item, sourceVariables),
         sourceVariables,

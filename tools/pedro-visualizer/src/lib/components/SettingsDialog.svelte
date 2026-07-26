@@ -5,6 +5,13 @@
   import { AVAILABLE_FIELD_MAPS } from "../../config/defaults";
   import type { Settings } from "../../types";
   import {
+    diffAgainstSettings,
+    parseTeamCodeConstants,
+    parseTeamCodeReference,
+    type TeamCodeConstants,
+    type TeamCodeReference,
+  } from "../../utils/teamcodeConstants";
+  import {
     footprintHull,
     loadPreparedMesh,
     renderRobotImage,
@@ -107,6 +114,71 @@
         }
       }
     }
+  }
+
+  /* ---------------------------------------------------------------
+   * Read the robot's tuned constants out of TeamCode
+   * ------------------------------------------------------------ */
+
+  let loadingConstants = false;
+  let constantsError = "";
+  let constantsReport: TeamCodeConstants | null = null;
+  let constantsReference: TeamCodeReference[] = [];
+  let constantsApplied = "";
+
+  $: constantChanges = constantsReport
+    ? diffAgainstSettings(constantsReport.values, settings as unknown as Record<string, unknown>)
+    : [];
+
+  async function loadTeamCodeConstants() {
+    loadingConstants = true;
+    constantsError = "";
+    constantsApplied = "";
+
+    try {
+      const response = await fetch("/api/teamcode-constants");
+      const payload = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        // The endpoint only exists under the dev server, which is the only
+        // place the repo is on disk to read from.
+        constantsError =
+          payload.error ||
+          (response.status === 404
+            ? "Not available — this reads TeamCode from disk, so it only works while running from Vite."
+            : `Could not read the constants (${response.status}).`);
+        constantsReport = null;
+        return;
+      }
+
+      constantsReport = parseTeamCodeConstants(
+        payload.drivetrain,
+        payload.source,
+        payload.sourceFile,
+      );
+      constantsReference = parseTeamCodeReference(payload.source);
+    } catch (error) {
+      constantsError =
+        "Could not reach the dev server. This reads TeamCode from disk, so it only works while running from Vite.";
+      constantsReport = null;
+    } finally {
+      loadingConstants = false;
+    }
+  }
+
+  function applyTeamCodeConstants() {
+    if (!constantsReport) return;
+
+    const changed = constantChanges.filter((change) => change.changed);
+    if (!changed.length) return;
+
+    const next = { ...settings } as Record<string, unknown>;
+    changed.forEach((change) => {
+      next[change.setting] = change.value;
+    });
+
+    settings = next as unknown as Settings;
+    constantsApplied = `Applied ${changed.length} ${changed.length === 1 ? "value" : "values"}`;
   }
 
   /* ---------------------------------------------------------------
@@ -894,6 +966,158 @@
             <div
               class="mt-2 space-y-3 p-3 bg-neutral-50 dark:bg-neutral-800/50 rounded-lg"
             >
+              <!--
+                These numbers decide every time estimate the tool shows, and
+                several of them the team has already measured: that is what
+                PedroPathing's tuning produces, and it is sitting in TeamCode.
+                Reading it beats copying figures between two files by hand.
+              -->
+              <div
+                class="rounded-lg border border-sky-200 dark:border-sky-900 bg-sky-50/60 dark:bg-sky-950/30 p-3"
+              >
+                <div class="flex items-center justify-between gap-3">
+                  <div>
+                    <div
+                      class="text-sm font-medium text-neutral-800 dark:text-neutral-100"
+                    >
+                      Load from TeamCode
+                    </div>
+                    <div class="text-xs text-neutral-500 dark:text-neutral-400">
+                      Read the robot's tuned PedroPathing constants instead of
+                      guessing them
+                    </div>
+                  </div>
+                  <button
+                    on:click={loadTeamCodeConstants}
+                    disabled={loadingConstants}
+                    class="shrink-0 px-3 py-1.5 text-xs font-semibold rounded bg-sky-500 text-white hover:bg-sky-600 disabled:opacity-60"
+                  >
+                    {loadingConstants ? "Reading…" : "Read constants"}
+                  </button>
+                </div>
+
+                {#if constantsError}
+                  <p
+                    class="mt-2 text-xs text-rose-600 dark:text-rose-400"
+                    role="alert"
+                  >
+                    {constantsError}
+                  </p>
+                {/if}
+
+                {#if constantsReport}
+                  <div class="mt-3 space-y-2">
+                    <p class="text-[11px] text-neutral-500 dark:text-neutral-400">
+                      {constantsReport.drivetrain} — {constantsReport.sourceFile}
+                    </p>
+
+                    <!-- What it found, and what it would change it from. -->
+                    {#each constantChanges as change (change.setting)}
+                      <div
+                        class="rounded border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 p-2"
+                      >
+                        <div class="flex items-baseline justify-between gap-2">
+                          <span
+                            class="text-xs font-medium text-neutral-800 dark:text-neutral-100"
+                          >
+                            {change.label}
+                          </span>
+                          <span class="text-xs font-mono">
+                            {#if change.changed}
+                              <span class="text-neutral-400 line-through"
+                                >{change.current ?? "—"}</span
+                              >
+                              <span
+                                class="ml-1 font-semibold text-sky-600 dark:text-sky-400"
+                                >{change.value} {change.unit}</span
+                              >
+                            {:else}
+                              <span class="text-neutral-500">
+                                {change.value}
+                                {change.unit} — already set
+                              </span>
+                            {/if}
+                          </span>
+                        </div>
+                        <div
+                          class="mt-0.5 font-mono text-[10px] text-neutral-400 dark:text-neutral-500 break-all"
+                        >
+                          {change.source}
+                        </div>
+                        {#if change.note}
+                          <p
+                            class="mt-1 text-[11px] {change.ceiling
+                              ? 'text-amber-700 dark:text-amber-400'
+                              : 'text-neutral-500 dark:text-neutral-400'}"
+                          >
+                            {change.ceiling ? "Ceiling: " : ""}{change.note}
+                          </p>
+                        {/if}
+                      </div>
+                    {/each}
+
+                    <!--
+                      Named explicitly so the guessed numbers stay visibly
+                      guessed instead of blending in with the measured ones.
+                    -->
+                    {#if constantsReport.missing.length}
+                      <details
+                        class="rounded border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-900 p-2"
+                      >
+                        <summary
+                          class="cursor-pointer text-xs font-medium text-neutral-700 dark:text-neutral-200"
+                        >
+                          {constantsReport.missing.length} still hand-tuned — PedroPathing
+                          does not measure these
+                        </summary>
+                        <ul class="mt-2 space-y-1">
+                          {#each constantsReport.missing as gap (gap.setting)}
+                            <li
+                              class="text-[11px] text-neutral-500 dark:text-neutral-400"
+                            >
+                              <span
+                                class="font-medium text-neutral-700 dark:text-neutral-200"
+                                >{gap.label}:</span
+                              >
+                              {gap.reason}
+                            </li>
+                          {/each}
+                        </ul>
+                      </details>
+                    {/if}
+
+                    {#if constantsReference.length}
+                      <p
+                        class="text-[11px] text-neutral-500 dark:text-neutral-400"
+                      >
+                        Also read, for context: {constantsReference
+                          .map((entry) => `${entry.label} ${entry.value}${entry.unit}`)
+                          .join(", ")}
+                      </p>
+                    {/if}
+
+                    <div class="flex items-center gap-2">
+                      <button
+                        on:click={applyTeamCodeConstants}
+                        disabled={!constantChanges.some((change) => change.changed)}
+                        class="px-3 py-1.5 text-xs font-semibold rounded bg-emerald-500 text-white hover:bg-emerald-600 disabled:opacity-50"
+                      >
+                        {constantChanges.some((change) => change.changed)
+                          ? "Apply to settings"
+                          : "Nothing to change"}
+                      </button>
+                      {#if constantsApplied}
+                        <span
+                          class="text-xs font-semibold text-emerald-600 dark:text-emerald-400"
+                        >
+                          {constantsApplied}
+                        </span>
+                      {/if}
+                    </div>
+                  </div>
+                {/if}
+              </div>
+
               <!-- Velocity Settings -->
               <div class="grid grid-cols-2 gap-3">
                 <div>

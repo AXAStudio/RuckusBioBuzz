@@ -20,7 +20,7 @@
     generateTeamCodeAutoCode,
   } from "../../utils/codeExporter";
   import { validateJavaDelimiters } from "../../utils/javaValidation";
-  import { buildRoute } from "../../utils/sequence";
+  import { buildRoute, groupLineIds, groupMembers } from "../../utils/sequence";
   import {
     getAngularDifference,
     getLineEndHeading,
@@ -354,7 +354,7 @@
       (item) =>
         item.kind === "path" ||
         ((item.kind === "repeat" || item.kind === "conditional") &&
-          item.lineIds.length > 0),
+          groupMembers(item).length > 0),
     );
     if (firstPathIndex === -1) {
       messages.push({

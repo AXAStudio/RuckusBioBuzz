@@ -8,6 +8,7 @@ import {
   radiansToDegrees,
 } from "./math";
 import { getRobotCorners } from "./geometry";
+import { transformFootprint } from "./clearance";
 import { calculateMotionProfileDistanceAtTime } from "./timeCalculator";
 import { curveParameterAtDistance, profileDistanceAtTime } from "./motionProfile";
 import type { Point, Line, TimelineEvent, BasePoint, Settings } from "../types";
@@ -618,6 +619,14 @@ export function generateOnionLayers(
   lineStartPoints?: Map<string, BasePoint>,
   /** How each path picks up its heading goal, keyed by line id. */
   headingTransitions?: Map<string, HeadingTransition>,
+  /**
+   * The robot's real outline in its own frame, when one has been taken from
+   * CAD. These bodies exist to judge clearance by eye, so drawing a bounding
+   * box around a robot whose shape is known would be showing the wrong shape
+   * for the one job they have — and it would disagree with both the picture on
+   * the field and the clearance check, which use the real outline.
+   */
+  footprint?: BasePoint[],
 ): Array<{ x: number; y: number; heading: number; corners: BasePoint[]; lineIndex: number; t: number }> {
   if (lines.length === 0) return [];
 
@@ -708,14 +717,17 @@ export function generateOnionLayers(
           transition?.catchUp,
         );
 
-        // Get robot corners for this position
-        const corners = getRobotCorners(
-          robotPosInches.x,
-          robotPosInches.y,
-          heading,
-          robotWidth,
-          robotHeight,
-        );
+        // The real outline when there is one, the bounding rectangle otherwise.
+        const corners =
+          footprint && footprint.length >= 3
+            ? transformFootprint(footprint, robotPosInches.x, robotPosInches.y, heading)
+            : getRobotCorners(
+                robotPosInches.x,
+                robotPosInches.y,
+                heading,
+                robotWidth,
+                robotHeight,
+              );
 
         layers.push({
           x: robotPosInches.x,

@@ -11,6 +11,9 @@
     PathVariable,
     SequenceConditionalItem,
     SequenceGroupItem,
+    SequenceGroupMember,
+    SequenceWaitItem,
+    SequenceEventItem,
     PoseVariable,
     Variable,
     VariableType,
@@ -35,11 +38,15 @@
     expressionDisplayValue,
     getRandomColor,
     groupHoldingLine,
+    groupLineIds,
+    groupMembers,
     isConditionalActive,
     isGroupItem,
     mirrorPathData,
-    moveLineIntoGroup,
-    moveLineOutOfGroups,
+    groupHoldingMember,
+    memberKey,
+    moveItemIntoGroup,
+    moveItemOutOfGroups,
     poseVariablesOf,
     skippedLineIds,
     resolveLineExpressions,
@@ -105,6 +112,10 @@
 
   let selectedChainId = "";
   let selectedChain: PathChain | null = null;
+  /**
+   * The member being dragged, by key: a path's line id, or a wait's or event's
+   * own id. Groups hold all three, so the drag cannot be about paths alone.
+   */
   let draggedLineId = "";
   let dragOverRepeatId = "";
   let dragOverTopLevel = false;
@@ -115,7 +126,7 @@
 
   // Which block the dragged path came from; empty when it is already top level.
   $: draggedFromGroupId = draggedLineId
-    ? groupHoldingLine(sequence, draggedLineId)?.id || ""
+    ? groupHoldingMember(sequence, draggedLineId)?.id || ""
     : "";
   $: showDragOutZone = Boolean(draggedLineId && draggedFromGroupId);
 
@@ -1019,6 +1030,101 @@
     return lines.find((line) => line.id === lineId)?.locked ?? false;
   }
 
+  /* ---------------------------------------------------------------
+   * Editing a wait or an event that lives inside a group
+   * ------------------------------------------------------------ */
+
+  /** The wait/event members of a group, for the rows rendered inside it. */
+  function groupHold(
+    groupId: string,
+    key: string,
+  ): SequenceWaitItem | SequenceEventItem | null {
+    const group = sequence.find(
+      (item): item is SequenceGroupItem => isGroupItem(item) && item.id === groupId,
+    );
+    if (!group) return null;
+    const member = groupMembers(group).find((entry) => memberKey(entry) === key);
+    return member && member.kind !== "path" ? member : null;
+  }
+
+  function withGroupMembers(
+    groupId: string,
+    transform: (members: SequenceGroupMember[]) => SequenceGroupMember[],
+  ) {
+    sequence = sequence.map((item) => {
+      if (!isGroupItem(item) || item.id !== groupId) return item;
+      return { ...item, members: transform(groupMembers(item)), lineIds: undefined };
+    });
+  }
+
+  function updateGroupHold(
+    groupId: string,
+    key: string,
+    // Only the fields a wait and an event share; intersecting the two types
+    // would make `kind` impossible and the patch unusable.
+    patch: Partial<Omit<SequenceWaitItem, "kind" | "id">>,
+  ) {
+    withGroupMembers(groupId, (members) =>
+      members.map((member) =>
+        memberKey(member) === key && member.kind !== "path"
+          ? ({ ...(member as SequenceWaitItem), ...patch } as SequenceGroupMember)
+          : member,
+      ),
+    );
+  }
+
+  function removeGroupMember(groupId: string, key: string) {
+    withGroupMembers(groupId, (members) =>
+      members.filter((member) => memberKey(member) !== key),
+    );
+    recordChange?.();
+  }
+
+  function insertGroupHoldAfter(groupId: string, key: string, kind: "wait" | "event") {
+    withGroupMembers(groupId, (members) => {
+      const next = [...members];
+      const at = next.findIndex((member) => memberKey(member) === key);
+      const item = kind === "event" ? makeShootEventItem() : makeWaitItem();
+      next.splice(at >= 0 ? at + 1 : next.length, 0, item as SequenceGroupMember);
+      return next;
+    });
+    recordChange?.();
+  }
+
+  function moveGroupMember(groupId: string, key: string, delta: number) {
+    withGroupMembers(groupId, (members) => {
+      const at = members.findIndex((member) => memberKey(member) === key);
+      const to = at + delta;
+      if (at < 0 || to < 0 || to >= members.length) return members;
+      const next = [...members];
+      const [moved] = next.splice(at, 1);
+      next.splice(to, 0, moved);
+      return next;
+    });
+    recordChange?.();
+  }
+
+  /** Whether the thing being dragged is pinned, whichever kind it is. */
+  function memberIsLocked(key: string): boolean {
+    const line = lines.find((item) => item.id === key);
+    if (line) return line.locked ?? false;
+
+    const top = sequence.find(
+      (item) => (item.kind === "wait" || item.kind === "event") && item.id === key,
+    );
+    if (top && (top.kind === "wait" || top.kind === "event")) {
+      return top.locked ?? false;
+    }
+
+    for (const item of sequence) {
+      if (!isGroupItem(item)) continue;
+      const member = groupMembers(item).find((entry) => memberKey(entry) === key);
+      if (member && member.kind !== "path") return member.locked ?? false;
+    }
+
+    return false;
+  }
+
   /**
    * The step list does not scroll on its own during a drag, so a block that is
    * off screen would be unreachable. While dragging, hovering near the top or
@@ -1068,7 +1174,7 @@
    * pointerup, pointercancel, Escape, or the window losing focus.
    */
   function beginPathDrag(event: PointerEvent, lineId: string) {
-    if (!lineId || lineIsLocked(lineId)) return;
+    if (!lineId || memberIsLocked(lineId)) return;
     if (event.button !== 0) return; // Left button only.
 
     // Stops text selection and any native drag starting alongside this one.
@@ -1140,12 +1246,12 @@
     const toTopLevel = dragOverTopLevel;
 
     resetDragState();
-    if (!lineId || lineIsLocked(lineId)) return;
+    if (!lineId || memberIsLocked(lineId)) return;
 
     const next = targetGroupId
-      ? moveLineIntoGroup(sequence, targetGroupId, lineId)
+      ? moveItemIntoGroup(sequence, targetGroupId, lineId)
       : toTopLevel
-        ? moveLineOutOfGroups(sequence, lineId)
+        ? moveItemOutOfGroups(sequence, lineId)
         : sequence;
 
     if (next === sequence) return;
@@ -1639,7 +1745,7 @@
       id: makeId(),
       name: "Repeat Loop",
       count: 2,
-      lineIds: [seqItem.lineId],
+      members: [{ kind: "path", lineId: seqItem.lineId }],
       locked: false,
     };
 
@@ -1675,17 +1781,24 @@
     const seqItem = sequence[seqIndex];
     if (!seqItem || !isGroupItem(seqItem)) return;
 
-    const sourceIds = (seqItem.lineIds || []).filter(Boolean);
     const clonedLines: Line[] = [];
     const clonedIds: string[] = [];
 
-    sourceIds.forEach((lineId) => {
-      const source = lines.find((line) => line.id === lineId);
-      if (!source) return;
-      const clone = cloneLineForRoute(source, clonedLines.length, 0);
-      clonedLines.push(clone);
-      clonedIds.push(clone.id!);
-    });
+    // Paths get fresh copies so editing one block cannot edit the other; waits
+    // and events carry no geometry, so a fresh id is all they need.
+    const clonedMembers = groupMembers(seqItem)
+      .map((member) => {
+        if (member.kind !== "path") {
+          return { ...cloneJson(member), id: makeId() } as typeof member;
+        }
+        const source = lines.find((line) => line.id === member.lineId);
+        if (!source) return null;
+        const clone = cloneLineForRoute(source, clonedLines.length, 0);
+        clonedLines.push(clone);
+        clonedIds.push(clone.id!);
+        return { kind: "path", lineId: clone.id! } as const;
+      })
+      .filter(Boolean) as ReturnType<typeof groupMembers>;
 
     if (clonedLines.length) {
       lines = [...lines, ...clonedLines];
@@ -1705,7 +1818,8 @@
       ...cloneJson(seqItem),
       id: makeId(),
       name: `${seqItem.name || "Group"} Copy`,
-      lineIds: clonedIds,
+      members: clonedMembers,
+      lineIds: undefined,
     });
     sequence = newSeq;
     syncLinesToSequence(newSeq);
@@ -1725,12 +1839,19 @@
     newLines.splice(lineIndex + 1, 0, clone);
     lines = newLines;
 
-    const insertIndex = seqItem.lineIds.indexOf(lineId);
-    const nextLineIds = [...seqItem.lineIds];
-    nextLineIds.splice(insertIndex >= 0 ? insertIndex + 1 : nextLineIds.length, 0, clone.id!);
+    const currentMembers = groupMembers(seqItem);
+    const insertIndex = currentMembers.findIndex(
+      (member) => member.kind === "path" && member.lineId === lineId,
+    );
+    const nextMembers = [...currentMembers];
+    nextMembers.splice(
+      insertIndex >= 0 ? insertIndex + 1 : nextMembers.length,
+      0,
+      { kind: "path", lineId: clone.id! },
+    );
 
     const newSeq = [...sequence];
-    newSeq[seqIndex] = { ...seqItem, lineIds: nextLineIds };
+    newSeq[seqIndex] = { ...seqItem, members: nextMembers, lineIds: undefined };
     sequence = newSeq;
 
     const ownerChainId = getLinePrimaryChainId(sourceLine.id || "");
@@ -1761,7 +1882,7 @@
       id: makeId(),
       name: "If",
       condition: "",
-      lineIds: [seqItem.lineId],
+      members: [{ kind: "path", lineId: seqItem.lineId }],
       locked: false,
     };
 
@@ -1781,7 +1902,7 @@
         id: makeId(),
         name: "If",
         condition: "",
-        lineIds: [],
+        members: [],
         locked: false,
       },
     ];
@@ -1897,7 +2018,10 @@
           isGroupItem(item)
             ? {
                 ...item,
-                lineIds: item.lineIds.filter((lineId) => lineId !== removedId),
+                members: groupMembers(item).filter(
+                  (member) => !(member.kind === "path" && member.lineId === removedId),
+                ),
+                lineIds: undefined,
               }
             : item,
         )
@@ -1907,7 +2031,7 @@
           s.kind === "path"
             ? s.lineId !== removedId
             : s.kind === "repeat"
-              ? s.lineIds.length > 0
+              ? groupMembers(s).length > 0
               : true,
         );
       removeLineFromChains(removedId);
@@ -2057,7 +2181,7 @@
         id: makeId(),
         name: "Repeat Loop",
         count: 2,
-        lineIds: [],
+        members: [],
         locked: false,
       } as SequenceItem,
     ];
@@ -2200,7 +2324,7 @@
       }
       if (isGroupItem(it)) {
         const groupLocked = (it as any).locked ?? false;
-        return groupLocked || it.lineIds.some((lineId) =>
+        return groupLocked || groupLineIds(it).some((lineId) =>
           lines.find((line) => line.id === lineId)?.locked,
         );
       }
@@ -2521,12 +2645,63 @@
                 </button>
               </div>
               <div class="flex flex-col gap-2">
-                {#if item.lineIds.length === 0}
+                {#if groupMembers(item).length === 0}
                   <div class="rounded border border-dashed border-cyan-300 dark:border-cyan-700 bg-white/70 dark:bg-neutral-950/50 p-4 text-center text-xs font-semibold text-cyan-700 dark:text-cyan-200">
-                    Drag paths into this loop
+                    Drag paths, waits or events into this loop
                   </div>
                 {/if}
-                {#each item.lineIds as lineId, loopLineIndex (lineId)}
+                {#each groupMembers(item) as member, loopLineIndex (memberKey(member))}
+                  {#if member.kind !== "path"}
+                    <!--
+                      A wait or an event that lives in this block. It runs
+                      in its place in the order, on every pass of a loop.
+                    -->
+                    <div
+                      class="rounded border border-cyan-200 dark:border-cyan-900 bg-white dark:bg-neutral-900 p-1 transition {draggedLineId === memberKey(member) ? 'opacity-60' : ''}"
+                      role="listitem"
+                    >
+                      <WaitRow
+                        label={member.kind === "event" ? "Event" : "Wait"}
+                        name={member.name}
+                        durationMs={member.durationMs}
+                        durationExpression={member.durationExpression}
+                        enabledExpression={member.enabledExpression}
+                        {variables}
+                        locked={member.locked ?? false}
+                        onToggleLock={() =>
+                          updateGroupHold(item.id, memberKey(member), {
+                            locked: !(groupHold(item.id, memberKey(member))?.locked ?? false),
+                          })}
+                        onChange={(newName, newDuration) =>
+                          updateGroupHold(item.id, memberKey(member), {
+                            name: newName,
+                            durationMs: Math.max(0, Number(newDuration) || 0),
+                          })}
+                        onDurationExpressionChange={(raw) =>
+                          updateGroupHold(item.id, memberKey(member), {
+                            durationExpression: raw.trim() ? raw : undefined,
+                          })}
+                        onEnabledExpressionChange={(raw) =>
+                          updateGroupHold(item.id, memberKey(member), {
+                            enabledExpression: raw.trim() ? raw : undefined,
+                          })}
+                        onCommit={() => recordChange?.()}
+                        onRemove={() => removeGroupMember(item.id, memberKey(member))}
+                        onInsertAfter={() =>
+                          insertGroupHoldAfter(item.id, memberKey(member), "wait")}
+                        onAddPathAfter={() => addLine()}
+                        onAddEventAfter={() =>
+                          insertGroupHoldAfter(item.id, memberKey(member), "event")}
+                        onMoveUp={() => moveGroupMember(item.id, memberKey(member), -1)}
+                        onMoveDown={() => moveGroupMember(item.id, memberKey(member), 1)}
+                        canMoveUp={loopLineIndex !== 0}
+                        canMoveDown={loopLineIndex !== groupMembers(item).length - 1}
+                        onPointerDown={(event) => beginPathDrag(event, memberKey(member))}
+                        dragging={draggedLineId === memberKey(member)}
+                      />
+                    </div>
+                  {:else}
+                  {@const lineId = member.lineId}
                   {#each lines.filter((l) => l.id === lineId) as ln (ln.id)}
                     <div
                       class="rounded border border-cyan-200 dark:border-cyan-900 bg-white dark:bg-neutral-900 p-2 transition {draggedLineId === (ln.id || '') ? 'opacity-60' : ''}"
@@ -2576,6 +2751,7 @@
                       />
                     </div>
                   {/each}
+                  {/if}
                 {/each}
               </div>
             </div>
@@ -2669,14 +2845,65 @@
               </div>
 
               <div class="flex flex-col gap-2">
-                {#if item.lineIds.length === 0}
+                {#if groupMembers(item).length === 0}
                   <div
                     class="rounded border border-dashed border-violet-300 dark:border-violet-700 bg-white/70 dark:bg-neutral-950/50 p-4 text-center text-xs font-semibold text-violet-700 dark:text-violet-200"
                   >
                     Drag paths into this if block
                   </div>
                 {/if}
-                {#each item.lineIds as lineId, blockLineIndex (lineId)}
+                {#each groupMembers(item) as member, blockLineIndex (memberKey(member))}
+                  {#if member.kind !== "path"}
+                    <!--
+                      A wait or an event that lives in this block. It runs
+                      in its place in the order, on every pass of a loop.
+                    -->
+                    <div
+                      class="rounded border border-violet-200 dark:border-violet-900 bg-white dark:bg-neutral-900 p-1 transition {draggedLineId === memberKey(member) ? 'opacity-60' : ''}"
+                      role="listitem"
+                    >
+                      <WaitRow
+                        label={member.kind === "event" ? "Event" : "Wait"}
+                        name={member.name}
+                        durationMs={member.durationMs}
+                        durationExpression={member.durationExpression}
+                        enabledExpression={member.enabledExpression}
+                        {variables}
+                        locked={member.locked ?? false}
+                        onToggleLock={() =>
+                          updateGroupHold(item.id, memberKey(member), {
+                            locked: !(groupHold(item.id, memberKey(member))?.locked ?? false),
+                          })}
+                        onChange={(newName, newDuration) =>
+                          updateGroupHold(item.id, memberKey(member), {
+                            name: newName,
+                            durationMs: Math.max(0, Number(newDuration) || 0),
+                          })}
+                        onDurationExpressionChange={(raw) =>
+                          updateGroupHold(item.id, memberKey(member), {
+                            durationExpression: raw.trim() ? raw : undefined,
+                          })}
+                        onEnabledExpressionChange={(raw) =>
+                          updateGroupHold(item.id, memberKey(member), {
+                            enabledExpression: raw.trim() ? raw : undefined,
+                          })}
+                        onCommit={() => recordChange?.()}
+                        onRemove={() => removeGroupMember(item.id, memberKey(member))}
+                        onInsertAfter={() =>
+                          insertGroupHoldAfter(item.id, memberKey(member), "wait")}
+                        onAddPathAfter={() => addLine()}
+                        onAddEventAfter={() =>
+                          insertGroupHoldAfter(item.id, memberKey(member), "event")}
+                        onMoveUp={() => moveGroupMember(item.id, memberKey(member), -1)}
+                        onMoveDown={() => moveGroupMember(item.id, memberKey(member), 1)}
+                        canMoveUp={blockLineIndex !== 0}
+                        canMoveDown={blockLineIndex !== groupMembers(item).length - 1}
+                        onPointerDown={(event) => beginPathDrag(event, memberKey(member))}
+                        dragging={draggedLineId === memberKey(member)}
+                      />
+                    </div>
+                  {:else}
+                  {@const lineId = member.lineId}
                   {#each lines.filter((l) => l.id === lineId) as ln (ln.id)}
                     <div
                       class="rounded border border-violet-200 dark:border-violet-900 bg-white dark:bg-neutral-900 p-2 transition {draggedLineId ===
@@ -2729,6 +2956,7 @@
                       />
                     </div>
                   {/each}
+                  {/if}
                 {/each}
               </div>
             </div>
@@ -2783,6 +3011,8 @@
               onMoveDown={() => moveSequenceItem(sIdx, 1)}
               canMoveUp={sIdx !== 0}
               canMoveDown={sIdx !== sequence.length - 1}
+              onPointerDown={(event) => beginPathDrag(event, getWait(item).id)}
+              dragging={draggedLineId === getWait(item).id}
             />
           {/if}
         </div>

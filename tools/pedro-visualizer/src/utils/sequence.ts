@@ -4,6 +4,7 @@ import type {
   SequenceConditionalItem,
   SequenceEventItem,
   SequenceGroupItem,
+  SequenceGroupMember,
   SequenceItem,
   SequenceWaitItem,
   Variable,
@@ -23,6 +24,48 @@ export function isGroupItem(item: SequenceItem): item is SequenceGroupItem {
   return item.kind === "repeat" || item.kind === "conditional";
 }
 
+/**
+ * What identifies a member inside a group. A path is referenced by the id of
+ * the line it draws; a wait or an event carries its own.
+ */
+export function memberKey(member: SequenceGroupMember): string {
+  return member.kind === "path" ? member.lineId : member.id;
+}
+
+/**
+ * A group's contents, in order.
+ *
+ * Groups used to hold nothing but a list of path ids, so a file written by an
+ * older build is read through here and turned into members on the way past. The
+ * old field stays on the type as deprecated rather than being deleted, because
+ * a project saved months ago still has to open.
+ */
+export function groupMembers(item: SequenceGroupItem): SequenceGroupMember[] {
+  if (Array.isArray(item.members)) return item.members;
+  return (item.lineIds || []).map((lineId) => ({ kind: "path", lineId }) as const);
+}
+
+/** Just the paths in a group, for everything that only cares about geometry. */
+export function groupLineIds(item: SequenceGroupItem): string[] {
+  return groupMembers(item)
+    .filter((member): member is { kind: "path"; lineId: string } => member.kind === "path")
+    .map((member) => member.lineId);
+}
+
+/** Normalises a loaded sequence so nothing downstream has to know about `lineIds`. */
+export function migrateSequenceGroups(sequence: SequenceItem[] = []): SequenceItem[] {
+  let changed = false;
+
+  const next = sequence.map((item) => {
+    if (!isGroupItem(item) || Array.isArray(item.members)) return item;
+    changed = true;
+    const { lineIds, ...rest } = item;
+    return { ...rest, members: groupMembers(item) } as SequenceItem;
+  });
+
+  return changed ? next : sequence;
+}
+
 /** The group holding a path, or undefined when it sits at the top level. */
 export function groupHoldingLine(
   sequence: SequenceItem[],
@@ -31,7 +74,19 @@ export function groupHoldingLine(
   if (!lineId) return undefined;
   return sequence.find(
     (item): item is SequenceGroupItem =>
-      isGroupItem(item) && (item.lineIds || []).includes(lineId),
+      isGroupItem(item) && groupLineIds(item).includes(lineId),
+  );
+}
+
+/** The group holding any member — path, wait or event. */
+export function groupHoldingMember(
+  sequence: SequenceItem[],
+  key: string,
+): SequenceGroupItem | undefined {
+  if (!key) return undefined;
+  return sequence.find(
+    (item): item is SequenceGroupItem =>
+      isGroupItem(item) && groupMembers(item).some((member) => memberKey(member) === key),
   );
 }
 
@@ -44,43 +99,77 @@ function keepEmptiedGroup(item: SequenceGroupItem): boolean {
 }
 
 /**
- * Moves a path into the given group, removing it from wherever it was.
- * Returns the original array unchanged when the move is not possible.
+ * Moves a member into the given group, removing it from wherever it was.
+ *
+ * Works for paths, waits and events alike: a loop that drives somewhere, pauses,
+ * then drives on is an ordinary thing to want, and it is the order between them
+ * that makes it mean anything. Returns the original array when the move is not
+ * possible.
  */
-export function moveLineIntoGroup(
+export function moveItemIntoGroup(
   sequence: SequenceItem[],
   groupId: string,
-  lineId: string,
+  key: string,
 ): SequenceItem[] {
-  if (!groupId || !lineId) return sequence;
+  if (!groupId || !key) return sequence;
 
   const target = sequence.find(
     (item): item is SequenceGroupItem => isGroupItem(item) && item.id === groupId,
   );
   if (!target || target.locked) return sequence;
 
+  // The member's own data has to come with it. A path is just an id, but a wait
+  // or an event carries its name and duration, so it is lifted out of wherever
+  // it currently lives rather than recreated.
+  let moving: SequenceGroupMember | null = null;
+
+  sequence.forEach((item) => {
+    if (item.kind === "path" && item.lineId === key) {
+      moving = { kind: "path", lineId: key };
+      return;
+    }
+    if ((item.kind === "wait" || item.kind === "event") && item.id === key) {
+      moving = item;
+      return;
+    }
+    if (isGroupItem(item)) {
+      const found = groupMembers(item).find((member) => memberKey(member) === key);
+      if (found) moving = found;
+    }
+  });
+
+  if (!moving) return sequence;
+  if (target.locked) return sequence;
+
   const next: SequenceItem[] = [];
   let targetIndex = -1;
 
   sequence.forEach((item) => {
     if (item.kind === "path") {
-      if (item.lineId !== lineId) next.push(item);
+      if (item.lineId !== key) next.push(item);
+      return;
+    }
+
+    if (item.kind === "wait" || item.kind === "event") {
+      if (item.id !== key) next.push(item);
       return;
     }
 
     if (isGroupItem(item)) {
-      const lineIds = (item.lineIds || []).filter((id) => id !== lineId);
+      const members = groupMembers(item).filter(
+        (member) => memberKey(member) !== key,
+      );
 
       if (item.id === groupId) {
         targetIndex = next.length;
-        next.push({ ...item, lineIds });
+        next.push({ ...item, members, lineIds: undefined });
         return;
       }
 
       // Drop a repeat loop that this move emptied.
-      if (lineIds.length === 0 && !keepEmptiedGroup(item)) return;
+      if (members.length === 0 && !keepEmptiedGroup(item)) return;
 
-      next.push({ ...item, lineIds });
+      next.push({ ...item, members, lineIds: undefined });
       return;
     }
 
@@ -91,41 +180,57 @@ export function moveLineIntoGroup(
 
   const updated = next[targetIndex];
   if (!isGroupItem(updated)) return sequence;
-  next[targetIndex] = { ...updated, lineIds: [...updated.lineIds, lineId] };
+  next[targetIndex] = {
+    ...updated,
+    members: [...groupMembers(updated), moving],
+    lineIds: undefined,
+  };
 
   return next;
 }
 
 /**
- * Pulls a path out of whatever group holds it and appends it to the main
- * route. Returns the original array when the path was already top level.
+ * Pulls a member out of whatever group holds it and appends it to the main
+ * route. Returns the original array when it was already top level.
  */
-export function moveLineOutOfGroups(
+export function moveItemOutOfGroups(
   sequence: SequenceItem[],
-  lineId: string,
+  key: string,
 ): SequenceItem[] {
-  if (!lineId) return sequence;
-  if (!groupHoldingLine(sequence, lineId)) return sequence;
+  if (!key) return sequence;
+
+  const holder = groupHoldingMember(sequence, key);
+  if (!holder) return sequence;
+
+  const moving = groupMembers(holder).find((member) => memberKey(member) === key);
+  if (!moving) return sequence;
 
   const next: SequenceItem[] = [];
 
   sequence.forEach((item) => {
     if (isGroupItem(item)) {
-      const lineIds = (item.lineIds || []).filter((id) => id !== lineId);
-      if (lineIds.length === 0 && !keepEmptiedGroup(item)) return;
-      next.push({ ...item, lineIds });
+      const members = groupMembers(item).filter(
+        (member) => memberKey(member) !== key,
+      );
+      if (members.length === 0 && !keepEmptiedGroup(item)) return;
+      next.push({ ...item, members, lineIds: undefined });
       return;
     }
 
-    // A stale top-level entry would duplicate the path once re-added.
-    if (item.kind === "path" && item.lineId === lineId) return;
+    // A stale top-level entry would duplicate the member once re-added.
+    if (item.kind === "path" && item.lineId === key) return;
+    if ((item.kind === "wait" || item.kind === "event") && item.id === key) return;
 
     next.push(item);
   });
 
-  next.push({ kind: "path", lineId });
+  next.push(moving.kind === "path" ? { kind: "path", lineId: key } : moving);
   return next;
 }
+
+/** Back-compat names for the path-only callers. */
+export const moveLineIntoGroup = moveItemIntoGroup;
+export const moveLineOutOfGroups = moveItemOutOfGroups;
 
 /**
  * Makes the step list describe exactly the paths that exist.
@@ -165,19 +270,26 @@ export function reconcileSequence(
     }
 
     if (isGroupItem(item)) {
-      const lineIds = (item.lineIds || []).filter((lineId) => {
-        if (!knownIds.has(lineId) || seen.has(lineId)) return false;
-        seen.add(lineId);
+      const before = groupMembers(item);
+
+      // Only paths are reconciled against `lines`. A wait or an event carries
+      // its own data, so there is nothing for it to have gone stale against —
+      // dropping one here would quietly delete a step the user put in a loop.
+      const members = before.filter((member) => {
+        if (member.kind !== "path") return true;
+        if (!knownIds.has(member.lineId) || seen.has(member.lineId)) return false;
+        seen.add(member.lineId);
         return true;
       });
 
-      if (lineIds.length !== (item.lineIds || []).length) changed = true;
+      if (members.length !== before.length) changed = true;
+      if (item.lineIds !== undefined) changed = true;
 
       // An emptied repeat loop is meaningless; an emptied `if` keeps its
-      // condition so paths can be dragged back in.
-      if (lineIds.length === 0 && !keepEmptiedGroup(item)) return;
+      // condition so steps can be dragged back in.
+      if (members.length === 0 && !keepEmptiedGroup(item)) return;
 
-      next.push({ ...item, lineIds });
+      next.push({ ...item, members, lineIds: undefined });
       return;
     }
 
@@ -212,6 +324,10 @@ export type RoutePathStep = {
 export type RouteHoldStep = {
   kind: "wait" | "event";
   item: SequenceWaitItem | SequenceEventItem;
+  /** Set when the hold sits inside a repeat loop or an `if` block. */
+  groupId?: string;
+  /** Which pass of a repeat loop this hold belongs to. */
+  iteration?: number;
 };
 
 export type RouteStep = RoutePathStep | RouteHoldStep;
@@ -310,7 +426,7 @@ export function buildRoute(
   };
 
   const walkGroup = (
-    lineIds: string[] | undefined,
+    members: SequenceGroupMember[] | undefined,
     from: Point,
     record: boolean,
     execute: boolean,
@@ -318,8 +434,19 @@ export function buildRoute(
     groupId: string,
   ): Point => {
     let position = from;
-    (lineIds || []).forEach((lineId) => {
-      position = runLine(lineId, position, record, execute, iteration, groupId);
+    (members || []).forEach((member) => {
+      if (member.kind === "path") {
+        position = runLine(member.lineId, position, record, execute, iteration, groupId);
+        return;
+      }
+
+      // A wait or an event inside a loop happens on every pass, in its place in
+      // the order — that is the whole reason for putting one there. `execute` is
+      // false on the pass that only records where paths sit, so a disabled loop
+      // still draws its geometry without spending time it never spends.
+      if (execute && isEnabled(member, variables, scope)) {
+        steps.push({ kind: member.kind, item: member, groupId, iteration });
+      }
     });
     return position;
   };
@@ -346,13 +473,13 @@ export function buildRoute(
 
       if (runs === 0) {
         // Still record where the paths sit so they can be drawn.
-        walkGroup(item.lineIds, current, true, false, 0, item.id);
+        walkGroup(groupMembers(item), current, true, false, 0, item.id);
         continue;
       }
 
       for (let iteration = 0; iteration < runs; iteration++) {
         current = walkGroup(
-          item.lineIds,
+          groupMembers(item),
           current,
           iteration === 0,
           true,
@@ -372,7 +499,7 @@ export function buildRoute(
         const runs =
           continuation === null && isConditionalActive(branch, variables, scope);
         const branchEnd = walkGroup(
-          branch.lineIds,
+          groupMembers(branch),
           branchStart,
           true,
           runs,

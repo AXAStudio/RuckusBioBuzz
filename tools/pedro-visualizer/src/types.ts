@@ -206,6 +206,20 @@ export type SequenceEventItem = {
   locked?: boolean;
 };
 
+/**
+ * What a repeat loop or an `if` block can contain.
+ *
+ * Ordered and heterogeneous, because a loop that drives a path, pauses, then
+ * drives another is an ordinary thing to want, and the order between the pause
+ * and the paths is the whole point. Paths are referenced by id — their geometry
+ * lives in `lines` — while waits and events carry their own data, so a grouped
+ * one is stored here rather than at the top level.
+ */
+export type SequenceGroupMember =
+  | SequencePathItem
+  | SequenceWaitItem
+  | SequenceEventItem;
+
 export type SequenceRepeatItem = {
   kind: "repeat";
   id: string;
@@ -215,7 +229,9 @@ export type SequenceRepeatItem = {
   /** @deprecated Migrated to `countExpression` on load. */
   countVariableId?: string;
   enabledExpression?: string;
-  lineIds: string[];
+  members: SequenceGroupMember[];
+  /** @deprecated Migrated to `members` on load. */
+  lineIds?: string[];
   locked?: boolean;
 };
 
@@ -230,7 +246,9 @@ export type SequenceConditionalItem = {
   name: string;
   /** Boolean expression; empty means "always run". */
   condition?: string;
-  lineIds: string[];
+  members: SequenceGroupMember[];
+  /** @deprecated Migrated to `members` on load. */
+  lineIds?: string[];
   locked?: boolean;
 };
 
