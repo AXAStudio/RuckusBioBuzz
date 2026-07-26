@@ -56,7 +56,11 @@ export const DEFAULT_SETTINGS: Settings = {
   showEventTimeline: true,
   showAutoCountdown: true,
   showPathAnnotations: false,
+  showStopPoints: true,
+  turnCoupling: 1,
+  maxLateralAcceleration: 30,
   showSwerveModules: true,
+  showClearance: true,
 };
 
 /**

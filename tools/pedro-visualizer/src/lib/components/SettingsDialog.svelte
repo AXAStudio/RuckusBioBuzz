@@ -4,6 +4,15 @@
   import { resetSettings } from "../../utils/settingsPersistence";
   import { AVAILABLE_FIELD_MAPS } from "../../config/defaults";
   import type { Settings } from "../../types";
+  import {
+    footprintHull,
+    loadPreparedMesh,
+    renderRobotImage,
+    type CadUnit,
+    type PreparedMesh,
+    type RenderScratch,
+    type UpAxis,
+  } from "../../utils/cadRobot";
 
   export let isOpen = false;
   export let settings: Settings;
@@ -100,6 +109,157 @@
     }
   }
 
+  /* ---------------------------------------------------------------
+   * Build the robot picture from a CAD export
+   * ------------------------------------------------------------ */
+
+  let cadMesh: PreparedMesh | null = null;
+  let cadTriangles = 0;
+  let cadFileName = "";
+  let cadError = "";
+  let cadProgress = 0;
+  let cadProgressLabel = "";
+  let cadLoading = false;
+  const cadAxes: UpAxis[] = ["x", "y", "z"];
+  let cadUpAxis: UpAxis = "z";
+  let cadUpSign: 1 | -1 = 1;
+  let cadRotation = 0;
+  let cadUnit: CadUnit = "mm";
+  let cadColor = "#4f8ef7";
+  let cadPreview = "";
+  let cadLengthInches = 0;
+  let cadWidthInches = 0;
+  let cadRenderFrame = 0;
+  let cadRenderPending = false;
+  let cadQualityHandle: ReturnType<typeof setTimeout> | undefined;
+  const cadScratch: RenderScratch = {};
+
+  const makeCanvas = (width: number, height: number) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    return canvas;
+  };
+
+  function paintCad(supersample: number) {
+    if (!cadMesh) return;
+    try {
+      const result = renderRobotImage(
+        cadMesh,
+        {
+          upAxis: cadUpAxis,
+          upSign: cadUpSign,
+          rotationDegrees: cadRotation,
+          unit: cadUnit,
+          color: cadColor,
+          size: 512,
+          supersample,
+        },
+        makeCanvas,
+        cadScratch,
+      );
+      cadPreview = result.dataUrl;
+      cadLengthInches = result.lengthInches;
+      cadWidthInches = result.widthInches;
+      cadError = "";
+    } catch (error) {
+      cadError = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  /**
+   * Repaints the preview at most once per frame, and only supersamples once the
+   * controls stop moving. Coalescing on the frame keeps a rotation drag from
+   * stacking renders up behind the slider, and dropping the extra resolution
+   * while dragging keeps a heavy mesh responsive — the crisp version lands a
+   * moment later without anyone waiting on it.
+   */
+  function scheduleCadRender() {
+    if (!cadMesh) return;
+
+    clearTimeout(cadQualityHandle);
+    cadQualityHandle = setTimeout(() => paintCad(2), 220);
+
+    if (cadRenderPending) return;
+    cadRenderPending = true;
+    cadRenderFrame = requestAnimationFrame(() => {
+      cadRenderPending = false;
+      paintCad(1);
+    });
+  }
+
+  // Any change to the orientation controls repaints the preview.
+  $: if (cadMesh && (cadUpAxis || cadUpSign || cadUnit || cadColor || cadRotation !== undefined)) {
+    scheduleCadRender();
+  }
+
+  async function handleCadUpload(event: Event) {
+    const input = event.currentTarget as HTMLInputElement;
+    const file = input.files?.[0];
+    if (!file) return;
+
+    cadLoading = true;
+    cadError = "";
+    cadProgress = 0;
+    cadProgressLabel = "Reading file…";
+    cadPreview = "";
+    cadMesh = null;
+
+    try {
+      const loaded = await loadPreparedMesh(file, (fraction, label) => {
+        cadProgress = fraction;
+        cadProgressLabel = label;
+      });
+      cadMesh = loaded.mesh;
+      cadTriangles = loaded.triangleCount;
+      cadFileName = file.name;
+      scheduleCadRender();
+    } catch (error) {
+      cadMesh = null;
+      cadFileName = "";
+      cadError = error instanceof Error ? error.message : String(error);
+    } finally {
+      cadLoading = false;
+      // Let the same file be picked again after a failed attempt.
+      input.value = "";
+    }
+  }
+
+  function applyCadImage(alsoSetSize: boolean) {
+    if (!cadPreview) return;
+
+    settings.robotImage = cadPreview;
+    settings.showHeadingArrow = true;
+    if (alsoSetSize && cadLengthInches > 0 && cadWidthInches > 0) {
+      // `rWidth` is the extent along the robot's forward direction, which is
+      // the image's horizontal axis.
+      settings.rWidth = Math.round(cadLengthInches * 100) / 100;
+      settings.rHeight = Math.round(cadWidthInches * 100) / 100;
+    }
+
+    // Keep the real outline for clearance checks. The last projection is the one
+    // the preview was drawn from, so this costs a single pass and only here —
+    // running it inside the render would put it on every frame of a drag.
+    const projection = cadScratch.projection;
+    if (projection) {
+      const outline = footprintHull(projection, cadUnit);
+      settings.robotOutline =
+        outline.points.length >= 3
+          ? {
+              points: outline.points,
+              lengthInches: outline.lengthInches,
+              widthInches: outline.widthInches,
+            }
+          : undefined;
+    }
+
+    settings = { ...settings };
+  }
+
+  function openCadPicker() {
+    document.getElementById("robot-cad-input")?.click();
+  }
+
   async function handleRobotImageUpload(e: Event) {
     const file = (e.currentTarget as HTMLInputElement).files?.[0];
     if (!file) return;
@@ -109,6 +269,9 @@
       settings.robotImage = base64;
       // Automatically enable heading arrow when custom robot image is uploaded
       settings.showHeadingArrow = true;
+      // A hand-picked picture says nothing about the shape, so any outline left
+      // over from a CAD import belongs to a different robot now.
+      settings.robotOutline = undefined;
       settings = { ...settings }; // Force reactivity
 
       const successMsg = document.createElement("div");
@@ -305,7 +468,10 @@
                 >
                   Safety Margin (in)
                   <div class="text-xs text-neutral-500 dark:text-neutral-400">
-                    Buffer around obstacles
+                    How close the robot may come to an obstacle or a field wall
+                    before the path is flagged. Measured from the robot's own
+                    footprint at the heading it holds, so a path that is clear
+                    driving straight can still be flagged where it turns.
                   </div>
                 </label>
                 <input
@@ -437,6 +603,183 @@
                       </svg>
                       Upload Robot Image
                     </button>
+
+                    <!--
+                      Build the picture from the team's own CAD. The field draws
+                      the real footprint, which beats a stock icon for judging
+                      clearances by eye.
+                    -->
+                    <input
+                      id="robot-cad-input"
+                      type="file"
+                      accept=".stl,.obj"
+                      class="hidden"
+                      on:change={handleCadUpload}
+                    />
+                    <button
+                      on:click={openCadPicker}
+                      class="px-4 py-2 text-sm bg-indigo-500 hover:bg-indigo-600 text-white rounded-md transition-colors flex items-center justify-center gap-2"
+                      title="Build a top-down image from an STL or OBJ export of the robot"
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        class="size-4"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                        stroke-width="2"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          d="M12 3l8 4.5v9L12 21l-8-4.5v-9L12 3zm0 0v18m8-13.5L4 16.5m16 0L4 7.5"
+                        />
+                      </svg>
+                      {cadLoading ? "Loading…" : "Build from CAD (STL / OBJ)"}
+                    </button>
+
+                    {#if cadLoading}
+                      <div class="flex flex-col gap-1">
+                        <div
+                          class="h-2 w-full overflow-hidden rounded-full bg-neutral-200 dark:bg-neutral-700"
+                        >
+                          <div
+                            class="h-full rounded-full bg-indigo-500 transition-[width] duration-150"
+                            style={`width: ${Math.round(cadProgress * 100)}%`}
+                          />
+                        </div>
+                        <p class="text-xs text-neutral-500 dark:text-neutral-400">
+                          {cadProgressLabel}
+                        </p>
+                      </div>
+                    {/if}
+
+                    {#if cadError}
+                      <p class="text-xs text-rose-500 dark:text-rose-400">
+                        {cadError}
+                      </p>
+                    {/if}
+
+                    {#if cadMesh}
+                      <div
+                        class="flex flex-col gap-3 rounded-md border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 p-3"
+                      >
+                        <div class="flex items-start gap-3">
+                          <div
+                            class="shrink-0 rounded border border-neutral-200 dark:border-neutral-700 bg-[repeating-conic-gradient(#e5e5e5_0%_25%,#fafafa_0%_50%)] dark:bg-[repeating-conic-gradient(#333_0%_25%,#262626_0%_50%)] bg-[length:12px_12px] p-1"
+                          >
+                            {#if cadPreview}
+                              <img
+                                src={cadPreview}
+                                alt="Robot from CAD"
+                                class="size-24 object-contain"
+                              />
+                            {:else}
+                              <div class="size-24" />
+                            {/if}
+                          </div>
+                          <div class="min-w-0 flex-1 text-xs text-neutral-600 dark:text-neutral-300">
+                            <p class="truncate font-medium">{cadFileName}</p>
+                            <p>{cadTriangles.toLocaleString()} triangles</p>
+                            <p class="mt-1">
+                              Footprint
+                              <strong>{cadLengthInches.toFixed(1)}"</strong>
+                              forward ×
+                              <strong>{cadWidthInches.toFixed(1)}"</strong>
+                              across
+                            </p>
+                            <p class="mt-1 text-neutral-500 dark:text-neutral-400">
+                              Rotate until the robot's forward points right — the
+                              field draws it that way at heading 0.
+                            </p>
+                          </div>
+                        </div>
+
+                        <div class="flex flex-wrap items-center gap-2">
+                          <span class="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                            Up axis
+                          </span>
+                          {#each cadAxes as axis}
+                            <button
+                              on:click={() => (cadUpAxis = axis)}
+                              class="px-2 py-1 text-xs font-semibold rounded {cadUpAxis === axis
+                                ? 'bg-indigo-500 text-white'
+                                : 'bg-neutral-200 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200'}"
+                            >
+                              {axis.toUpperCase()}
+                            </button>
+                          {/each}
+                          <button
+                            on:click={() => (cadUpSign = cadUpSign === 1 ? -1 : 1)}
+                            class="px-2 py-1 text-xs font-semibold rounded bg-neutral-200 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+                            title="Flip if the model is stored upside down"
+                          >
+                            {cadUpSign === 1 ? "+" : "−"}
+                          </button>
+
+                          <span class="ml-2 text-xs font-medium text-neutral-700 dark:text-neutral-300">
+                            Units
+                          </span>
+                          <select
+                            bind:value={cadUnit}
+                            class="px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800"
+                          >
+                            <option value="mm">mm</option>
+                            <option value="cm">cm</option>
+                            <option value="in">in</option>
+                          </select>
+
+                          <input
+                            type="color"
+                            bind:value={cadColor}
+                            class="ml-2 size-7 rounded border border-neutral-300 dark:border-neutral-600 bg-transparent"
+                            title="Robot colour"
+                          />
+                        </div>
+
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs font-medium text-neutral-700 dark:text-neutral-300 shrink-0">
+                            Rotate
+                          </span>
+                          <input
+                            type="range"
+                            min="0"
+                            max="359"
+                            step="1"
+                            bind:value={cadRotation}
+                            class="flex-1 h-2 bg-neutral-200 dark:bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                          />
+                          <span class="w-10 text-right text-xs text-neutral-600 dark:text-neutral-300">
+                            {cadRotation}°
+                          </span>
+                          {#each [0, 90, 180, 270] as preset}
+                            <button
+                              on:click={() => (cadRotation = preset)}
+                              class="px-1.5 py-1 text-[11px] rounded bg-neutral-200 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+                            >
+                              {preset}°
+                            </button>
+                          {/each}
+                        </div>
+
+                        <div class="flex flex-wrap gap-2">
+                          <button
+                            on:click={() => applyCadImage(true)}
+                            disabled={!cadPreview}
+                            class="px-3 py-2 text-sm bg-indigo-500 hover:bg-indigo-600 text-white rounded-md transition-colors disabled:opacity-40"
+                          >
+                            Use image and size
+                          </button>
+                          <button
+                            on:click={() => applyCadImage(false)}
+                            disabled={!cadPreview}
+                            class="px-3 py-2 text-sm bg-neutral-500 hover:bg-neutral-600 text-white rounded-md transition-colors disabled:opacity-40"
+                          >
+                            Use image only
+                          </button>
+                        </div>
+                      </div>
+                    {/if}
 
                     <button
                       on:click={() => {
@@ -672,6 +1015,69 @@
                       handleNumberInput(inputValue(e), "maxDeceleration", 0)}
                     class="w-full px-3 py-2 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
+                </div>
+              </div>
+
+              <!-- Cornering grip -->
+              <div>
+                <label
+                  for="max-lateral-acceleration"
+                  class="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1"
+                >
+                  Cornering Grip (in/s²)
+                  <div class="text-xs text-neutral-500 dark:text-neutral-400">
+                    Sideways acceleration the wheels hold before the follower
+                    loses the line. Speed through a curve is capped at
+                    <code>sqrt(grip × radius)</code>, which is what makes a
+                    corner cost time. Measure it by driving an arc until the
+                    robot starts sliding.
+                  </div>
+                </label>
+                <input
+                  id="max-lateral-acceleration"
+                  type="number"
+                  value={settings.maxLateralAcceleration ?? settings.maxAcceleration}
+                  min="0"
+                  step="1"
+                  on:input={(e) =>
+                    handleNumberInput(inputValue(e), "maxLateralAcceleration", 0)}
+                  class="w-full px-3 py-2 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+
+              <!-- Turn coupling -->
+              <div>
+                <label
+                  for="turn-coupling"
+                  class="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1"
+                >
+                  Turn Coupling
+                  <div class="text-xs text-neutral-500 dark:text-neutral-400">
+                    How much turning eats into driving speed. Driving and
+                    turning share one motor-power budget: at 1 the drivetrain
+                    has nothing to spare so their costs add up, at 0 they
+                    overlap for free. Measure a turning path on the robot and
+                    tune until the estimate matches.
+                  </div>
+                </label>
+                <div class="flex items-center gap-3">
+                  <input
+                    id="turn-coupling"
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={settings.turnCoupling ?? 1}
+                    on:input={(e) =>
+                      handleNumberInput(inputValue(e), "turnCoupling", 0, 1)}
+                    class="flex-1 h-2 bg-neutral-200 dark:bg-neutral-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                    title="1 = turning and driving share the full power budget, 0 = turning is free"
+                  />
+                  <span
+                    class="text-sm font-medium text-neutral-700 dark:text-neutral-300 min-w-[3rem] text-right"
+                  >
+                    {(settings.turnCoupling ?? 1).toFixed(2)}
+                  </span>
                 </div>
               </div>
 
@@ -1090,6 +1496,49 @@
                     bind:checked={settings.showPathAnnotations}
                     class="w-5 h-5 rounded border-neutral-300 dark:border-neutral-600 text-sky-500 focus:ring-2 focus:ring-sky-500 cursor-pointer"
                     title="Show path length and predicted time labels"
+                  />
+                </label>
+
+                <label
+                  class="flex items-center justify-between gap-3 p-3 bg-white dark:bg-neutral-800 rounded-lg border border-neutral-200 dark:border-neutral-700"
+                >
+                  <span>
+                    <span
+                      class="text-sm font-medium text-neutral-700 dark:text-neutral-300 block mb-1"
+                    >
+                      Clearance
+                    </span>
+                    <span class="text-xs text-neutral-500 dark:text-neutral-400">
+                      Draw the robot where it comes within the safety margin of
+                      an obstacle or a field wall
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    bind:checked={settings.showClearance}
+                    class="w-5 h-5 rounded border-neutral-300 dark:border-neutral-600 text-sky-500 focus:ring-2 focus:ring-sky-500 cursor-pointer"
+                    title="Red where the robot's footprint overlaps something solid, amber where it is inside the safety margin"
+                  />
+                </label>
+
+                <label
+                  class="flex items-center justify-between gap-3 p-3 bg-white dark:bg-neutral-800 rounded-lg border border-neutral-200 dark:border-neutral-700"
+                >
+                  <span>
+                    <span
+                      class="text-sm font-medium text-neutral-700 dark:text-neutral-300 block mb-1"
+                    >
+                      Stop Points
+                    </span>
+                    <span class="text-xs text-neutral-500 dark:text-neutral-400">
+                      Mark where the robot comes to a full stop
+                    </span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    bind:checked={settings.showStopPoints}
+                    class="w-5 h-5 rounded border-neutral-300 dark:border-neutral-600 text-sky-500 focus:ring-2 focus:ring-sky-500 cursor-pointer"
+                    title="Consecutive paths are driven as one PathChain; this marks the endpoints where a chain ends and the robot stops"
                   />
                 </label>
 

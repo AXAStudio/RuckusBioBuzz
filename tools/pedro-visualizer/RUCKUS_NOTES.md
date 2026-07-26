@@ -11,6 +11,7 @@ Local customization:
 - Generated autos use this repo's `PathStep` helper for the start and endpoint poses.
 - The sequence editor supports `Path`, `Wait`, and `Event` items. `Add Event` creates a timed `Shoot` event by default.
 - The control panel supports named pose variables that can be assigned to the start pose or path endpoints.
+- The starting point has an editable `Heading` in degrees (literal or expression) — the pose the robot is placed at, which `setStartingPose` receives. Turning from it to whatever the first path needs is timed like any other rotation, so a start heading that does not match the first path shows its real cost. A tangential start point has no heading of its own and follows the first path until a value is entered.
 - The control panel supports path variables that store a reusable copy of a selected path chain and can insert that stored path back into the route.
 - Endpoints assigned to pose variables still allow editable heading mode, linear start heading, and heading curve while the pose controls the final position/heading.
 - Individual paths can be duplicated, selected groups of paths can be wrapped in repeat loops, and path chains can be looped as a group.
@@ -23,7 +24,268 @@ Local customization:
 - Browser project files are stored in IndexedDB, with one-time migration from the old localStorage file blob.
 - Linear heading paths include an editable heading curve graph. Values above `1.0` shift more of the turn toward the end of the path.
 - The control panel includes `Mirror X` and `Mirror Y` actions for switching alliances by flipping path coordinates and headings on either field axis.
+- Paths are checked against the obstacles and the field walls using the robot's own footprint at the heading it holds. Path rows show `Hits <thing>` or the clearance in inches, the field draws the robot where it is in trouble, and the export warns before the auto reaches a match. The chip is a button that moves a control point, an endpoint or the starting point until the robot clears.
+- Number fields drag: hover a literal for an `ew-resize` cursor and drag sideways to adjust it, with Shift for coarse and Alt for fine. Fields driven by a variable do not drag — scrub the variable itself in the Variables tab.
 - The TeamCode exporter validates generated autos, can download a `.java` file, and can save directly to `TeamCode/src/main/java/org/firstinspires/ftc/teamcode/auto/` while running from Vite. Direct saves run `:TeamCode:compileDebugJavaWithJavac` and restore the previous file if the generated Java does not compile.
+
+Path chaining:
+
+- Consecutive paths are followed as a single PedroPathing `PathChain`. A chain
+  built through `pathBuilder()` defaults to `DecelerationType.LAST_PATH`, so it
+  brakes only on its final path — the robot drives straight through every
+  waypoint inside the chain instead of decelerating and settling on each one.
+- The time estimate profiles a chain as one accelerate/cruise/decelerate move,
+  so interior paths are timed at cruise speed. Four collinear paths take 4.3s
+  chained versus 8.0s stopping at each.
+- A chain is cut only where the robot genuinely has to stop: a wait or event
+  step follows, a repeat loop starts its next pass, a block ends, the next path
+  uses a different speed, a path can be switched off at runtime, or `Stop at
+  end` is ticked on the path. `buildChainRuns` owns those rules and both the
+  estimate and the exporter read them, so the auto stops exactly where the
+  editor says it will.
+- Each path row shows `Chains on` or `Stops`, the field marks every full stop
+  (Settings → Stop Points), and Telemetry counts them. Stops are what cost time
+  now, so they are the thing worth seeing.
+
+Turn model:
+
+- The robot never stops to turn. Not even at the head of a chain: `followPath`
+  starts driving and correcting heading in the same command, so a stationary
+  rotation was always fiction.
+- Turning still costs time, because driving and turning draw on one motor-power
+  budget — the drivetrain mixes the pathing and heading vectors and normalizes
+  them into wheel power. It is charged as a cap on speed, applied where the
+  turning happens: sweeping the heading `dθ` per inch travelled means the robot
+  can go no faster than `aVelocity ÷ dθ/ds`, and with the budget shared the
+  cruise speed drops to `1 ÷ (1/maxVelocity + coupling · (dθ/ds) / aVelocity)`.
+- `Settings → Turn Coupling` (0..1, default 1) sets how much of the budget the
+  two share, so it can be calibrated against the robot instead of guessed. At 1
+  the per-inch costs of driving and turning add — a 180° sweep over 40 in halves
+  the cruise speed to 20 in/s, exactly saturating the drivetrain. At 0 only the
+  hard spin-rate limit applies.
+- The heading rate is read along the path, so an S-curve on a tangential path or
+  a heading curve that front-loads its turn slows the robot where the turning
+  actually is. It is smoothed over half the robot's width, because a robot
+  blends a heading change over roughly its own length rather than snapping to it
+  at a point.
+
+Cornering:
+
+- Speed through a curve is capped at `sqrt(grip × radius)`: holding radius `r`
+  at speed `v` needs `v² / r` sideways, and past what the wheels give the
+  follower cannot hold the line. `Settings → Cornering Grip` is that limit in
+  in/s², measurable by driving an arc until the robot slides.
+- A chain is profiled numerically rather than as a trapezoid — the curve is
+  sampled, each sample capped by its own radius, then a forward pass keeps
+  acceleration in range and a backward pass leaves room to brake for what is
+  coming. On a straight it reproduces the trapezoid exactly.
+- Grip is a property of the wheels, so the per-path speed scale does not touch
+  it. A radius tighter than half the robot is treated as pivoting rather than
+  cornering, since sampled geometry reports a near-zero radius at a hard join
+  between two paths and the turn model already covers that cost.
+
+Steady speed:
+
+- A Bezier's parameter is not proportional to its arc length — with control
+  points bunched to one side the curve can cover ground twenty times faster at
+  one end than the other. Every path carries an arc-length table so a distance
+  maps back to the right parameter; advancing the parameter in proportion to
+  distance instead made the robot visibly surge and stall along a path it
+  should cross at a steady speed.
+- The profile is built from samples spread evenly along the curve itself, not
+  at evenly spaced parameters and not by interpolating the chords between them.
+  Curvature read across three nearly-touching or unevenly spaced points is
+  mostly rounding error, and a noisy curvature reading becomes an oscillating
+  speed cap.
+- Distances, chain offsets and arc-length tables all live on one ruler. Mixing
+  a chord-measured length with a sampled one makes the position drift and then
+  snap back at every path boundary.
+- Within a profile interval the robot holds a constant acceleration, so time
+  maps to distance as a quadratic. Interpolating linearly held the speed flat
+  across each interval and stepped it at every boundary — smooth acceleration
+  chopped into stairs.
+- Turning is charged as a cap on speed where the turning happens, not as a
+  stretch applied to a whole path. Stretching per path made the speed jump
+  wherever two chained paths turned by different amounts.
+
+Velocity gradient:
+
+- Coloured from the same numbers as the time estimate, never from the path on
+  its own. Two things that are invisible from a single path decide the speed:
+  the profile belongs to the whole PathChain, so a path in the middle of one is
+  driven at cruise rather than ramping up and back down; and turning slows the
+  path it happens on. Both come from the timeline, so the colours cannot
+  disagree with the clock.
+
+Heading continuity:
+
+- A path states a heading *goal*; where two paths meet that goal can jump — a
+  tangential path after a linear one picks up wherever its curve points. The
+  robot cannot jump, so it rotates toward the new goal at `aVelocity` while it
+  keeps driving. `headingAlongPath` blends over that catch-up window, and the
+  animated robot, the swept-area preview and the onion layers all read it, so
+  the heading is continuous everywhere.
+- The head of a chain never needs a catch-up: the robot turns in place there and
+  that rotation is timed.
+- A path row shows `Heading jump N°` when its goal does not pick up where the
+  previous path left off. On a linear path the chip is a button that restarts it
+  at the incoming heading; on a tangential path the geometry decides, so it is
+  only a warning. The exporter warns above 20°.
+- Switching a path to linear seeds its start heading from the heading the robot
+  arrives with, so the common way of creating a jump no longer does.
+
+Robot picture from CAD (`src/utils/cadRobot.ts`):
+
+- `Settings → Robot Configuration → Build from CAD` reads an STL (binary or
+  ASCII) or OBJ export and renders a top-down picture of the real robot. Both
+  formats are parsed here rather than pulling in a mesh library.
+- Pick the model's up axis and sign, spin it in the plane until the robot's
+  forward points right — the field draws the image that way at heading 0 — and
+  say what units the CAD is in.
+- The view basis is chosen so `right × up` equals the axis being looked down,
+  which keeps the render from coming out mirrored and putting every asymmetric
+  feature on the wrong side.
+- Faces are painted back to front and shaded by how squarely they face the
+  camera, so the top deck reads bright and the sides fall away.
+- `Use image and size` also sets the robot dimensions from the projected
+  footprint. `rWidth` is the extent along forward (the image's horizontal
+  axis), `rHeight` is across.
+- A real export runs to hundreds of thousands of triangles, so the work is split
+  in two. Reading, parsing, centring and per-face normals all happen once at
+  upload behind a progress bar; changing the axis or dragging the rotation only
+  re-projects what is already prepared.
+- The redraw is a scanline rasteriser with a depth buffer, not a painter's-order
+  pass. Sorting every face and making a canvas call per triangle was what made
+  dragging crawl; rasterising needs no sort at all, costs what the covered
+  pixels cost rather than what the mesh weighs, resolves overlapping decks
+  exactly, and leaves no seams between neighbouring triangles.
+- Buffers are reused between frames, and a drag renders at draft resolution with
+  the supersampled version landing once the controls stop moving. On a 19 MB,
+  400,000-triangle STL that is a first preview at ~110 ms and a rotation drag at
+  ~30 fps.
+
+Clearance (`src/utils/clearance.ts`):
+
+- A path is a curve through the middle of the robot, and the middle of the robot
+  fits places the robot does not. What is checked is the footprint, planted every
+  0.75in along the route and measured against the obstacles and the field walls.
+- It is checked at the heading the robot actually holds, taken from the same
+  heading model the animation uses. That is the whole point: an 18in robot clears
+  a 20in gap square-on and cannot fit it at 45°, because its diagonal is 25.5in.
+  Two of the three problems on the first real auto this ran against were exactly
+  that — clearances that only exist because the robot is turned.
+- `Settings → Safety Margin` is how close the robot may come before a path is
+  flagged. Inside the margin is amber, overlapping is red, and both are drawn on
+  the field as the robot's own shape at the worst point, so the problem is a
+  picture rather than a number.
+- Overlap is measured as how far past the boundary the intrusion reaches, not as
+  the distance between outlines. Once two shapes cross, that distance is zero
+  however deep the robot is buried, so a path driven straight through an obstacle
+  would report as just touching.
+- Samples are spread evenly along each curve. Stepping the curve parameter would
+  sample densely at one end and stride past a whole obstacle at the other, for
+  the same reason the speed profile cannot use it either.
+- Where one path ends and the next begins is one pose, not two, so it is checked
+  once. Counting it twice would report a single tight corner as two problems. A
+  branch starts somewhere else, so the join has to actually line up.
+- A CAD upload also stores the robot's real outline, and clearance uses it
+  instead of the bounding rectangle. A robot with a corner intake sweeps a
+  hexagon, and the rectangle claims material where there is only air, so gaps it
+  genuinely fits through would read as collisions. The outline is the convex hull
+  of the projected footprint, reduced to the extreme point of each thin column
+  and row first because a real export has over a million vertices — a reduction
+  that cannot shrink the shape, and what it could shave off is added back. It is
+  stored with the size it was measured at, so editing the robot's dimensions
+  rescales it rather than silently checking the wrong robot.
+- The chips on the path rows, the shapes on the field, the Telemetry readout and
+  the export warnings all read one report, so they cannot disagree.
+
+Fix collision issues:
+
+- The chip on a flagged path is a button that moves a waypoint on X and Y until
+  the robot clears. It searches outward for the smallest move that works, since
+  the smallest change is the one least likely to undo whatever the path was
+  placed for.
+- Handles are tried in order of what they cost to accept, and the first that
+  reaches the safety margin wins. A **control point** only bends the curve
+  between two waypoints the robot still hits, so it is nearly free and goes
+  first; an **endpoint** changes where the robot parks, usually a scoring
+  position; the **starting point** changes where the robot is staged, which
+  someone has to physically do differently. A collision partway along a path is
+  normally a control-point problem and out of an endpoint's reach entirely.
+- The starting point has its own button rather than being one more handle on the
+  path button. It is judged on where the robot is *staged*, not on the whole
+  first path, because a path that drives through a goal is that path's problem
+  and re-staging cannot fix it. Mixing the two objectives made the search
+  re-stage the robot to gain an inch at the start while leaving the path driven
+  into a wall. The rest of the path still has a veto: a move that makes it worse
+  scores as that worse number. It also reaches further, 24in against 14in, since
+  a robot parked inside a goal has to come most of its own width to get out.
+- The search spirals rather than pushing away from the obstacle, because a
+  handle governs the shape of the whole curve: the direction that clears a
+  problem in the middle of a path is often not the direction away from the thing
+  being hit.
+- The path that follows starts where this one ends, so both are measured on
+  every endpoint candidate. A move that traded one collision for another would
+  not be a fix, and none is offered in that case.
+- Candidates are scanned against a coarsely sampled route and the winner is then
+  re-measured at full resolution; anything that does not survive that is
+  discarded. Scanning at the real resolution made one click take most of a
+  second. A fix also has to be worth making — it must move at least 0.02in, buy
+  at least 0.05in, and actually end up clear. Without those the search happily
+  reported nudging a waypoint half an inch to go from 0.99in to 0.99in, and
+  reshaping a path by a foot to end up still overlapping.
+- Clearing the obstacle and reaching the safety margin are separate outcomes and
+  the button says which it got. It aims for the plateau rather than for bare
+  contact, since stopping at the first move that merely gets off the obstacle
+  leaves the robot at 0.00in.
+- A locked point or one driven by a pose variable is left alone — the pose
+  variable owns the position, so writing x/y would not stick — and the chip stays
+  a plain label there. Where nothing can help, the button says so instead of
+  moving the path for nothing.
+- It is one edit on the undo stack.
+
+Dragging numbers:
+
+- The drag lives on the field's **label** — the `X:`, `Y:`, `Start:`, `Deg:` next
+  to the box — not on the box. Hover a label for an `ew-resize` cursor and drag
+  sideways. Shift is ten times coarser for crossing the field, Alt ten times
+  finer for the last hundredth. Typing a coordinate is fine for a first guess and
+  bad for the tenth, and the field redraws as the drag goes, so a position can be
+  dialled in by eye instead of by retyping.
+- On the input it would have had to tell a click for the caret apart from the
+  start of a drag, and a stray few pixels while clicking would nudge the value.
+  A label has no other job, so there is nothing to disambiguate: labels drag,
+  boxes type.
+- A label whose field holds an expression goes inert — no cursor, no drag. The
+  field is owned by whatever variable it names, and writing a number over it
+  would silently cut the link; the variable itself drags in the Variables tab,
+  and everything reading it follows.
+- `scrubbable` in `src/utils/scrub.ts` is a Svelte action, so a label attaches it
+  in one line with the same value and callbacks its input already gets. The
+  labels `ExpressionInput` renders itself carry it too, which is what covers the
+  Variables tab. Headings ask for a bigger step: at the coordinate default a full
+  turn would need a 7200px drag.
+- The value is computed from where the press started rather than accumulated, so
+  a drag out and back lands exactly where it began instead of drifting by the
+  rounding of every frame between. It commits once at the end, so a drag is one
+  entry on the undo stack rather than one per frame.
+
+Route invariants (`src/utils/sequence.ts`):
+
+- `buildRoute` is the single walk of the step list. The field drawing, the time
+  estimate, the animation, the overlays and the exporters all read the route
+  from it, so they cannot disagree about order, start points, or which steps run.
+- Every path appears in the step list exactly once. `reconcileSequence` drops
+  steps whose path is gone and appends any path the list forgot, so a path can
+  never sit in the editor while being invisible to the field and the exporters.
+- Adjacent `if` blocks are one if / else-if chain: every branch starts where the
+  chain is reached, and only the first branch whose condition holds runs.
+- A step whose `Enabled if` is false costs no time and does not move the robot,
+  matching what the generated Java does. It is still drawn, faded.
+- A parallel event with a zero duration fires once. The generated
+  `startParallelEvent` finishes it immediately, so the field and telemetry show
+  it as a momentary trigger rather than as active until the end of auto.
 
 Run locally:
 

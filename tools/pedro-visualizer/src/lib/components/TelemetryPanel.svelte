@@ -6,14 +6,25 @@
     SequenceItem,
     Settings,
     TimePrediction,
+    Variable,
   } from "../../types";
   import type { ScaleLinear } from "d3";
-  import { buildEventTimingWindows, formatTime } from "../../utils";
+  import {
+    buildEventTimingWindows,
+    EMPTY_CLEARANCE_REPORT,
+    formatTime,
+    type ClearanceReport,
+  } from "../../utils";
 
   export let percent: number = 0;
   export let timePrediction: TimePrediction | null = null;
   export let startPoint: Point;
   export let sequence: SequenceItem[] = [];
+  export let variables: Variable[] = [];
+  /** How many times the robot decelerates to a stop over the whole route. */
+  export let stopCount = 0;
+  /** How close the robot's body comes to anything solid over the whole route. */
+  export let clearanceReport: ClearanceReport = EMPTY_CLEARANCE_REPORT;
   export let settings: Settings;
   export let lines: Line[] = [];
   export let robotXY: BasePoint;
@@ -110,12 +121,29 @@
   $: fieldX = x?.invert ? x.invert(robotXY?.x ?? 0) : 0;
   $: fieldY = y?.invert ? y.invert(robotXY?.y ?? 0) : 0;
   $: fieldHeading = normalizeDegrees(-Number(robotHeading ?? 0));
+
+  $: clearanceSummary = !Number.isFinite(clearanceReport.minClearance)
+    ? "—"
+    : clearanceReport.hitCount > 0
+      ? `Hits in ${clearanceReport.hitCount} place${clearanceReport.hitCount === 1 ? "" : "s"}`
+      : `${formatNumber(clearanceReport.minClearance, 1)} in${
+          clearanceReport.tightCount > 0 ? " — tight" : ""
+        }`;
+
+  $: clearanceTone =
+    clearanceReport.hitCount > 0
+      ? "font-semibold text-red-600 dark:text-red-400"
+      : clearanceReport.tightCount > 0
+        ? "font-semibold text-amber-600 dark:text-amber-400"
+        : "";
+
   $: eventWindows = buildEventTimingWindows(
     startPoint,
     lines,
     timePrediction,
     settings,
     sequence,
+    variables,
   ).map((event) => ({
     name: event.name,
     lineName: event.lineName,
@@ -149,6 +177,22 @@
 
     <div class="text-neutral-500 dark:text-neutral-400">Path speed</div>
     <div>{formatNumber(Number(currentLine?.speed ?? 1), 2)}</div>
+
+    <div
+      class="text-neutral-500 dark:text-neutral-400"
+      title="Consecutive paths are followed as one PathChain and driven without stopping. Every stop costs an accelerate/decelerate cycle, so fewer is faster."
+    >
+      Full stops
+    </div>
+    <div>{stopCount}</div>
+
+    <div
+      class="text-neutral-500 dark:text-neutral-400"
+      title="The closest the robot's own footprint comes to an obstacle or a field wall over the whole route, measured at the heading it is actually holding. Negative means it overlaps."
+    >
+      Clearance
+    </div>
+    <div class={clearanceTone}>{clearanceSummary}</div>
 
     <div class="text-neutral-500 dark:text-neutral-400">Pose</div>
     <div>

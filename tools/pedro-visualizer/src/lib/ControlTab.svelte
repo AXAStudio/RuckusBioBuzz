@@ -3,30 +3,62 @@
     Point,
     Line,
     BasePoint,
+    ControlPoint,
     Settings,
     Shape,
     SequenceItem,
     PathChain,
-    PoseVariable,
     PathVariable,
-    NumberVariable,
+    SequenceConditionalItem,
+    SequenceGroupItem,
+    PoseVariable,
+    Variable,
+    VariableType,
   } from "../types";
   import _ from "lodash";
+  import { FIELD_SIZE } from "../config/defaults";
   import {
+    buildChainRuns,
+    buildExpressionScope,
+    buildRoute,
     calculatePathTime,
+    canMoveEndpoint,
+    CHAIN_BREAK_LABELS,
+    EMPTY_CLEARANCE_REPORT,
+    footprintFromSettings,
+    getAngularDifference,
+    getLineStartHeading,
     buildEventTimingWindows,
+    createVariable,
+    expressionDisplayValue,
     getRandomColor,
+    groupHoldingLine,
+    isConditionalActive,
+    isGroupItem,
     mirrorPathData,
-    resolveBasePointExpressions,
+    moveLineIntoGroup,
+    moveLineOutOfGroups,
+    poseVariablesOf,
+    skippedLineIds,
+    resolveLineExpressions,
     resolvePointExpressions,
-    resolvePoseVariableExpressions,
+    resolveSequenceExpressions,
+    resolveSequenceItemExpressions,
+    resolveVariableValues,
+    FIX_HANDLE_LABELS,
+    suggestClearanceFix,
+    suggestStartPointFix,
+    uniqueVariableName,
+    type ClearanceFix,
+    type ClearanceReport,
     type MirrorAxis,
   } from "../utils";
   import ObstaclesSection from "./components/ObstaclesSection.svelte";
   import TelemetryPanel from "./components/TelemetryPanel.svelte";
   import StartingPointSection from "./components/StartingPointSection.svelte";
   import PathLineSection from "./components/PathLineSection.svelte";
-  import PoseVariablesSection from "./components/PoseVariablesSection.svelte";
+  import VariablesSection from "./components/VariablesSection.svelte";
+  import ExpressionInput from "./components/ExpressionInput.svelte";
   import PlaybackControls from "./components/PlaybackControls.svelte";
   import WaitRow from "./components/WaitRow.svelte";
 
@@ -36,9 +68,7 @@
   export let pause: () => any;
   export let startPoint: Point;
   export let lines: Line[];
-  export let poseVariables: PoseVariable[] = [];
-  export let pathVariables: PathVariable[] = [];
-  export let numberVariables: NumberVariable[] = [];
+  export let variables: Variable[] = [];
   export let sequence: SequenceItem[];
   export let pathChains: PathChain[] = [];
   export let robotWidth: number = 16;
@@ -55,19 +85,36 @@
 
   export let shapes: Shape[];
   export let recordChange: () => void;
+  /**
+   * Where the robot's body comes too close to an obstacle or a wall. Computed
+   * once alongside the field drawing and passed in, so the chips on the rows and
+   * the shapes on the field can never disagree.
+   */
+  export let clearanceReport: ClearanceReport = EMPTY_CLEARANCE_REPORT;
+
+  // Pose variables still drive the point-binding dropdowns, so keep a
+  // derived view of them rather than a second source of truth.
+  $: poseVariables = poseVariablesOf(variables);
 
   const makeChainId = () =>
     `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
   const defaultChainName = "Main Chain";
 
   let selectedChainId = "";
-  let chainNameDraft = "";
-  let chainColorDraft = "#22c55e";
   let selectedChain: PathChain | null = null;
-  let previousSelectedChainId = "";
-  let chainOptions: Array<{ id: string; name: string; color: string }> = [];
   let draggedLineId = "";
   let dragOverRepeatId = "";
+  let dragOverTopLevel = false;
+  let routeScrollEl: HTMLElement | null = null;
+  let dragPointerX = 0;
+  let dragPointerY = 0;
+  let autoScrollFrame = 0;
+
+  // Which block the dragged path came from; empty when it is already top level.
+  $: draggedFromGroupId = draggedLineId
+    ? groupHoldingLine(sequence, draggedLineId)?.id || ""
+    : "";
+  $: showDragOutZone = Boolean(draggedLineId && draggedFromGroupId);
 
   const getChainById = (chainId: string): PathChain | null =>
     pathChains.find((chain) => chain.id === chainId) || null;
@@ -79,15 +126,16 @@
     return pathChains[0]?.id || "";
   }
 
+  /**
+   * Chains are background bookkeeping now, so they no longer own path colour.
+   * Kept as a no-op hook because grouping still runs behind the scenes.
+   */
   function syncLineColorsToChains() {
-    const chainColorById = new Map(pathChains.map((chain) => [chain.id, chain.color || "#22c55e"]));
     let changed = false;
     const nextLines = lines.map((line) => {
-      const ownerId = getLinePrimaryChainId(line.id || "");
-      const targetColor = chainColorById.get(ownerId) || line.color;
-      if (line.color !== targetColor) {
+      if (!line.color) {
         changed = true;
-        return { ...line, color: targetColor };
+        return { ...line, color: getRandomColor() };
       }
       return line;
     });
@@ -131,11 +179,6 @@
   $: selectedChain =
     pathChains.find((chain) => chain.id === selectedChainId) || pathChains[0] || null;
 
-  $: if (selectedChainId !== previousSelectedChainId) {
-    chainNameDraft = selectedChain?.name || "";
-    chainColorDraft = selectedChain?.color || "#22c55e";
-    previousSelectedChainId = selectedChainId;
-  }
 
   function ensureLineInDefaultChain(lineId: string) {
     if (!lineId || !pathChains.length) return;
@@ -175,137 +218,292 @@
     recordChange?.();
   }
 
-  function addPathChain() {
-    const newChain: PathChain = {
-      id: makeChainId(),
-      name: `Chain ${pathChains.length + 1}`,
-      color: getRandomColor(),
-      lineIds: [],
-    };
-    pathChains = [...pathChains, newChain];
-    selectedChainId = newChain.id;
+  // Paths individually switched off by their own "Enabled if" condition.
+  $: inactiveLineIds = skippedLineIds(lines, variables);
+
+  /**
+   * Consecutive paths are followed as one PathChain, which the robot drives
+   * without stopping. Each path row reports whether the robot carries on
+   * through its endpoint or comes to a stop there, and why — stops are what
+   * cost time now, so they are the thing worth seeing at a glance.
+   */
+  /** One walk of the step list, shared by everything here that needs the route. */
+  $: mainRoute = buildRoute(startPoint, lines, sequence, variables);
+  $: chainRuns = buildChainRuns(mainRoute.steps);
+  /**
+   * Where a path's heading goal does not pick up where the previous one left
+   * off. The robot catches up on the move rather than snapping, but a large
+   * jump means it is fighting its heading while it drives, so it is worth
+   * seeing — and on a linear path, worth fixing in one click.
+   */
+  $: headingJumpByLineId = (() => {
+    const jumps = new Map<string, { entry: number; jump: number }>();
+    timePrediction?.timeline?.forEach((event) => {
+      if (event.type !== "travel" || event.lineIndex === undefined) return;
+      const lineId = lines[event.lineIndex]?.id;
+      if (!lineId || jumps.has(lineId)) return;
+      const entry = Number(event.startHeading) || 0;
+      const goal = Number(event.targetHeading) || 0;
+      jumps.set(lineId, { entry, jump: getAngularDifference(entry, goal) });
+    });
+    return jumps;
+  })();
+
+  /** Points a linear path's start heading at the heading the robot arrives with. */
+  function matchEntryHeading(lineId: string) {
+    const entry = headingJumpByLineId.get(lineId)?.entry;
+    if (entry === undefined) return;
+
+    lines = lines.map((line) => {
+      if (line.id !== lineId || line.endPoint.heading !== "linear") return line;
+      return {
+        ...line,
+        endPoint: { ...line.endPoint, startDeg: entry, startDegExpression: undefined },
+      };
+    });
     recordChange?.();
   }
 
-  function duplicateSelectedPathChain() {
-    if (!selectedChain) return;
+  /** Only the paths with something to say get a chip. */
+  $: clearanceByLineId = clearanceReport.byLine;
 
-    const sourceLineIds = selectedChain.lineIds || [];
-    const selectedLineSet = new Set(sourceLineIds);
-    const lineLookup = new Map(lines.map((line) => [line.id, line]));
-    const idMap = new Map<string, string>();
-    const clonedLines: Line[] = [];
-
-    // Keep duplication order aligned with timeline, then append any non-sequenced lines.
-    const orderedSourceIds: string[] = [];
-    sequence.forEach((item) => {
-      if (item.kind === "path" && selectedLineSet.has(item.lineId)) {
-        orderedSourceIds.push(item.lineId);
-      }
-    });
-    sourceLineIds.forEach((lineId) => {
-      if (!orderedSourceIds.includes(lineId)) {
-        orderedSourceIds.push(lineId);
-      }
-    });
-
-    orderedSourceIds.forEach((sourceId, index) => {
-      const sourceLine = lineLookup.get(sourceId);
-      if (!sourceLine) return;
-      const clone = JSON.parse(JSON.stringify(sourceLine)) as Line;
-      const newLineId = makeId();
-      clone.id = newLineId;
-      clone.name = `${sourceLine.name || `Path ${lines.length + index + 1}`} Copy`;
-      idMap.set(sourceId, newLineId);
-      clonedLines.push(clone);
-    });
-
-    const newSequence: SequenceItem[] = [];
-    sequence.forEach((item) => {
-      newSequence.push(item);
-      if (item.kind === "path") {
-        const clonedId = idMap.get(item.lineId);
-        if (clonedId) {
-          newSequence.push({ kind: "path", lineId: clonedId });
-        }
-      }
-    });
-
-    // If chain contains lines currently not present in the timeline, append their clones.
-    orderedSourceIds.forEach((sourceId) => {
-      const inSequence = sequence.some((item) => item.kind === "path" && item.lineId === sourceId);
-      const clonedId = idMap.get(sourceId);
-      if (!inSequence && clonedId) {
-        newSequence.push({ kind: "path", lineId: clonedId });
-      }
-    });
-
-    lines = [...lines, ...clonedLines];
-    sequence = newSequence;
-    syncLinesToSequence(newSequence);
-
-    const duplicateChain: PathChain = {
-      id: makeChainId(),
-      name: `${selectedChain.name} Copy`,
-      color: getRandomColor(),
-      lineIds: orderedSourceIds.map((sourceId) => idMap.get(sourceId)).filter(Boolean) as string[],
+  /**
+   * Where the robot is staged, when that is itself too close to something. No
+   * path can fix this one, so it is surfaced on the starting point instead.
+   */
+  $: startPoseClearance = (() => {
+    const pose = clearanceReport.startPose;
+    if (!pose || pose.clearance >= clearanceReport.margin) return null;
+    return {
+      hit: pose.clearance < 0,
+      clearance: pose.clearance,
+      target:
+        pose.kind === "wall" ? "the field wall" : pose.obstacleName?.trim() || "an obstacle",
     };
+  })();
 
-    const selectedIndex = pathChains.findIndex((chain) => chain.id === selectedChain.id);
-    if (selectedIndex >= 0) {
-      pathChains = [
-        ...pathChains.slice(0, selectedIndex + 1),
-        duplicateChain,
-        ...pathChains.slice(selectedIndex + 1),
-      ];
-    } else {
-      pathChains = [...pathChains, duplicateChain];
+  /** Per-path result of the last "fix collision issues" click. */
+  let clearanceFixNotes: Record<string, string> = {};
+  let fixingClearanceLineId = "";
+
+  /**
+   * Moves a path's endpoint on X and Y until the robot's footprint clears
+   * whatever it was hitting.
+   *
+   * The endpoint sets the shape of the whole curve and the start of whatever
+   * follows, so this searches for the smallest move that clears both rather
+   * than pushing straight away from the obstacle. It reports what it managed:
+   * a path whose tightest point is its start or a bulge in the middle cannot be
+   * fixed from the far end, and saying so beats moving the endpoint for nothing.
+   */
+  async function fixClearance(lineId: string) {
+    const target = lines.find((line) => line.id === lineId);
+    if (!target || !canMoveEndpoint(target)) return;
+
+    fixingClearanceLineId = lineId;
+    clearanceFixNotes = { ...clearanceFixNotes, [lineId]: "" };
+    // Let the button paint its pending state before the search blocks the frame.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    try {
+      const fix = suggestClearanceFix(
+        clearanceInput(),
+        { fieldSize: FIELD_SIZE, margin: settings.safetyMargin },
+        lineId,
+      );
+
+      if (!fix) {
+        clearanceFixNotes = { ...clearanceFixNotes, [lineId]: describeNoFix(lineId) };
+        return;
+      }
+
+      applyClearanceFix(fix);
+      clearanceFixNotes = { ...clearanceFixNotes, [lineId]: describeApplied(fix) };
+      recordChange?.();
+    } finally {
+      fixingClearanceLineId = "";
+    }
+  }
+
+  /** Moves where the robot is staged until its start pose clears. */
+  async function fixStartPointClearance() {
+    if (startPoint.locked || startPoint.poseVariableId) return;
+
+    fixingClearanceLineId = START_POINT_FIX_ID;
+    clearanceFixNotes = { ...clearanceFixNotes, [START_POINT_FIX_ID]: "" };
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    try {
+      const fix = suggestStartPointFix(clearanceInput(), {
+        fieldSize: FIELD_SIZE,
+        margin: settings.safetyMargin,
+      });
+
+      if (!fix) {
+        clearanceFixNotes = {
+          ...clearanceFixNotes,
+          [START_POINT_FIX_ID]: "No nearby staging position clears it",
+        };
+        return;
+      }
+
+      applyClearanceFix(fix);
+      clearanceFixNotes = {
+        ...clearanceFixNotes,
+        [START_POINT_FIX_ID]: describeApplied(fix),
+      };
+      recordChange?.();
+    } finally {
+      fixingClearanceLineId = "";
+    }
+  }
+
+  const START_POINT_FIX_ID = "__start-point__";
+
+  function clearanceInput() {
+    return {
+      startPoint,
+      lines,
+      footprint: footprintFromSettings(settings),
+      obstacles: shapes,
+      lineStartPoints: mainRoute.startPoints,
+      headingTransitions: clearanceHeadingTransitions,
+    };
+  }
+
+  /**
+   * Writes the move onto whichever handle the search picked. Coordinates become
+   * literals, because an expression that used to drive them would fight the move
+   * the next time it is evaluated.
+   */
+  function applyClearanceFix(fix: ClearanceFix) {
+    const move = (point: BasePoint): BasePoint => ({
+      ...point,
+      x: point.x + fix.dx,
+      y: point.y + fix.dy,
+      xExpression: undefined,
+      yExpression: undefined,
+    });
+
+    if (fix.handle === "startPoint") {
+      startPoint = move(startPoint) as Point;
+      return;
     }
 
-    selectedChainId = duplicateChain.id;
-    syncLineColorsToChains();
-    recordChange?.();
+    lines = lines.map((line) => {
+      if (line.id !== fix.lineId) return line;
+      // `previousEndPoint` already carries the id of the path it belongs to, so
+      // it is written exactly like that path's own endpoint.
+      if (fix.handle === "endPoint" || fix.handle === "previousEndPoint") {
+        return { ...line, endPoint: move(line.endPoint) as Point };
+      }
+      return {
+        ...line,
+        controlPoints: line.controlPoints.map((point, index) =>
+          index === fix.controlPointIndex ? (move(point) as ControlPoint) : point,
+        ),
+      };
+    });
   }
 
-  function removeSelectedPathChain() {
-    if (!selectedChain || pathChains.length <= 1) return;
-    const fallbackChainId = pathChains.find((chain) => chain.id !== selectedChain.id)?.id;
-    const orphanedLines = [...(selectedChain.lineIds || [])];
-    pathChains = pathChains.filter((chain) => chain.id !== selectedChain.id);
+  /**
+   * Why no move helped, in terms of the thing the user would have to change.
+   *
+   * "Nothing works" is useless on its own. The common case is a collision in the
+   * first inch of a path, which is not really this path's at all — the robot is
+   * put there by whatever came before, and only that endpoint can move it.
+   */
+  function describeNoFix(lineId: string): string {
+    const entry = clearanceReport.byLine.get(lineId);
+    const worst = entry?.spans.reduce((low, span) =>
+      span.worstClearance < low.worstClearance ? span : low,
+    );
+    const line = lines.find((item) => item.id === lineId);
 
-    if (fallbackChainId) {
-      orphanedLines.forEach((lineId) => assignLineToChain(lineId, fallbackChainId));
+    // Within a robot's half-width of the start, the pose is the one handed over
+    // by the previous path rather than anything this path chose.
+    const atHandover = worst !== undefined && worst.startDistance <= settings.rWidth / 2;
+
+    if (atHandover) {
+      const order = mainRoute.steps.filter((step) => step.kind === "path");
+      const position = order.findIndex((step) => step.lineId === lineId);
+      const previousId = position > 0 ? order[position - 1].lineId : null;
+      const previous = previousId ? lines.find((item) => item.id === previousId) : null;
+
+      if (!previous) {
+        return "The robot is already this close where it is staged — use the fix on the Starting Point";
+      }
+      const name = previous.name?.trim() || "the previous path";
+      if (previous.endPoint?.poseVariableId) {
+        return `This starts where ${name} ends, and that endpoint comes from a pose variable — change the pose`;
+      }
+      if (previous.endPoint?.locked) {
+        return `This starts where ${name} ends, and that endpoint is locked — unlock it to move it`;
+      }
+      return `This starts where ${name} ends — no move of that endpoint clears both paths`;
     }
 
-    selectedChainId = pathChains[0]?.id || "";
-    syncLineColorsToChains();
-    recordChange?.();
+    if (line?.endPoint?.poseVariableId) {
+      return "This path's endpoint comes from a pose variable, and its control points cannot clear it — change the pose";
+    }
+    if (line?.endPoint?.locked) {
+      return "This path's endpoint is locked, and its control points cannot clear it";
+    }
+    return "No move of this path's points clears it — the gap may be tighter than the robot";
   }
 
-  function updateSelectedChainName() {
-    if (!selectedChain) return;
-    const nextName = chainNameDraft.trim();
-    if (!nextName) return;
-    pathChains = pathChains.map((chain) =>
-      chain.id === selectedChain.id ? { ...chain, name: nextName } : chain,
-    );
-    recordChange?.();
+  function describeApplied(fix: ClearanceFix): string {
+    const what =
+      fix.handle === "controlPoint"
+        ? `control point ${(fix.controlPointIndex ?? 0) + 1}`
+        : FIX_HANDLE_LABELS[fix.handle];
+
+    return fix.meetsMargin
+      ? `Moved ${what} ${fix.distance.toFixed(2)}in — now ${fix.after.toFixed(2)}in clear`
+      : `Moved ${what} ${fix.distance.toFixed(2)}in — ${fix.after.toFixed(2)}in clear, short of the ${settings.safetyMargin}in margin`;
   }
 
-  function updateSelectedChainColor() {
-    if (!selectedChain) return;
-    pathChains = pathChains.map((chain) =>
-      chain.id === selectedChain.id ? { ...chain, color: chainColorDraft } : chain,
-    );
-    syncLineColorsToChains();
-    recordChange?.();
-  }
+  /**
+   * The heading each path picks up, for the fix search. Read from the same
+   * timeline the clearance report uses so a candidate is scored the same way
+   * the report will score the result.
+   */
+  $: clearanceHeadingTransitions = (() => {
+    const transitions = new Map<string, { entryHeading: number; catchUp: number }>();
+    timePrediction?.timeline?.forEach((event) => {
+      if (event.type !== "travel" || event.lineIndex === undefined) return;
+      const lineId = lines[event.lineIndex]?.id;
+      if (!lineId || transitions.has(lineId)) return;
+      transitions.set(lineId, {
+        entryHeading: Number(event.startHeading) || 0,
+        catchUp: Number(event.headingCatchUp) || 0,
+      });
+    });
+    return transitions;
+  })();
 
-  $: chainOptions = pathChains.map((chain) => ({
-    id: chain.id,
-    name: chain.name,
-    color: chain.color || "#22c55e",
-  }));
+  $: stopReasonByLineId = (() => {
+    const reasons = new Map<string, string>();
+    chainRuns.forEach((run) => {
+      const last = run.steps[run.steps.length - 1];
+      if (!last || reasons.has(last.lineId)) return;
+      reasons.set(last.lineId, CHAIN_BREAK_LABELS[run.breakReason]);
+    });
+    return reasons;
+  })();
+
+  /**
+   * A tangential start point has no heading of its own — it faces along the
+   * first path — so the start heading field shows that direction rather than a
+   * meaningless zero.
+   */
+  $: startTangentialHeading = (() => {
+    if (startPoint.heading !== "tangential") return null;
+    const firstStep = mainRoute.steps.find((step) => step.kind === "path");
+    if (!firstStep || firstStep.kind !== "path") return null;
+    return getLineStartHeading(firstStep.line, startPoint);
+  })();
+
 
   $: syncLineColorsToChains();
 
@@ -324,7 +522,7 @@
   }
 
   // Compute timeline markers for the UI (start of each travel segment)
-  $: timePrediction = calculatePathTime(startPoint, lines, settings, sequence);
+  $: timePrediction = calculatePathTime(startPoint, lines, settings, sequence, variables);
   $: markers = (() => {
     const _markers: {
       percent?: number;
@@ -348,6 +546,7 @@
       timePrediction,
       settings,
       sequence,
+      variables,
     );
 
     timePrediction.timeline.forEach((ev) => {
@@ -398,6 +597,31 @@
   // Collapsed state for obstacles (default collapsed)
   let collapsedObstacles = shapes.map(() => true);
 
+  type EditorTab = "route" | "variables" | "field" | "telemetry";
+
+  const TABS: { id: EditorTab; label: string; hint: string }[] = [
+    { id: "route", label: "Route", hint: "Start point, paths, waits, events and if blocks" },
+    { id: "variables", label: "Variables", hint: "Reusable numbers, booleans, poses and paths" },
+    { id: "field", label: "Field", hint: "Obstacles and mirroring" },
+    { id: "telemetry", label: "Telemetry", hint: "Timing and robot state" },
+  ];
+
+  let activeTab: EditorTab = "route";
+
+  $: tabCounts = {
+    route: sequence.length,
+    variables: variables.length,
+    field: shapes.length,
+    telemetry: 0,
+  } as Record<EditorTab, number>;
+
+  function setAllLinesCollapsed(collapsed: boolean) {
+    collapsedSections = {
+      ...collapsedSections,
+      lines: lines.map(() => collapsed),
+    };
+  }
+
   // Reactive statements to update UI state when lines or shapes change from file load
   $: if (lines.length !== collapsedSections.lines.length) {
     collapsedSections = {
@@ -434,245 +658,119 @@
     return Number(inputValue(event));
   }
 
-  function makeNumberVariableName(): string {
-    const usedNames = new Set(numberVariables.map((variable) => variable.name.trim()));
-    let index = numberVariables.length + 1;
-    let name = `Number ${index}`;
+  function addVariable(type: VariableType) {
+    // Seed a new pose from the start point so it lands somewhere meaningful.
+    const seed =
+      type === "pose"
+        ? {
+            x: Number(startPoint.x) || 0,
+            y: Number(startPoint.y) || 0,
+            heading: startPointHeadingDegrees(),
+          }
+        : {};
 
-    while (usedNames.has(name)) {
-      index++;
-      name = `Number ${index}`;
-    }
-
-    return name;
-  }
-
-  function numberVariableValue(variableId: string | undefined, fallback: number): number {
-    if (!variableId) return fallback;
-    const variable = numberVariables.find((item) => item.id === variableId);
-    const value = Number(variable?.value);
-    return Number.isFinite(value) ? value : fallback;
-  }
-
-  function positionNumberValue(variableId: string | undefined, fallback: number): number {
-    const value = numberVariableValue(variableId, fallback);
-    return Math.max(0, Math.min(1, value > 1 ? value / 100 : value));
-  }
-
-  function addNumberVariable() {
-    numberVariables = [
-      ...numberVariables,
-      {
-        id: `number-${makeId()}`,
-        name: makeNumberVariableName(),
-        value: 1,
-      },
-    ];
+    variables = [...variables, createVariable(type, variables, seed)];
     recordChange?.();
   }
 
-  function updateNumberVariable(
-    variableId: string,
-    patch: Partial<NumberVariable>,
-    commit = false,
-  ) {
-    let updatedVariable: NumberVariable | null = null;
-    numberVariables = numberVariables.map((variable) => {
-      if (variable.id !== variableId) return variable;
-      const next = {
-        ...variable,
-        ...patch,
-        value:
-          patch.value === undefined
-            ? variable.value
-            : Number.isFinite(Number(patch.value))
-              ? Number(patch.value)
-              : variable.value,
-      };
-      updatedVariable = next;
-      return next;
-    });
-
-    if (updatedVariable) {
-      syncNumberVariableUsage(updatedVariable);
-    }
-
-    if (commit) recordChange?.();
-  }
-
-  function duplicateNumberVariable(variableId: string) {
-    const variable = numberVariables.find((item) => item.id === variableId);
+  function duplicateVariable(variableId: string) {
+    const variable = variables.find((item) => item.id === variableId);
     if (!variable) return;
 
-    numberVariables = [
-      ...numberVariables,
-      {
-        ...cloneJson(variable),
-        id: `number-${makeId()}`,
-        name: `${variable.name || "Number"} Copy`,
-      },
-    ];
+    const clone = cloneJson(variable) as Variable;
+    clone.id = `var-${makeId()}`;
+    clone.name = uniqueVariableName(variables, `${variable.name || "value"}Copy`);
+
+    if (clone.type === "path") {
+      clone.lines = clone.lines.map((line, index) => ({
+        ...line,
+        id: `path-variable-line-${makeId()}-${index}`,
+      }));
+    }
+
+    variables = [...variables, clone];
     recordChange?.();
   }
 
-  function removeNumberVariable(variableId: string) {
-    numberVariables = numberVariables.filter((variable) => variable.id !== variableId);
-    lines = lines.map((line) => ({
-      ...line,
-      speedVariableId:
-        line.speedVariableId === variableId ? undefined : line.speedVariableId,
-      eventMarkers: (line.eventMarkers || []).map((marker) => ({
-        ...marker,
-        positionVariableId:
-          marker.positionVariableId === variableId ? undefined : marker.positionVariableId,
-        triggerMsVariableId:
-          marker.triggerMsVariableId === variableId ? undefined : marker.triggerMsVariableId,
-        poseXVariableId:
-          marker.poseXVariableId === variableId ? undefined : marker.poseXVariableId,
-        poseYVariableId:
-          marker.poseYVariableId === variableId ? undefined : marker.poseYVariableId,
-        durationVariableId:
-          marker.durationVariableId === variableId ? undefined : marker.durationVariableId,
-      })),
-    }));
-    sequence = sequence.map((item) => {
-      if (item.kind === "repeat") {
-        return {
-          ...item,
-          countVariableId:
-            item.countVariableId === variableId ? undefined : item.countVariableId,
-        };
+  function removeVariable(variableId: string) {
+    const variable = variables.find((item) => item.id === variableId);
+    variables = variables.filter((item) => item.id !== variableId);
+
+    // Points bound to a removed pose keep their coordinates but lose the link.
+    if (variable?.type === "pose") {
+      if (startPoint.poseVariableId === variableId) {
+        startPoint = clearPointPoseVariable(startPoint);
       }
-      if (item.kind === "wait" || item.kind === "event") {
-        return {
-          ...item,
-          durationVariableId:
-            item.durationVariableId === variableId ? undefined : item.durationVariableId,
-        };
-      }
-      return item;
-    });
+      lines = lines.map((line) =>
+        line.endPoint?.poseVariableId === variableId
+          ? { ...line, endPoint: clearPointPoseVariable(line.endPoint) }
+          : line,
+      );
+    }
+
+    syncVariableUsage();
     recordChange?.();
   }
 
-  function syncNumberVariableUsage(variable: NumberVariable) {
-    const value = Number(variable.value);
-    if (!Number.isFinite(value)) return;
+  function handleVariableChange(variable: Variable) {
+    // Recompute variables that reference the edited one, then everything using them.
+    variables = resolveVariableValues(
+      variables.map((item) => (item.id === variable.id ? variable : item)),
+    );
+    syncVariableUsage();
+  }
 
-    poseVariables = resolvePoseVariableExpressions(poseVariables, numberVariables);
-    poseVariables.forEach((poseVariable) => {
+  /** Re-resolves every expression in the path after a variable changes. */
+  function syncVariableUsage() {
+    const scope = buildExpressionScope(variables);
+
+    poseVariablesOf(variables).forEach((poseVariable) => {
       syncPoseVariableUsage(poseVariable.id, poseVariable);
     });
 
-    startPoint = resolvePointExpressions(startPoint, numberVariables);
+    startPoint = resolvePointExpressions(startPoint, variables, scope);
+    lines = lines.map((line) => resolveLineExpressions(line, variables, scope));
+    sequence = resolveSequenceExpressions(sequence, variables, scope);
+  }
 
-    lines = lines.map((line) => ({
-      ...line,
-      endPoint:
-        line.endPoint.poseVariableId
-          ? line.endPoint
-          : resolvePointExpressions(line.endPoint, numberVariables),
-      controlPoints: (line.controlPoints || []).map((point) =>
-        resolveBasePointExpressions(point, numberVariables),
-      ),
-      speed:
-        line.speedVariableId === variable.id
-          ? Math.max(0.05, Math.min(1, value))
-          : line.speed,
-      eventMarkers: (line.eventMarkers || []).map((marker) => ({
-        ...marker,
-        position:
-          marker.positionVariableId === variable.id
-            ? positionNumberValue(variable.id, marker.position)
-            : marker.position,
-        triggerMs:
-          marker.triggerMsVariableId === variable.id
-            ? Math.max(0, Math.round(value))
-            : marker.triggerMs,
-        poseX: marker.poseXVariableId === variable.id ? value : marker.poseX,
-        poseY: marker.poseYVariableId === variable.id ? value : marker.poseY,
-        durationMs:
-          marker.durationVariableId === variable.id
-            ? Math.max(0, Math.round(value))
-            : marker.durationMs,
-      })),
-    }));
-
-    sequence = sequence.map((item) => {
-      if (item.kind === "repeat" && item.countVariableId === variable.id) {
-        return {
-          ...item,
-          count: Math.max(1, Math.min(20, Math.round(value))),
-        };
-      }
-
-      if (
-        (item.kind === "wait" || item.kind === "event") &&
-        item.durationVariableId === variable.id
-      ) {
-        return {
-          ...item,
-          durationMs: Math.max(0, Math.round(value)),
-        };
-      }
-
-      return item;
+  /** Writes an expression plus its resolved literal onto a line. */
+  function setLineExpression(
+    lineId: string,
+    field: "speedExpression" | "waitBeforeExpression" | "waitAfterExpression" | "enabledExpression",
+    raw: string,
+  ) {
+    lines = lines.map((line) => {
+      if (line.id !== lineId) return line;
+      const next = { ...line, [field]: raw.trim() ? raw : undefined };
+      return resolveLineExpressions(next, variables);
     });
   }
 
-  function setLineSpeedVariable(lineId: string, variableId: string) {
-    lines = lines.map((line) =>
-      line.id === lineId
-        ? {
-            ...line,
-            speedVariableId: variableId || undefined,
-            speed: variableId
-              ? Math.max(0.05, Math.min(1, numberVariableValue(variableId, line.speed ?? 1)))
-              : line.speed,
-          }
-        : line,
-    );
-    recordChange?.();
-  }
-
-  function setSequenceDurationVariable(seqIndex: number, variableId: string) {
+  function setSequenceExpression(
+    seqIndex: number,
+    field: "durationExpression" | "countExpression" | "enabledExpression",
+    raw: string,
+  ) {
     const item = sequence[seqIndex];
-    if (!item || (item.kind !== "wait" && item.kind !== "event")) return;
+    if (!item) return;
 
+    const scope = buildExpressionScope(variables);
+    const next = { ...item, [field]: raw.trim() ? raw : undefined } as SequenceItem;
     const newSeq = [...sequence];
-    newSeq[seqIndex] = {
-      ...item,
-      durationVariableId: variableId || undefined,
-      durationMs: variableId
-        ? Math.max(0, Math.round(numberVariableValue(variableId, item.durationMs)))
-        : item.durationMs,
-    } as SequenceItem;
+    newSeq[seqIndex] = resolveSequenceItemExpressions(next, variables, scope);
     sequence = newSeq;
-    recordChange?.();
   }
 
-  function setRepeatCountVariable(seqIndex: number, variableId: string) {
-    const item = sequence[seqIndex];
-    if (!item || item.kind !== "repeat") return;
+  const conditionalActive = (item: SequenceConditionalItem) =>
+    isConditionalActive(item, variables);
 
-    const newSeq = [...sequence];
-    newSeq[seqIndex] = {
-      ...item,
-      countVariableId: variableId || undefined,
-      count: variableId
-        ? Math.max(1, Math.min(20, Math.round(numberVariableValue(variableId, item.count))))
-        : item.count,
-    };
-    sequence = newSeq;
-    recordChange?.();
-  }
-
+  /** Repeat loops and `if` blocks both wrap a group of paths. */
   function sequencePathLineIds(sourceSequence: SequenceItem[] = sequence): string[] {
     const ids: string[] = [];
     sourceSequence.forEach((item) => {
       if (item.kind === "path") {
         ids.push(item.lineId);
-      } else if (item.kind === "repeat") {
+      } else if (isGroupItem(item)) {
         ids.push(...(item.lineIds || []));
       }
     });
@@ -692,114 +790,146 @@
     return lines.find((line) => line.id === lineId)?.locked ?? false;
   }
 
-  function handlePathDragStart(
-    event: DragEvent,
-    lineId: string,
-    sourceRepeatId = "",
-  ) {
-    if (!lineId || lineIsLocked(lineId)) {
-      event.preventDefault();
-      return;
-    }
+  /**
+   * The step list does not scroll on its own during a drag, so a block that is
+   * off screen would be unreachable. While dragging, hovering near the top or
+   * bottom edge scrolls the list, faster the closer to the edge.
+   */
+  function startAutoScroll() {
+    if (autoScrollFrame) return;
 
-    draggedLineId = lineId;
-    event.dataTransfer?.setData("application/x-pedro-line-id", lineId);
-    event.dataTransfer?.setData("application/x-pedro-repeat-id", sourceRepeatId);
-    event.dataTransfer?.setData("text/plain", lineId);
-    if (event.dataTransfer) {
-      event.dataTransfer.effectAllowed = "move";
-    }
-  }
-
-  function handlePathDragEnd() {
-    draggedLineId = "";
-    dragOverRepeatId = "";
-  }
-
-  function handleRepeatDragOver(event: DragEvent, repeatId: string) {
-    if (!draggedLineId || !repeatId) return;
-    const repeatItem = sequence.find(
-      (item) => item.kind === "repeat" && item.id === repeatId,
-    ) as Extract<SequenceItem, { kind: "repeat" }> | undefined;
-    if (!repeatItem || repeatItem.locked) return;
-
-    event.preventDefault();
-    if (event.dataTransfer) {
-      event.dataTransfer.dropEffect = "move";
-    }
-    dragOverRepeatId = repeatId;
-  }
-
-  function handleRepeatDragLeave(event: DragEvent, repeatId: string) {
-    const nextTarget = event.relatedTarget as Node | null;
-    if (
-      dragOverRepeatId === repeatId &&
-      (!nextTarget || !(event.currentTarget as HTMLElement).contains(nextTarget))
-    ) {
-      dragOverRepeatId = "";
-    }
-  }
-
-  function moveLineIntoRepeat(seqIndex: number, lineId: string) {
-    const targetRepeat = sequence[seqIndex];
-    if (
-      !lineId ||
-      lineIsLocked(lineId) ||
-      !targetRepeat ||
-      targetRepeat.kind !== "repeat" ||
-      targetRepeat.locked
-    ) {
-      return;
-    }
-
-    const nextSequence: SequenceItem[] = [];
-    let targetIndex = -1;
-
-    sequence.forEach((item) => {
-      if (item.kind === "path") {
-        if (item.lineId !== lineId) {
-          nextSequence.push(item);
-        }
+    const step = () => {
+      if (!draggedLineId || !routeScrollEl) {
+        autoScrollFrame = 0;
         return;
       }
 
-      if (item.kind === "repeat") {
-        const nextLineIds = (item.lineIds || []).filter((id) => id !== lineId);
-        const nextRepeat = { ...item, lineIds: nextLineIds };
-        if (item.id === targetRepeat.id) {
-          targetIndex = nextSequence.length;
-          nextSequence.push(nextRepeat);
-        } else {
-          nextSequence.push(nextRepeat);
-        }
-        return;
+      const rect = routeScrollEl.getBoundingClientRect();
+      const edge = 72;
+      const maxSpeed = 20;
+
+      if (dragPointerY > 0 && dragPointerY < rect.top + edge) {
+        const intensity = Math.min(1, (rect.top + edge - dragPointerY) / edge);
+        routeScrollEl.scrollTop -= maxSpeed * intensity;
+      } else if (dragPointerY > rect.bottom - edge) {
+        const intensity = Math.min(1, (dragPointerY - (rect.bottom - edge)) / edge);
+        routeScrollEl.scrollTop += maxSpeed * intensity;
       }
 
-      nextSequence.push(item);
-    });
-
-    if (targetIndex < 0) return;
-
-    const updatedTarget = nextSequence[targetIndex];
-    if (updatedTarget.kind !== "repeat") return;
-    nextSequence[targetIndex] = {
-      ...updatedTarget,
-      lineIds: [...updatedTarget.lineIds, lineId],
+      autoScrollFrame = requestAnimationFrame(step);
     };
 
-    sequence = nextSequence;
-    syncLinesToSequence(nextSequence);
+    autoScrollFrame = requestAnimationFrame(step);
+  }
+
+  function stopAutoScroll() {
+    if (autoScrollFrame) cancelAnimationFrame(autoScrollFrame);
+    autoScrollFrame = 0;
+    dragPointerX = 0;
+    dragPointerY = 0;
+  }
+
+  /**
+   * Path dragging uses pointer events, not HTML5 drag-and-drop.
+   *
+   * The native API put the browser into a modal drag loop that could outlive
+   * the gesture — the cursor stayed stuck in "grabbing" and even Cmd+R was
+   * swallowed until the page was reloaded by hand. Pointer events with
+   * pointer capture never enter that loop, so the gesture always ends: on
+   * pointerup, pointercancel, Escape, or the window losing focus.
+   */
+  function beginPathDrag(event: PointerEvent, lineId: string) {
+    if (!lineId || lineIsLocked(lineId)) return;
+    if (event.button !== 0) return; // Left button only.
+
+    // Stops text selection and any native drag starting alongside this one.
+    event.preventDefault();
+
+    draggedLineId = lineId;
+    dragPointerX = event.clientX;
+    dragPointerY = event.clientY;
+    dragOverRepeatId = "";
+    dragOverTopLevel = false;
+
+    // Capture keeps move/up events coming even once the pointer leaves the
+    // handle, so the gesture cannot be lost part way through.
+    const target = event.currentTarget as HTMLElement | null;
+    try {
+      target?.setPointerCapture?.(event.pointerId);
+    } catch {
+      // Capture is a nicety; the window listeners already cover the gesture.
+    }
+
+    if (typeof document !== "undefined") {
+      document.body.style.cursor = "grabbing";
+    }
+    startAutoScroll();
+  }
+
+  /** Resolves whatever sits under the pointer into a drop target. */
+  function updateDropTarget() {
+    if (typeof document === "undefined") return;
+
+    const element = document.elementFromPoint(dragPointerX, dragPointerY);
+    const groupElement = element?.closest?.("[data-drop-group-id]") || null;
+    const dropOutElement = element?.closest?.("[data-drop-out]") || null;
+
+    const groupId = groupElement?.getAttribute("data-drop-group-id") || "";
+    const group = groupId
+      ? sequence.find(
+          (item): item is SequenceGroupItem =>
+            isGroupItem(item) && item.id === groupId,
+        )
+      : undefined;
+
+    dragOverRepeatId = group && !group.locked ? groupId : "";
+    dragOverTopLevel = Boolean(dropOutElement) && !dragOverRepeatId;
+  }
+
+  function handlePathDragMove(event: PointerEvent) {
+    if (!draggedLineId) return;
+    dragPointerX = event.clientX;
+    dragPointerY = event.clientY;
+    updateDropTarget();
+  }
+
+  function resetDragState() {
+    stopAutoScroll();
+    if (typeof document !== "undefined") {
+      document.body.style.cursor = "";
+    }
+    if (!draggedLineId && !dragOverRepeatId && !dragOverTopLevel) return;
+    draggedLineId = "";
+    dragOverRepeatId = "";
+    dragOverTopLevel = false;
+  }
+
+  /** Applies the pending move when the pointer ended over a valid target. */
+  function finishPathDrag() {
+    const lineId = draggedLineId;
+    const targetGroupId = dragOverRepeatId;
+    const toTopLevel = dragOverTopLevel;
+
+    resetDragState();
+    if (!lineId || lineIsLocked(lineId)) return;
+
+    const next = targetGroupId
+      ? moveLineIntoGroup(sequence, targetGroupId, lineId)
+      : toTopLevel
+        ? moveLineOutOfGroups(sequence, lineId)
+        : sequence;
+
+    if (next === sequence) return;
+
+    sequence = next;
+    syncLinesToSequence(next);
     recordChange?.();
   }
 
-  function handleRepeatDrop(event: DragEvent, seqIndex: number) {
-    event.preventDefault();
-    const lineId =
-      event.dataTransfer?.getData("application/x-pedro-line-id") ||
-      event.dataTransfer?.getData("text/plain") ||
-      draggedLineId;
-    moveLineIntoRepeat(seqIndex, lineId);
-    handlePathDragEnd();
+  function handlePathDragCancel(event?: KeyboardEvent | Event) {
+    if (event instanceof KeyboardEvent && event.key !== "Escape") return;
+    if (!draggedLineId) return;
+    resetDragState();
   }
 
   function offsetPoint<T extends BasePoint>(point: T, dx: number, dy: number): T {
@@ -828,75 +958,51 @@
     return cloneJson(lines[lineIndex - 1].endPoint);
   }
 
-  function makePathVariableName(): string {
-    const usedNames = new Set(pathVariables.map((variable) => variable.name.trim()));
-    let index = pathVariables.length + 1;
-    let name = `Path Variable ${index}`;
-
-    while (usedNames.has(name)) {
-      index++;
-      name = `Path Variable ${index}`;
-    }
-
-    return name;
-  }
-
-  function createPathVariableFromSelectedChain() {
-    if (!selectedChain) return;
-    const orderedIds = orderedLineIdsForSelection(selectedChain.lineIds || []);
+  /**
+   * Stores the current route as a reusable path variable. Passing an existing
+   * id replaces that variable's contents instead of creating a new one.
+   */
+  function storeChainAsVariable(existingId?: string) {
+    const orderedIds = sequencePathLineIds();
     const selectedLines = orderedIds
       .map((lineId) => lines.find((line) => line.id === lineId))
       .filter(Boolean) as Line[];
 
     if (!selectedLines.length) return;
 
+    const storedLines = selectedLines.map((line, index) => {
+      const clone = cloneJson(line);
+      clone.id = `path-variable-line-${makeId()}-${index}`;
+      return clone;
+    });
+    const storedStartPoint = getLineStartPoint(selectedLines[0].id || "");
+
+    if (existingId) {
+      variables = variables.map((variable) =>
+        variable.id === existingId && variable.type === "path"
+          ? { ...variable, startPoint: storedStartPoint, lines: storedLines }
+          : variable,
+      );
+      recordChange?.();
+      return;
+    }
+
     const variable: PathVariable = {
-      id: `path-variable-${makeId()}`,
-      name: selectedChain.name
-        ? `${selectedChain.name} Variable`
-        : makePathVariableName(),
-      startPoint: getLineStartPoint(selectedLines[0].id || ""),
-      lines: selectedLines.map((line, index) => {
-        const clone = cloneJson(line);
-        clone.id = `path-variable-line-${makeId()}-${index}`;
-        return clone;
-      }),
+      id: `var-${makeId()}`,
+      type: "path",
+      name: uniqueVariableName(variables, "path"),
+      startPoint: storedStartPoint,
+      lines: storedLines,
     };
 
-    pathVariables = [...pathVariables, variable];
-    recordChange?.();
-  }
-
-  function updatePathVariableName(variableId: string, name: string) {
-    pathVariables = pathVariables.map((variable) =>
-      variable.id === variableId
-        ? { ...variable, name }
-        : variable,
-    );
-  }
-
-  function duplicatePathVariable(variableId: string) {
-    const variable = pathVariables.find((item) => item.id === variableId);
-    if (!variable) return;
-
-    const clone = cloneJson(variable);
-    clone.id = `path-variable-${makeId()}`;
-    clone.name = `${variable.name || "Path Variable"} Copy`;
-    clone.lines = clone.lines.map((line, index) => ({
-      ...line,
-      id: `path-variable-line-${makeId()}-${index}`,
-    }));
-    pathVariables = [...pathVariables, clone];
-    recordChange?.();
-  }
-
-  function removePathVariable(variableId: string) {
-    pathVariables = pathVariables.filter((variable) => variable.id !== variableId);
+    variables = [...variables, variable];
     recordChange?.();
   }
 
   function insertPathVariable(variableId: string) {
-    const variable = pathVariables.find((item) => item.id === variableId);
+    const variable = variables.find(
+      (item) => item.id === variableId && item.type === "path",
+    ) as PathVariable | undefined;
     if (!variable || !variable.lines.length) return;
 
     const clonedLines = variable.lines.map((line, index) =>
@@ -931,11 +1037,15 @@
     recordChange?.();
   }
 
-  function pointHeadingDegrees(point: Point): number {
-    const currentPoint = point as any;
-    if (currentPoint.heading === "constant") return Number(currentPoint.degrees) || 0;
-    if (currentPoint.heading === "linear") return Number(currentPoint.endDeg ?? currentPoint.startDeg) || 0;
-    return 0;
+  /**
+   * The heading the robot is placed at. A linear start point keeps it in
+   * `startDeg` — `endDeg` is never read for the start point — so seeding a pose
+   * from it has to read the same field the start heading editor does.
+   */
+  function startPointHeadingDegrees(): number {
+    if (startPoint.heading === "constant") return Number(startPoint.degrees) || 0;
+    if (startPoint.heading === "linear") return Number(startPoint.startDeg) || 0;
+    return startTangentialHeading ?? 0;
   }
 
   function firstFinite(...values: unknown[]): number {
@@ -944,19 +1054,6 @@
       if (Number.isFinite(numeric)) return numeric;
     }
     return 0;
-  }
-
-  function makePoseVariableName(): string {
-    const usedNames = new Set(poseVariables.map((variable) => variable.name.trim()));
-    let index = poseVariables.length + 1;
-    let name = `Pose ${index}`;
-
-    while (usedNames.has(name)) {
-      index++;
-      name = `Pose ${index}`;
-    }
-
-    return name;
   }
 
   function bindPointToPoseVariable(
@@ -974,6 +1071,18 @@
       locked: point.locked,
       poseVariableId: variable.id,
     };
+
+    // The start point passes `forcePoseHeading`: its heading lives in `startDeg`
+    // (or `degrees`), never in `endDeg`, so the linear branch below would write
+    // the pose heading into a field nothing reads and leave the real heading
+    // untouched. Pin it down as a definite heading instead.
+    if (forcePoseHeading) {
+      return {
+        ...basePoint,
+        heading: "constant",
+        degrees: targetHeading,
+      };
+    }
 
     if (preferLinear || point.heading === "linear") {
       return {
@@ -1014,7 +1123,9 @@
     if (!variable) return;
 
     if (startPoint.poseVariableId === poseVariableId) {
-      startPoint = bindPointToPoseVariable(startPoint, variable);
+      // Force the pose heading, exactly as the initial binding does, so editing
+      // the pose keeps moving the start heading with it.
+      startPoint = bindPointToPoseVariable(startPoint, variable, true);
     }
 
     const nextLines = lines.map((line) =>
@@ -1025,46 +1136,6 @@
 
     if (JSON.stringify(nextLines) !== JSON.stringify(lines)) {
       lines = nextLines;
-    }
-  }
-
-  function addPoseVariable() {
-    const variable: PoseVariable = {
-      id: `pose-${makeId()}`,
-      name: makePoseVariableName(),
-      x: Number(startPoint.x) || 0,
-      y: Number(startPoint.y) || 0,
-      heading: pointHeadingDegrees(startPoint),
-    };
-
-    poseVariables = [...poseVariables, variable];
-    recordChange?.();
-  }
-
-  function removePoseVariable(poseVariableId: string) {
-    poseVariables = poseVariables.filter((variable) => variable.id !== poseVariableId);
-
-    if (startPoint.poseVariableId === poseVariableId) {
-      startPoint = clearPointPoseVariable(startPoint);
-    }
-
-    lines = lines.map((line) =>
-      line.endPoint?.poseVariableId === poseVariableId
-        ? { ...line, endPoint: clearPointPoseVariable(line.endPoint) }
-        : line,
-    );
-    recordChange?.();
-  }
-
-  function handlePoseVariableChange(variable: PoseVariable) {
-    const resolvedVariables = resolvePoseVariableExpressions(
-      poseVariables.map((item) => (item.id === variable.id ? variable : item)),
-      numberVariables,
-    );
-    poseVariables = resolvedVariables;
-    const resolvedVariable = resolvedVariables.find((item) => item.id === variable.id);
-    if (resolvedVariable) {
-      syncPoseVariableUsage(variable.id, resolvedVariable);
     }
   }
 
@@ -1144,11 +1215,23 @@
   function handleLineHeadingModeChange(lineId: string, mode: string) {
     if (!lineId) return;
 
-    lines = lines.map((line) =>
-      line.id === lineId
-        ? { ...line, endPoint: buildPointWithHeadingMode(line.endPoint, mode) }
-        : line,
-    );
+    // Start a linear path at the heading the robot arrives with. Falling back
+    // to whatever the point happened to hold is what creates heading jumps in
+    // the first place, and inside a PathChain the robot cannot stop to make
+    // one up.
+    const entryHeading = headingJumpByLineId.get(lineId)?.entry;
+
+    lines = lines.map((line) => {
+      if (line.id !== lineId) return line;
+      const endPoint = buildPointWithHeadingMode(line.endPoint, mode);
+      if (endPoint.heading !== "linear" || entryHeading === undefined) {
+        return { ...line, endPoint };
+      }
+      return {
+        ...line,
+        endPoint: { ...endPoint, startDeg: entryHeading, startDegExpression: undefined },
+      };
+    });
     recordChange?.();
   }
 
@@ -1157,18 +1240,15 @@
       {
         startPoint,
         lines,
-        poseVariables,
-        pathVariables,
-        numberVariables,
+        variables,
       },
       axis,
     );
 
     startPoint = mirrored.startPoint || startPoint;
-    lines = mirrored.lines || [];
-    poseVariables = mirrored.poseVariables || [];
-    pathVariables = mirrored.pathVariables || [];
-    numberVariables = mirrored.numberVariables || [];
+    // Never fall back to an empty route: a failed mirror must not delete paths.
+    lines = mirrored.lines || lines;
+    variables = mirrored.variables || variables;
     percent = 0;
     recordChange?.();
   }
@@ -1342,35 +1422,9 @@
     recordChange?.();
   }
 
-  function wrapSelectedChainInRepeat() {
-    if (!selectedChain) return;
-    const orderedIds = orderedLineIdsForSelection(selectedChain.lineIds || []);
-    if (!orderedIds.length) return;
-
-    const selectedLineSet = new Set(orderedIds);
-    const firstIndex = sequence.findIndex(
-      (item) => item.kind === "path" && selectedLineSet.has(item.lineId),
-    );
-    const insertIndex = firstIndex >= 0 ? firstIndex : sequence.length;
-    const newSeq = sequence.filter(
-      (item) => !(item.kind === "path" && selectedLineSet.has(item.lineId)),
-    );
-    newSeq.splice(insertIndex, 0, {
-      kind: "repeat",
-      id: makeId(),
-      name: `${selectedChain.name || "Chain"} Repeat`,
-      count: 2,
-      lineIds: orderedIds,
-      locked: false,
-    });
-    sequence = newSeq;
-    syncLinesToSequence(newSeq);
-    recordChange?.();
-  }
-
   function unwrapRepeat(seqIndex: number) {
     const seqItem = sequence[seqIndex];
-    if (!seqItem || seqItem.kind !== "repeat") return;
+    if (!seqItem || !isGroupItem(seqItem)) return;
 
     const replacement = (seqItem.lineIds || []).map(
       (lineId) => ({ kind: "path", lineId }) as SequenceItem,
@@ -1382,15 +1436,47 @@
     recordChange?.();
   }
 
+  /**
+   * Duplicates a repeat loop or `if` block. The paths inside are copied too:
+   * reusing the same path ids would put one path in two blocks, so editing the
+   * copy would silently edit the original and the field would only ever draw
+   * one of them.
+   */
   function duplicateRepeatAfter(seqIndex: number) {
     const seqItem = sequence[seqIndex];
-    if (!seqItem || seqItem.kind !== "repeat") return;
+    if (!seqItem || !isGroupItem(seqItem)) return;
+
+    const sourceIds = (seqItem.lineIds || []).filter(Boolean);
+    const clonedLines: Line[] = [];
+    const clonedIds: string[] = [];
+
+    sourceIds.forEach((lineId) => {
+      const source = lines.find((line) => line.id === lineId);
+      if (!source) return;
+      const clone = cloneLineForRoute(source, clonedLines.length, 0);
+      clonedLines.push(clone);
+      clonedIds.push(clone.id!);
+    });
+
+    if (clonedLines.length) {
+      lines = [...lines, ...clonedLines];
+      collapsedSections = {
+        ...collapsedSections,
+        lines: [...collapsedSections.lines, ...clonedLines.map(() => false)],
+        controlPoints: [
+          ...collapsedSections.controlPoints,
+          ...clonedLines.map(() => true),
+        ],
+      };
+      clonedIds.forEach((lineId) => ensureLineInDefaultChain(lineId));
+    }
 
     const newSeq = [...sequence];
     newSeq.splice(seqIndex + 1, 0, {
       ...cloneJson(seqItem),
       id: makeId(),
-      name: `${seqItem.name || "Repeat Loop"} Copy`,
+      name: `${seqItem.name || "Group"} Copy`,
+      lineIds: clonedIds,
     });
     sequence = newSeq;
     syncLinesToSequence(newSeq);
@@ -1399,7 +1485,7 @@
 
   function duplicateLineInsideRepeat(seqIndex: number, lineId: string) {
     const seqItem = sequence[seqIndex];
-    if (!seqItem || seqItem.kind !== "repeat") return;
+    if (!seqItem || !isGroupItem(seqItem)) return;
 
     const lineIndex = lines.findIndex((line) => line.id === lineId);
     const sourceLine = lines[lineIndex];
@@ -1434,6 +1520,57 @@
     collapsedSections = { ...collapsedSections };
     syncLineColorsToChains();
     recordChange?.();
+  }
+
+  /** Wraps the path at `seqIndex` in a new `if` block. */
+  function wrapPathInConditional(seqIndex: number) {
+    const seqItem = sequence[seqIndex];
+    if (!seqItem || seqItem.kind !== "path") return;
+
+    const conditionalItem: SequenceItem = {
+      kind: "conditional",
+      id: makeId(),
+      name: "If",
+      condition: "",
+      lineIds: [seqItem.lineId],
+      locked: false,
+    };
+
+    const newSeq = [...sequence];
+    newSeq.splice(seqIndex, 1, conditionalItem);
+    sequence = newSeq;
+    syncLinesToSequence(newSeq);
+    recordChange?.();
+  }
+
+  /** Appends an empty `if` block for paths to be dragged into. */
+  function addConditionalBlock() {
+    sequence = [
+      ...sequence,
+      {
+        kind: "conditional",
+        id: makeId(),
+        name: "If",
+        condition: "",
+        lineIds: [],
+        locked: false,
+      },
+    ];
+    recordChange?.();
+  }
+
+  function updateConditionalItem(
+    seqIndex: number,
+    patch: Partial<{ name: string; condition: string; locked: boolean }>,
+    commit = false,
+  ) {
+    const seqItem = sequence[seqIndex];
+    if (!seqItem || seqItem.kind !== "conditional") return;
+
+    const newSeq = [...sequence];
+    newSeq[seqIndex] = { ...seqItem, ...patch };
+    sequence = newSeq;
+    if (commit) recordChange?.();
   }
 
   function updateRepeatItem(
@@ -1528,13 +1665,15 @@
     if (removedId) {
       sequence = sequence
         .map((item) =>
-          item.kind === "repeat"
+          isGroupItem(item)
             ? {
                 ...item,
                 lineIds: item.lineIds.filter((lineId) => lineId !== removedId),
               }
             : item,
         )
+        // Drop a repeat loop once it is empty; keep an empty `if` block so its
+        // condition survives while paths are being moved around.
         .filter((s) =>
           s.kind === "path"
             ? s.lineId !== removedId
@@ -1547,6 +1686,46 @@
     collapsedSections.lines.splice(idx, 1);
     collapsedSections.controlPoints.splice(idx, 1);
     recordChange();
+  }
+
+  /**
+   * Deletes a repeat loop or `if` block together with the paths it holds.
+   *
+   * Dropping only the sequence item would leave those paths orphaned in
+   * `lines` — gone from the route list but still drawn on the field. Use
+   * "Unwrap" to keep the paths and discard just the wrapper.
+   */
+  function removeGroupItem(seqIndex: number) {
+    const item = sequence[seqIndex];
+    if (!item || !isGroupItem(item)) return;
+
+    const doomed = new Set((item.lineIds || []).filter(Boolean));
+
+    const newSeq = [...sequence];
+    newSeq.splice(seqIndex, 1);
+    sequence = newSeq.filter((entry) =>
+      entry.kind === "path" ? !doomed.has(entry.lineId) : true,
+    );
+
+    if (doomed.size) {
+      const keptIndexes: number[] = [];
+      lines.forEach((line, index) => {
+        if (!doomed.has(line.id || "")) keptIndexes.push(index);
+      });
+
+      lines = keptIndexes.map((index) => lines[index]);
+      collapsedSections = {
+        ...collapsedSections,
+        lines: keptIndexes.map((index) => collapsedSections.lines[index]),
+        controlPoints: keptIndexes.map(
+          (index) => collapsedSections.controlPoints[index],
+        ),
+      };
+
+      doomed.forEach((lineId) => removeLineFromChains(lineId));
+    }
+
+    recordChange?.();
   }
 
   function addLine() {
@@ -1790,9 +1969,9 @@
       if (it.kind === "wait" || it.kind === "event") {
         return (it as any).locked ?? false;
       }
-      if (it.kind === "repeat") {
-        const loopLocked = (it as any).locked ?? false;
-        return loopLocked || it.lineIds.some((lineId) =>
+      if (isGroupItem(it)) {
+        const groupLocked = (it as any).locked ?? false;
+        return groupLocked || it.lineIds.some((lineId) =>
           lines.find((line) => line.id === lineId)?.locked,
         );
       }
@@ -1811,629 +1990,607 @@
     recordChange?.();
   }
 </script>
+<svelte:window
+  on:pointermove={handlePathDragMove}
+  on:pointerup={finishPathDrag}
+  on:pointercancel={handlePathDragCancel}
+  on:blur={handlePathDragCancel}
+  on:keydown={handlePathDragCancel}
+/>
 
-<div class="flex-1 flex flex-col justify-start items-center gap-2 h-full">
-  <div
-    class="flex flex-col justify-start items-start w-full rounded-lg bg-neutral-50 dark:bg-neutral-900 shadow-md p-4 overflow-y-scroll overflow-x-hidden h-full gap-6"
+<div class="flex-1 flex flex-col justify-start items-center gap-2 h-full min-h-0">
+  <!-- Section tabs: keeps each area one click away instead of one long scroll -->
+  <nav
+    class="w-full flex flex-wrap gap-1 rounded-lg bg-neutral-50 dark:bg-neutral-900 shadow-md p-1.5"
+    aria-label="Editor sections"
   >
-    <ObstaclesSection bind:shapes bind:collapsedObstacles />
+    {#each TABS as tab (tab.id)}
+      <button
+        on:click={() => (activeTab = tab.id)}
+        aria-current={activeTab === tab.id ? "page" : undefined}
+        title={tab.hint}
+        class="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-semibold rounded-md transition {activeTab ===
+        tab.id
+          ? 'bg-[#fe55a2] text-white shadow-sm'
+          : 'text-neutral-600 dark:text-neutral-300 hover:bg-neutral-200/70 dark:hover:bg-neutral-800'}"
+      >
+        {tab.label}
+        {#if tabCounts[tab.id] > 0}
+          <span
+            class="rounded-full px-1.5 py-0.5 text-[10px] leading-none {activeTab ===
+            tab.id
+              ? 'bg-white/25'
+              : 'bg-neutral-200 dark:bg-neutral-800'}"
+          >
+            {tabCounts[tab.id]}
+          </span>
+        {/if}
+      </button>
+    {/each}
+  </nav>
 
-    <TelemetryPanel
-      {percent}
-      {timePrediction}
-      {startPoint}
-      {sequence}
-      {settings}
-      {lines}
-      {robotXY}
-      {robotHeading}
-      {x}
-      {y}
-    />
+  <div
+    bind:this={routeScrollEl}
+    class="flex flex-col justify-start items-start w-full rounded-lg bg-neutral-50 dark:bg-neutral-900 shadow-md p-4 overflow-y-scroll overflow-x-hidden h-full min-h-0 gap-6"
+  >
+    {#if activeTab === "route"}
+      <StartingPointSection
+        bind:startPoint
+        {poseVariables}
+        {variables}
+        {recordChange}
+        tangentialHeading={startTangentialHeading}
+        onPoseVariableChange={handleStartPoseVariableChange}
+        {addPathAtStart}
+        {addWaitAtStart}
+        {addEventAtStart}
+        clearance={startPoseClearance}
+        onFixClearance={fixStartPointClearance}
+        fixingClearance={fixingClearanceLineId === START_POINT_FIX_ID}
+        clearanceFixNote={clearanceFixNotes[START_POINT_FIX_ID] || ""}
+      />
 
-    <PoseVariablesSection
-      bind:poseVariables
-      onAdd={addPoseVariable}
-      onRemove={removePoseVariable}
-      onChange={handlePoseVariableChange}
-      onCommit={recordChange}
-    />
-
-    <div class="w-full rounded-md border border-neutral-200 dark:border-neutral-700 p-3 bg-white dark:bg-neutral-800">
-      <div class="flex items-center gap-2 mb-2">
-        <p class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-300">
-          Number Variables
-        </p>
-        <button
-          on:click={addNumberVariable}
-          class="px-2 py-1 text-xs rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200"
+      <!-- Sticky step toolbar: add and collapse without scrolling -->
+      <div
+        class="sticky top-0 z-10 w-full flex flex-wrap items-center gap-2 rounded-md border border-neutral-200 dark:border-neutral-700 bg-white dark:bg-neutral-800 p-2 shadow-sm"
+      >
+        <span
+          class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-300"
         >
-          New
+          Add
+        </span>
+        <button
+          on:click={addLine}
+          class="px-2 py-1 text-xs font-semibold rounded bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-200"
+        >
+          Path
         </button>
+        <button
+          on:click={addWait}
+          class="px-2 py-1 text-xs font-semibold rounded bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200"
+        >
+          Wait
+        </button>
+        <button
+          on:click={addEvent}
+          class="px-2 py-1 text-xs font-semibold rounded bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-200"
+        >
+          Event
+        </button>
+        <button
+          on:click={addRepeatLoop}
+          class="px-2 py-1 text-xs font-semibold rounded bg-cyan-100 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-200"
+        >
+          Repeat
+        </button>
+        <button
+          on:click={addConditionalBlock}
+          title="Wrap paths in an if block driven by a boolean"
+          class="px-2 py-1 text-xs font-semibold rounded bg-violet-100 text-violet-700 dark:bg-violet-900 dark:text-violet-200"
+        >
+          If
+        </button>
+
+        <div class="ml-auto flex items-center gap-2">
+          <button
+            on:click={() => setAllLinesCollapsed(true)}
+            class="px-2 py-1 text-xs rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+            title="Collapse every path"
+          >
+            Collapse all
+          </button>
+          <button
+            on:click={() => setAllLinesCollapsed(false)}
+            class="px-2 py-1 text-xs rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+            title="Expand every path"
+          >
+            Expand all
+          </button>
+        </div>
       </div>
 
-      {#if numberVariables.length === 0}
+      {#if sequence.length === 0}
         <p class="text-xs text-neutral-500 dark:text-neutral-400">
-          Store reusable values for repeat counts, speeds, event timing, and other numeric auto constants.
+          No steps yet — use <strong>Add</strong> above to place the first path.
         </p>
-      {:else}
-        <div class="flex flex-col gap-2">
-          {#each numberVariables as variable (variable.id)}
-            <div class="rounded border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 p-2">
-              <div class="flex flex-wrap items-center gap-2">
+      {/if}
+
+      <div
+        role="region"
+        aria-label="Move path out of its block"
+        data-drop-out="true"
+        class="w-full overflow-hidden rounded-lg border-dashed text-center text-xs font-semibold transition-all {showDragOutZone
+          ? 'my-1 border-2 p-4 opacity-100'
+          : 'h-0 border-0 p-0 opacity-0 pointer-events-none'} {dragOverTopLevel
+          ? 'border-sky-500 bg-sky-50 text-sky-700 dark:bg-sky-950/40 dark:text-sky-200'
+          : 'border-neutral-300 text-neutral-500 dark:border-neutral-700 dark:text-neutral-400'}"
+      >
+        Drop here to move this path out of its block
+      </div>
+
+      <!-- Unified sequence render: paths and waits -->
+      {#each sequence as item, sIdx}
+        <div class="w-full">
+          {#if item.kind === "path"}
+            {#each lines.filter((l) => l.id === item.lineId) as ln (ln.id)}
+              <div
+                class="rounded-lg border border-transparent transition {draggedLineId === (ln.id || "") ? 'opacity-60' : ''}"
+                role="listitem"
+              >
+                <PathLineSection
+                  bind:line={ln}
+                  idx={lines.findIndex((l) => l.id === ln.id)}
+                  bind:lines
+                  bind:collapsed={
+                    collapsedSections.lines[lines.findIndex((l) => l.id === ln.id)]
+                  }
+                  bind:collapsedControlPoints={
+                    collapsedSections.controlPoints[
+                      lines.findIndex((l) => l.id === ln.id)
+                    ]
+                  }
+                  onRemove={() =>
+                    removeLine(lines.findIndex((l) => l.id === ln.id))}
+                  onInsertAfter={() => addControlPointToLineById(ln.id || "")}
+                  onInsertMidpoint={() => insertMidpointAfter(sIdx)}
+                  onDuplicate={() => duplicatePathAfter(sIdx)}
+                  onWrapRepeat={() => wrapPathInRepeat(sIdx)}
+                  onWrapConditional={() => wrapPathInConditional(sIdx)}
+                  onPointerDown={(event) => beginPathDrag(event, ln.id || "")}
+                  dragging={draggedLineId === (ln.id || "")}
+                  onAddWaitAfter={() => insertWaitAfter(sIdx)}
+                  onAddEventAfter={() => insertEventAfter(sIdx)}
+                  onMoveUp={() => moveSequenceItem(sIdx, -1)}
+                  onMoveDown={() => moveSequenceItem(sIdx, 1)}
+                  canMoveUp={sIdx !== 0}
+                  canMoveDown={sIdx !== sequence.length - 1}
+                  optimizeLine={optimizeLine}
+                  optimizing={optimizingLineIds?.[ln.id ?? ""] ?? false}
+                  {poseVariables}
+                  {variables}
+                  inactive={inactiveLineIds.has(ln.id || "")}
+                  stopReason={stopReasonByLineId.get(ln.id || "") ?? null}
+                  headingJump={headingJumpByLineId.get(ln.id || "")?.jump ?? null}
+                  clearance={clearanceByLineId.get(ln.id || "") ?? null}
+                  onFixClearance={() => fixClearance(ln.id || "")}
+                  fixingClearance={fixingClearanceLineId === (ln.id || "")}
+                  clearanceFixNote={clearanceFixNotes[ln.id || ""] || ""}
+                  onMatchEntryHeading={() => matchEntryHeading(ln.id || "")}
+                  onPoseVariableChange={handleLinePoseVariableChange}
+                  onHeadingModeChange={handleLineHeadingModeChange}
+                  {recordChange}
+                />
+              </div>
+            {/each}
+          {:else if item.kind === "repeat"}
+            <div
+              class="w-full rounded-lg border bg-cyan-50 dark:bg-cyan-950/30 p-3 shadow-sm transition {dragOverRepeatId === item.id ? 'border-cyan-500 ring-2 ring-cyan-400/70 dark:ring-cyan-500/60' : 'border-cyan-300 dark:border-cyan-800'}"
+              role="group"
+              data-drop-group-id={item.id}
+            >
+              <div class="flex flex-wrap items-center gap-2 mb-2">
+                <span class="text-xs font-semibold uppercase tracking-wide text-cyan-700 dark:text-cyan-200">
+                  Repeat Loop
+                </span>
+                {#if dragOverRepeatId === item.id}
+                  <span class="rounded-full bg-cyan-600 px-2 py-0.5 text-[11px] font-semibold text-white">
+                    Drop path here
+                  </span>
+                {/if}
                 <input
                   type="text"
-                  value={variable.name}
+                  value={item.name}
                   on:input={(event) =>
-                    updateNumberVariable(variable.id, {
+                    updateRepeatItem(sIdx, {
                       name: inputValue(event),
                     })}
                   on:blur={() => recordChange?.()}
-                  class="min-w-0 flex-1 px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-950"
+                  class="min-w-0 flex-1 px-2 py-1 text-xs rounded border border-cyan-200 dark:border-cyan-800 bg-white dark:bg-neutral-950"
                 />
-                <input
-                  type="number"
-                  step="0.001"
-                  value={variable.value}
-                  on:input={(event) =>
-                    updateNumberVariable(variable.id, {
-                      value: inputNumber(event),
-                    })}
-                  on:blur={() => updateNumberVariable(variable.id, {}, true)}
-                  class="w-28 px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-950"
-                />
-              </div>
-              <div class="mt-2 flex flex-wrap items-center gap-2">
-                <button
-                  on:click={() => duplicateNumberVariable(variable.id)}
-                  class="px-2 py-1 text-xs rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-200"
-                >
-                  Duplicate
-                </button>
-                <button
-                  on:click={() => removeNumberVariable(variable.id)}
-                  class="px-2 py-1 text-xs rounded bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-200"
-                >
-                  Remove
-                </button>
-              </div>
-            </div>
-          {/each}
-        </div>
-      {/if}
-    </div>
-
-    <div class="w-full rounded-md border border-neutral-200 dark:border-neutral-700 p-3 bg-white dark:bg-neutral-800">
-      <div class="flex items-center gap-2 mb-2">
-        <p class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-300">
-          Path Variables
-        </p>
-        <button
-          on:click={createPathVariableFromSelectedChain}
-          disabled={!selectedChain || !(selectedChain.lineIds || []).length}
-          class="px-2 py-1 text-xs rounded bg-cyan-100 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-200 disabled:opacity-40"
-        >
-          Store Chain
-        </button>
-      </div>
-
-      {#if pathVariables.length === 0}
-        <p class="text-xs text-neutral-500 dark:text-neutral-400">
-          Store the selected path chain as a reusable path template.
-        </p>
-      {:else}
-        <div class="flex flex-col gap-2">
-          {#each pathVariables as variable (variable.id)}
-            <div class="rounded border border-neutral-200 dark:border-neutral-700 bg-neutral-50 dark:bg-neutral-900 p-2">
-              <div class="flex items-center gap-2">
-                <input
-                  type="text"
-                  value={variable.name}
-                  on:input={(event) =>
-                    updatePathVariableName(
-                      variable.id,
-                      inputValue(event),
-                    )}
-                  on:blur={recordChange}
-                  class="min-w-0 flex-1 px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-950"
-                />
-                <span class="text-xs text-neutral-500 dark:text-neutral-400">
-                  {variable.lines.length} path{variable.lines.length === 1 ? "" : "s"}
-                </span>
-              </div>
-              <div class="mt-2 flex flex-wrap items-center gap-2">
-                <button
-                  on:click={() => insertPathVariable(variable.id)}
-                  class="px-2 py-1 text-xs rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200"
-                >
-                  Insert Copy
-                </button>
-                <button
-                  on:click={() => duplicatePathVariable(variable.id)}
-                  class="px-2 py-1 text-xs rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-200"
-                >
-                  Duplicate
-                </button>
-                <button
-                  on:click={() => removePathVariable(variable.id)}
-                  class="px-2 py-1 text-xs rounded bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-200"
-                >
-                  Remove
-                </button>
-              </div>
-            </div>
-          {/each}
-        </div>
-      {/if}
-    </div>
-
-    <StartingPointSection
-      bind:startPoint
-      {poseVariables}
-      {numberVariables}
-      onPoseVariableChange={handleStartPoseVariableChange}
-      {addPathAtStart}
-      {addWaitAtStart}
-      {addEventAtStart}
-    />
-
-    <div class="w-full rounded-md border border-neutral-200 dark:border-neutral-700 p-3 bg-white dark:bg-neutral-800">
-      <div class="flex items-center gap-2">
-        <p class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-300">Mirror</p>
-        <button
-          on:click={() => mirrorCurrentPath("x")}
-          class="px-2.5 py-1.5 text-xs font-semibold rounded bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-200"
-          title="Mirror X coordinates across the field centerline"
-        >
-          X
-        </button>
-        <button
-          on:click={() => mirrorCurrentPath("y")}
-          class="px-2.5 py-1.5 text-xs font-semibold rounded bg-teal-100 text-teal-700 dark:bg-teal-900 dark:text-teal-200"
-          title="Mirror Y coordinates across the field centerline"
-        >
-          Y
-        </button>
-      </div>
-    </div>
-
-    <div class="w-full rounded-md border border-neutral-200 dark:border-neutral-700 p-3 bg-white dark:bg-neutral-800">
-      <div class="flex items-center gap-2 mb-2">
-        <p class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-300">Path Chains</p>
-        <select
-          bind:value={selectedChainId}
-          class="flex-1 px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-neutral-50 dark:bg-neutral-900"
-        >
-          {#each pathChains as chain (chain.id)}
-            <option value={chain.id}>{chain.name} ({(chain.lineIds || []).length})</option>
-          {/each}
-        </select>
-        <button on:click={addPathChain} class="px-2 py-1 text-xs rounded bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200">New</button>
-        <button on:click={duplicateSelectedPathChain} class="px-2 py-1 text-xs rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-200">Duplicate</button>
-        <button
-          on:click={wrapSelectedChainInRepeat}
-          disabled={!selectedChain || !(selectedChain.lineIds || []).length}
-          class="px-2 py-1 text-xs rounded bg-cyan-100 text-cyan-700 dark:bg-cyan-900 dark:text-cyan-200 disabled:opacity-40"
-        >
-          Loop
-        </button>
-        <button
-          on:click={removeSelectedPathChain}
-          disabled={pathChains.length <= 1}
-          class="px-2 py-1 text-xs rounded bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-200 disabled:opacity-40"
-        >
-          Remove
-        </button>
-      </div>
-
-      {#if selectedChain}
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-2 mb-2">
-          <div class="flex items-center gap-2">
-            <input
-              type="text"
-              bind:value={chainNameDraft}
-              on:input={updateSelectedChainName}
-              class="flex-1 px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-neutral-50 dark:bg-neutral-900"
-              placeholder="Chain name"
-            />
-          </div>
-
-          <div class="flex items-center gap-2">
-            <input
-              type="color"
-              bind:value={chainColorDraft}
-              on:input={updateSelectedChainColor}
-              class="w-10 h-8 rounded border border-neutral-300 dark:border-neutral-600 bg-neutral-50 dark:bg-neutral-900"
-              title="Path chain color"
-            />
-            <span class="text-xs text-neutral-500 dark:text-neutral-400">Path color</span>
-          </div>
-        </div>
-      {/if}
-    </div>
-
-    <!-- Unified sequence render: paths and waits -->
-    {#each sequence as item, sIdx}
-      <div class="w-full">
-        {#if item.kind === "path"}
-          {#each lines.filter((l) => l.id === item.lineId) as ln (ln.id)}
-            <div
-              class="rounded-lg border border-transparent transition {draggedLineId === (ln.id || "") ? 'opacity-60' : ''}"
-              role="listitem"
-            >
-              <div class="mb-1 flex justify-end">
-                <button
-                  type="button"
-                  class="cursor-grab rounded border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[11px] font-semibold text-cyan-700 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-40 dark:border-cyan-900 dark:bg-cyan-950/40 dark:text-cyan-200"
-                  draggable={!ln.locked}
-                  title={ln.locked ? "Locked paths cannot be dragged" : "Drag this path into a repeat loop"}
-                  on:dragstart={(event) => handlePathDragStart(event, ln.id || "")}
-                  on:dragend={handlePathDragEnd}
-                  disabled={ln.locked}
-                >
-                  Drag To Loop
-                </button>
-              </div>
-              <PathLineSection
-                bind:line={ln}
-                idx={lines.findIndex((l) => l.id === ln.id)}
-                bind:lines
-                bind:collapsed={
-                  collapsedSections.lines[lines.findIndex((l) => l.id === ln.id)]
-                }
-                bind:collapsedControlPoints={
-                  collapsedSections.controlPoints[
-                    lines.findIndex((l) => l.id === ln.id)
-                  ]
-                }
-                onRemove={() =>
-                  removeLine(lines.findIndex((l) => l.id === ln.id))}
-                onInsertAfter={() => addControlPointToLineById(ln.id || "")}
-                onInsertMidpoint={() => insertMidpointAfter(sIdx)}
-                onDuplicate={() => duplicatePathAfter(sIdx)}
-                onWrapRepeat={() => wrapPathInRepeat(sIdx)}
-                onAddWaitAfter={() => insertWaitAfter(sIdx)}
-                onAddEventAfter={() => insertEventAfter(sIdx)}
-                onMoveUp={() => moveSequenceItem(sIdx, -1)}
-                onMoveDown={() => moveSequenceItem(sIdx, 1)}
-                canMoveUp={sIdx !== 0}
-                canMoveDown={sIdx !== sequence.length - 1}
-                optimizeLine={optimizeLine}
-                optimizing={optimizingLineIds?.[ln.id ?? ""] ?? false}
-                chainOptions={chainOptions}
-                selectedChainId={getLinePrimaryChainId(ln.id || "")}
-                onChainChange={(chainId) => assignLineToChain(ln.id || "", chainId)}
-                {poseVariables}
-                {numberVariables}
-                onPoseVariableChange={handleLinePoseVariableChange}
-                onHeadingModeChange={handleLineHeadingModeChange}
-                onSpeedVariableChange={setLineSpeedVariable}
-                {recordChange}
-              />
-            </div>
-          {/each}
-        {:else if item.kind === "repeat"}
-          <div
-            class="w-full rounded-lg border bg-cyan-50 dark:bg-cyan-950/30 p-3 shadow-sm transition {dragOverRepeatId === item.id ? 'border-cyan-500 ring-2 ring-cyan-400/70 dark:ring-cyan-500/60' : 'border-cyan-300 dark:border-cyan-800'}"
-            role="group"
-            on:dragover={(event) => handleRepeatDragOver(event, item.id)}
-            on:dragleave={(event) => handleRepeatDragLeave(event, item.id)}
-            on:drop={(event) => handleRepeatDrop(event, sIdx)}
-          >
-            <div class="flex flex-wrap items-center gap-2 mb-2">
-              <span class="text-xs font-semibold uppercase tracking-wide text-cyan-700 dark:text-cyan-200">
-                Repeat Loop
-              </span>
-              {#if dragOverRepeatId === item.id}
-                <span class="rounded-full bg-cyan-600 px-2 py-0.5 text-[11px] font-semibold text-white">
-                  Drop path here
-                </span>
-              {/if}
-              <input
-                type="text"
-                value={item.name}
-                on:input={(event) =>
-                  updateRepeatItem(sIdx, {
-                    name: inputValue(event),
-                  })}
-                on:blur={() => recordChange?.()}
-                class="min-w-0 flex-1 px-2 py-1 text-xs rounded border border-cyan-200 dark:border-cyan-800 bg-white dark:bg-neutral-950"
-              />
-              <span class="text-xs text-neutral-600 dark:text-neutral-300">x</span>
-              <input
-                type="number"
-                min="1"
-                max="20"
-                value={item.count}
-                disabled={item.locked || Boolean(item.countVariableId)}
-                on:input={(event) =>
-                  updateRepeatItem(sIdx, {
-                    count: inputNumber(event),
-                  })}
-                on:blur={() => updateRepeatItem(sIdx, { count: item.count }, true)}
-                class="w-16 px-2 py-1 text-xs rounded border border-cyan-200 dark:border-cyan-800 bg-white dark:bg-neutral-950"
-              />
-              <select
-                value={item.countVariableId || ""}
-                disabled={item.locked || numberVariables.length === 0}
-                on:change={(event) =>
-                  setRepeatCountVariable(
-                    sIdx,
-                    inputValue(event),
-                  )}
-                class="px-2 py-1 text-xs rounded border border-cyan-200 dark:border-cyan-800 bg-white dark:bg-neutral-950 disabled:opacity-40"
-                title="Repeat count variable"
-              >
-                <option value="">Custom count</option>
-                {#each numberVariables as variable (variable.id)}
-                  <option value={variable.id}>{variable.name}</option>
-                {/each}
-              </select>
-              <button
-                on:click={() => updateRepeatItem(sIdx, { locked: !item.locked }, true)}
-                class="px-2 py-1 text-xs rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
-              >
-                {item.locked ? "Unlock" : "Lock"}
-              </button>
-              <button
-                on:click={() => duplicateRepeatAfter(sIdx)}
-                class="px-2 py-1 text-xs rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-200"
-              >
-                Duplicate
-              </button>
-              <button
-                on:click={() => unwrapRepeat(sIdx)}
-                class="px-2 py-1 text-xs rounded bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200"
-              >
-                Unwrap
-              </button>
-              <button
-                on:click={() => {
-                  const newSeq = [...sequence];
-                  newSeq.splice(sIdx, 1);
-                  sequence = newSeq;
-                  recordChange?.();
-                }}
-                class="px-2 py-1 text-xs rounded bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-200"
-              >
-                Remove
-              </button>
-              <button
-                on:click={() => moveSequenceItem(sIdx, -1)}
-                disabled={sIdx === 0 || item.locked}
-                class="px-2 py-1 text-xs rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 disabled:opacity-40"
-              >
-                Up
-              </button>
-              <button
-                on:click={() => moveSequenceItem(sIdx, 1)}
-                disabled={sIdx === sequence.length - 1 || item.locked}
-                class="px-2 py-1 text-xs rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 disabled:opacity-40"
-              >
-                Down
-              </button>
-            </div>
-            <div class="flex flex-col gap-2">
-              {#if item.lineIds.length === 0}
-                <div class="rounded border border-dashed border-cyan-300 dark:border-cyan-700 bg-white/70 dark:bg-neutral-950/50 p-4 text-center text-xs font-semibold text-cyan-700 dark:text-cyan-200">
-                  Drag paths into this loop
+                <span class="text-xs text-neutral-600 dark:text-neutral-300">x</span>
+                <div class="w-28">
+                  <ExpressionInput
+                    compact
+                    {variables}
+                    disabled={item.locked}
+                    placeholder="1"
+                    title="Repeat count (literal or expression)"
+                    value={expressionDisplayValue(item.countExpression, item.count)}
+                    onInput={(raw) =>
+                      setSequenceExpression(sIdx, "countExpression", raw)}
+                    onCommit={() => recordChange?.()}
+                  />
                 </div>
-              {/if}
-              {#each item.lineIds as lineId, loopLineIndex (lineId)}
-                {#each lines.filter((l) => l.id === lineId) as ln (ln.id)}
-                  <div
-                    class="rounded border border-cyan-200 dark:border-cyan-900 bg-white dark:bg-neutral-900 p-2 transition {draggedLineId === (ln.id || '') ? 'opacity-60' : ''}"
-                    role="listitem"
-                  >
-                    <div class="mb-1 text-xs text-neutral-500 dark:text-neutral-400">
-                      <span>Loop path {loopLineIndex + 1}</span>
-                      <button
-                        type="button"
-                        class="ml-2 cursor-grab rounded border border-cyan-200 bg-cyan-50 px-2 py-0.5 text-[11px] font-semibold text-cyan-700 active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-40 dark:border-cyan-800 dark:bg-cyan-950/40 dark:text-cyan-200"
-                        draggable={!ln.locked}
-                        title={ln.locked ? "Locked paths cannot be dragged" : "Drag this path into another repeat loop"}
-                        on:dragstart={(event) =>
-                          handlePathDragStart(event, ln.id || "", item.id)}
-                        on:dragend={handlePathDragEnd}
-                        disabled={ln.locked}
-                      >
-                        Drag
-                      </button>
-                    </div>
-                    <PathLineSection
-                      bind:line={ln}
-                      idx={lines.findIndex((l) => l.id === ln.id)}
-                      bind:lines
-                      bind:collapsed={
-                        collapsedSections.lines[lines.findIndex((l) => l.id === ln.id)]
-                      }
-                      bind:collapsedControlPoints={
-                        collapsedSections.controlPoints[
-                          lines.findIndex((l) => l.id === ln.id)
-                        ]
-                      }
-                      onRemove={() =>
-                        removeLine(lines.findIndex((l) => l.id === ln.id))}
-                      onInsertAfter={() => addControlPointToLineById(ln.id || "")}
-                      onInsertMidpoint={() => insertMidpointAfter(sIdx)}
-                      onDuplicate={() => duplicateLineInsideRepeat(sIdx, ln.id || "")}
-                      onWrapRepeat={() => {}}
-                      onAddWaitAfter={() => insertWaitAfter(sIdx)}
-                      onAddEventAfter={() => insertEventAfter(sIdx)}
-                      onMoveUp={() => moveSequenceItem(sIdx, -1)}
-                      onMoveDown={() => moveSequenceItem(sIdx, 1)}
-                      canMoveUp={sIdx !== 0}
-                      canMoveDown={sIdx !== sequence.length - 1}
-                      optimizeLine={optimizeLine}
-                      optimizing={optimizingLineIds?.[ln.id ?? ""] ?? false}
-                      chainOptions={chainOptions}
-                      selectedChainId={getLinePrimaryChainId(ln.id || "")}
-                      onChainChange={(chainId) => assignLineToChain(ln.id || "", chainId)}
-                      {poseVariables}
-                      {numberVariables}
-                      onPoseVariableChange={handleLinePoseVariableChange}
-                      onHeadingModeChange={handleLineHeadingModeChange}
-                      onSpeedVariableChange={setLineSpeedVariable}
-                      {recordChange}
-                    />
+                <button
+                  on:click={() => updateRepeatItem(sIdx, { locked: !item.locked }, true)}
+                  class="px-2 py-1 text-xs rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+                >
+                  {item.locked ? "Unlock" : "Lock"}
+                </button>
+                <button
+                  on:click={() => duplicateRepeatAfter(sIdx)}
+                  class="px-2 py-1 text-xs rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-200"
+                >
+                  Duplicate
+                </button>
+                <button
+                  on:click={() => unwrapRepeat(sIdx)}
+                  class="px-2 py-1 text-xs rounded bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200"
+                >
+                  Unwrap
+                </button>
+                <button
+                  on:click={() => removeGroupItem(sIdx)}
+                  title="Delete this block and the paths inside it"
+                  class="px-2 py-1 text-xs rounded bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-200"
+                >
+                  Remove
+                </button>
+                <button
+                  on:click={() => moveSequenceItem(sIdx, -1)}
+                  disabled={sIdx === 0 || item.locked}
+                  class="px-2 py-1 text-xs rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 disabled:opacity-40"
+                >
+                  Up
+                </button>
+                <button
+                  on:click={() => moveSequenceItem(sIdx, 1)}
+                  disabled={sIdx === sequence.length - 1 || item.locked}
+                  class="px-2 py-1 text-xs rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 disabled:opacity-40"
+                >
+                  Down
+                </button>
+              </div>
+              <div class="flex flex-col gap-2">
+                {#if item.lineIds.length === 0}
+                  <div class="rounded border border-dashed border-cyan-300 dark:border-cyan-700 bg-white/70 dark:bg-neutral-950/50 p-4 text-center text-xs font-semibold text-cyan-700 dark:text-cyan-200">
+                    Drag paths into this loop
                   </div>
+                {/if}
+                {#each item.lineIds as lineId, loopLineIndex (lineId)}
+                  {#each lines.filter((l) => l.id === lineId) as ln (ln.id)}
+                    <div
+                      class="rounded border border-cyan-200 dark:border-cyan-900 bg-white dark:bg-neutral-900 p-2 transition {draggedLineId === (ln.id || '') ? 'opacity-60' : ''}"
+                      role="listitem"
+                    >
+                      <PathLineSection
+                        bind:line={ln}
+                        idx={lines.findIndex((l) => l.id === ln.id)}
+                        bind:lines
+                        bind:collapsed={
+                          collapsedSections.lines[lines.findIndex((l) => l.id === ln.id)]
+                        }
+                        bind:collapsedControlPoints={
+                          collapsedSections.controlPoints[
+                            lines.findIndex((l) => l.id === ln.id)
+                          ]
+                        }
+                        onRemove={() =>
+                          removeLine(lines.findIndex((l) => l.id === ln.id))}
+                        onInsertAfter={() => addControlPointToLineById(ln.id || "")}
+                        onInsertMidpoint={() => insertMidpointAfter(sIdx)}
+                        onDuplicate={() => duplicateLineInsideRepeat(sIdx, ln.id || "")}
+                        onWrapRepeat={() => {}}
+                        onPointerDown={(event) => beginPathDrag(event, ln.id || "")}
+                        dragging={draggedLineId === (ln.id || "")}
+                        onAddWaitAfter={() => insertWaitAfter(sIdx)}
+                        onAddEventAfter={() => insertEventAfter(sIdx)}
+                        onMoveUp={() => moveSequenceItem(sIdx, -1)}
+                        onMoveDown={() => moveSequenceItem(sIdx, 1)}
+                        canMoveUp={sIdx !== 0}
+                        canMoveDown={sIdx !== sequence.length - 1}
+                        optimizeLine={optimizeLine}
+                        optimizing={optimizingLineIds?.[ln.id ?? ""] ?? false}
+                        {poseVariables}
+                        {variables}
+                        inactive={inactiveLineIds.has(ln.id || "")}
+                        stopReason={stopReasonByLineId.get(ln.id || "") ?? null}
+                        headingJump={headingJumpByLineId.get(ln.id || "")?.jump ?? null}
+                        clearance={clearanceByLineId.get(ln.id || "") ?? null}
+                        onFixClearance={() => fixClearance(ln.id || "")}
+                        fixingClearance={fixingClearanceLineId === (ln.id || "")}
+                        clearanceFixNote={clearanceFixNotes[ln.id || ""] || ""}
+                        onMatchEntryHeading={() => matchEntryHeading(ln.id || "")}
+                        onPoseVariableChange={handleLinePoseVariableChange}
+                        onHeadingModeChange={handleLineHeadingModeChange}
+                        {recordChange}
+                      />
+                    </div>
+                  {/each}
                 {/each}
-              {/each}
+              </div>
             </div>
-          </div>
-        {:else}
-          <WaitRow
-            label={item.kind === "event" ? "Event" : "Wait"}
-            name={getWait(item).name}
-            durationMs={getWait(item).durationMs}
-            durationVariableId={getWait(item).durationVariableId || ""}
-            {numberVariables}
-            locked={getWait(item).locked ?? false}
-            onToggleLock={() => {
-              const newSeq = [...sequence];
-              newSeq[sIdx] = {
-                ...getWait(item),
-                locked: !(getWait(item).locked ?? false),
-              };
-              sequence = newSeq;
-              recordChange?.();
-            }}
-            onChange={(newName, newDuration) => {
-              const newSeq = [...sequence];
-              newSeq[sIdx] = {
-                ...getWait(item),
-                name: newName,
-                durationMs: Math.max(0, Number(newDuration) || 0),
-              };
-              sequence = newSeq;
-            }}
-            onDurationVariableChange={(variableId) =>
-              setSequenceDurationVariable(sIdx, variableId)}
-            onRemove={() => {
-              const newSeq = [...sequence];
-              newSeq.splice(sIdx, 1);
-              sequence = newSeq;
-            }}
-            onInsertAfter={() => {
-              const newSeq = [...sequence];
-              newSeq.splice(sIdx + 1, 0, makeWaitItem());
-              sequence = newSeq;
-            }}
-            onAddPathAfter={() => insertPathAfter(sIdx)}
-            onAddEventAfter={() => insertEventAfter(sIdx)}
-            onMoveUp={() => moveSequenceItem(sIdx, -1)}
-            onMoveDown={() => moveSequenceItem(sIdx, 1)}
-            canMoveUp={sIdx !== 0}
-            canMoveDown={sIdx !== sequence.length - 1}
-          />
-        {/if}
+          {:else if item.kind === "conditional"}
+            <div
+              class="w-full rounded-lg border bg-violet-50 dark:bg-violet-950/30 p-3 shadow-sm transition {dragOverRepeatId ===
+              item.id
+                ? 'border-violet-500 ring-2 ring-violet-400/70 dark:ring-violet-500/60'
+                : 'border-violet-300 dark:border-violet-800'}"
+              role="group"
+              data-drop-group-id={item.id}
+            >
+              <div class="flex flex-wrap items-center gap-2 mb-2">
+                <span
+                  class="font-mono text-xs font-bold text-violet-700 dark:text-violet-200"
+                >
+                  if
+                </span>
+                {#if dragOverRepeatId === item.id}
+                  <span
+                    class="rounded-full bg-violet-600 px-2 py-0.5 text-[11px] font-semibold text-white"
+                  >
+                    Drop path here
+                  </span>
+                {/if}
+                <div class="min-w-0 flex-1">
+                  <ExpressionInput
+                    compact
+                    kind="boolean"
+                    {variables}
+                    disabled={item.locked}
+                    placeholder="always — e.g. isRedAlliance"
+                    title="Boolean expression. These paths are skipped when it is false, and wrapped in a Java if on export."
+                    value={item.condition || ""}
+                    onInput={(raw) =>
+                      updateConditionalItem(sIdx, { condition: raw })}
+                    onCommit={() => recordChange?.()}
+                  />
+                </div>
+                <span
+                  class="rounded-full px-2 py-0.5 text-[10px] font-semibold {conditionalActive(
+                    item,
+                  )
+                    ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900 dark:text-emerald-200'
+                    : 'bg-neutral-200 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300'}"
+                  title="Whether this branch runs with the current variable values"
+                >
+                  {conditionalActive(item) ? "Running" : "Skipped"}
+                </span>
+                <button
+                  on:click={() =>
+                    updateConditionalItem(sIdx, { locked: !item.locked }, true)}
+                  class="px-2 py-1 text-xs rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200"
+                >
+                  {item.locked ? "Unlock" : "Lock"}
+                </button>
+                <button
+                  on:click={() => duplicateRepeatAfter(sIdx)}
+                  class="px-2 py-1 text-xs rounded bg-indigo-100 text-indigo-700 dark:bg-indigo-900 dark:text-indigo-200"
+                  title="Duplicate — pair with a negated condition to make an else branch"
+                >
+                  Duplicate
+                </button>
+                <button
+                  on:click={() => unwrapRepeat(sIdx)}
+                  class="px-2 py-1 text-xs rounded bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200"
+                >
+                  Unwrap
+                </button>
+                <button
+                  on:click={() => removeGroupItem(sIdx)}
+                  title="Delete this block and the paths inside it"
+                  class="px-2 py-1 text-xs rounded bg-rose-100 text-rose-700 dark:bg-rose-900 dark:text-rose-200"
+                >
+                  Remove
+                </button>
+                <button
+                  on:click={() => moveSequenceItem(sIdx, -1)}
+                  disabled={sIdx === 0 || item.locked}
+                  class="px-2 py-1 text-xs rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 disabled:opacity-40"
+                >
+                  Up
+                </button>
+                <button
+                  on:click={() => moveSequenceItem(sIdx, 1)}
+                  disabled={sIdx === sequence.length - 1 || item.locked}
+                  class="px-2 py-1 text-xs rounded bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-200 disabled:opacity-40"
+                >
+                  Down
+                </button>
+              </div>
+
+              <div class="flex flex-col gap-2">
+                {#if item.lineIds.length === 0}
+                  <div
+                    class="rounded border border-dashed border-violet-300 dark:border-violet-700 bg-white/70 dark:bg-neutral-950/50 p-4 text-center text-xs font-semibold text-violet-700 dark:text-violet-200"
+                  >
+                    Drag paths into this if block
+                  </div>
+                {/if}
+                {#each item.lineIds as lineId, blockLineIndex (lineId)}
+                  {#each lines.filter((l) => l.id === lineId) as ln (ln.id)}
+                    <div
+                      class="rounded border border-violet-200 dark:border-violet-900 bg-white dark:bg-neutral-900 p-2 transition {draggedLineId ===
+                      (ln.id || '')
+                        ? 'opacity-60'
+                        : ''}"
+                      role="listitem"
+                    >
+                      <PathLineSection
+                        bind:line={ln}
+                        idx={lines.findIndex((l) => l.id === ln.id)}
+                        bind:lines
+                        bind:collapsed={
+                          collapsedSections.lines[lines.findIndex((l) => l.id === ln.id)]
+                        }
+                        bind:collapsedControlPoints={
+                          collapsedSections.controlPoints[
+                            lines.findIndex((l) => l.id === ln.id)
+                          ]
+                        }
+                        onRemove={() =>
+                          removeLine(lines.findIndex((l) => l.id === ln.id))}
+                        onInsertAfter={() => addControlPointToLineById(ln.id || "")}
+                        onInsertMidpoint={() => insertMidpointAfter(sIdx)}
+                        onDuplicate={() => duplicateLineInsideRepeat(sIdx, ln.id || "")}
+                        onWrapRepeat={() => {}}
+                        onPointerDown={(event) => beginPathDrag(event, ln.id || "")}
+                        dragging={draggedLineId === (ln.id || "")}
+                        onAddWaitAfter={() => insertWaitAfter(sIdx)}
+                        onAddEventAfter={() => insertEventAfter(sIdx)}
+                        onMoveUp={() => moveSequenceItem(sIdx, -1)}
+                        onMoveDown={() => moveSequenceItem(sIdx, 1)}
+                        canMoveUp={sIdx !== 0}
+                        canMoveDown={sIdx !== sequence.length - 1}
+                        optimizeLine={optimizeLine}
+                        optimizing={optimizingLineIds?.[ln.id ?? ""] ?? false}
+                        {poseVariables}
+                        {variables}
+                        inactive={inactiveLineIds.has(ln.id || "")}
+                        stopReason={stopReasonByLineId.get(ln.id || "") ?? null}
+                        headingJump={headingJumpByLineId.get(ln.id || "")?.jump ?? null}
+                        clearance={clearanceByLineId.get(ln.id || "") ?? null}
+                        onFixClearance={() => fixClearance(ln.id || "")}
+                        fixingClearance={fixingClearanceLineId === (ln.id || "")}
+                        clearanceFixNote={clearanceFixNotes[ln.id || ""] || ""}
+                        onMatchEntryHeading={() => matchEntryHeading(ln.id || "")}
+                        onPoseVariableChange={handleLinePoseVariableChange}
+                        onHeadingModeChange={handleLineHeadingModeChange}
+                        {recordChange}
+                      />
+                    </div>
+                  {/each}
+                {/each}
+              </div>
+            </div>
+          {:else}
+            <WaitRow
+              label={item.kind === "event" ? "Event" : "Wait"}
+              name={getWait(item).name}
+              durationMs={getWait(item).durationMs}
+              durationExpression={getWait(item).durationExpression}
+              enabledExpression={getWait(item).enabledExpression}
+              {variables}
+              locked={getWait(item).locked ?? false}
+              onToggleLock={() => {
+                const newSeq = [...sequence];
+                const current = getWait(newSeq[sIdx]);
+                newSeq[sIdx] = {
+                  ...current,
+                  locked: !(current.locked ?? false),
+                };
+                sequence = newSeq;
+                recordChange?.();
+              }}
+              onChange={(newName, newDuration) => {
+                const newSeq = [...sequence];
+                // Read from `sequence`, not the each-block `item`: an expression
+                // change may have already replaced this entry this tick.
+                newSeq[sIdx] = {
+                  ...getWait(newSeq[sIdx]),
+                  name: newName,
+                  durationMs: Math.max(0, Number(newDuration) || 0),
+                };
+                sequence = newSeq;
+              }}
+              onDurationExpressionChange={(raw) =>
+                setSequenceExpression(sIdx, "durationExpression", raw)}
+              onEnabledExpressionChange={(raw) =>
+                setSequenceExpression(sIdx, "enabledExpression", raw)}
+              onCommit={() => recordChange?.()}
+              onRemove={() => {
+                const newSeq = [...sequence];
+                newSeq.splice(sIdx, 1);
+                sequence = newSeq;
+              }}
+              onInsertAfter={() => {
+                const newSeq = [...sequence];
+                newSeq.splice(sIdx + 1, 0, makeWaitItem());
+                sequence = newSeq;
+              }}
+              onAddPathAfter={() => insertPathAfter(sIdx)}
+              onAddEventAfter={() => insertEventAfter(sIdx)}
+              onMoveUp={() => moveSequenceItem(sIdx, -1)}
+              onMoveDown={() => moveSequenceItem(sIdx, 1)}
+              canMoveUp={sIdx !== 0}
+              canMoveDown={sIdx !== sequence.length - 1}
+            />
+          {/if}
+        </div>
+      {/each}
+
+    {:else if activeTab === "variables"}
+      <VariablesSection
+        bind:variables
+        canStoreChain={lines.length > 0}
+        onAdd={addVariable}
+        onRemove={removeVariable}
+        onDuplicate={duplicateVariable}
+        onChange={handleVariableChange}
+        onCommit={recordChange}
+        onStoreChain={storeChainAsVariable}
+        onInsertPath={insertPathVariable}
+      />
+    {:else if activeTab === "field"}
+      <ObstaclesSection
+        bind:shapes
+        bind:collapsedObstacles
+        {variables}
+        {recordChange}
+      />
+
+      <div
+        class="w-full rounded-md border border-neutral-200 dark:border-neutral-700 p-3 bg-white dark:bg-neutral-800"
+      >
+        <div class="flex items-center gap-2">
+          <p
+            class="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-300"
+          >
+            Mirror
+          </p>
+          <button
+            on:click={() => mirrorCurrentPath("x")}
+            class="px-2.5 py-1.5 text-xs font-semibold rounded bg-sky-100 text-sky-700 dark:bg-sky-900 dark:text-sky-200"
+            title="Mirror X coordinates across the field centerline"
+          >
+            X
+          </button>
+          <button
+            on:click={() => mirrorCurrentPath("y")}
+            class="px-2.5 py-1.5 text-xs font-semibold rounded bg-teal-100 text-teal-700 dark:bg-teal-900 dark:text-teal-200"
+            title="Mirror Y coordinates across the field centerline"
+          >
+            Y
+          </button>
+        </div>
       </div>
-    {/each}
-
-    <!-- Add Line Button -->
-    <div class="flex flex-row items-center gap-4">
-      <button
-        on:click={addLine}
-        class="font-semibold text-green-500 text-sm flex flex-row justify-start items-center gap-1"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke-width={2}
-          stroke="currentColor"
-          class="size-5"
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="M12 4.5v15m7.5-7.5h-15"
-          />
-        </svg>
-        <p>Add Path</p>
-      </button>
-
-      <button
-        on:click={addWait}
-        class="font-semibold text-[#E1461B] text-sm flex flex-row justify-start items-center gap-1"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          class="size-5"
-        >
-          <circle cx="12" cy="12" r="9" />
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="M12 7v5l3 2"
-          />
-        </svg>
-        <p>Add Wait</p>
-      </button>
-
-      <button
-        on:click={addEvent}
-        class="font-semibold text-purple-500 text-sm flex flex-row justify-start items-center gap-1"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          class="size-5"
-        >
-          <circle cx="12" cy="12" r="8" />
-          <circle cx="12" cy="12" r="2" />
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="M12 2v4M12 18v4M2 12h4M18 12h4"
-          />
-        </svg>
-        <p>Add Event</p>
-      </button>
-
-      <button
-        on:click={addRepeatLoop}
-        class="font-semibold text-cyan-600 text-sm flex flex-row justify-start items-center gap-1"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          class="size-5"
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="M17 1l4 4-4 4"
-          />
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="M3 11V9a4 4 0 014-4h14"
-          />
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="M7 23l-4-4 4-4"
-          />
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="M21 13v2a4 4 0 01-4 4H3"
-          />
-        </svg>
-        <p>Add Repeat</p>
-      </button>
-    </div>
+    {:else}
+      <TelemetryPanel
+        {percent}
+        {timePrediction}
+        {startPoint}
+        {sequence}
+        {variables}
+        {settings}
+        {lines}
+        stopCount={chainRuns.length}
+        {clearanceReport}
+        {robotXY}
+        {robotHeading}
+        {x}
+        {y}
+      />
+    {/if}
   </div>
 
   <PlaybackControls

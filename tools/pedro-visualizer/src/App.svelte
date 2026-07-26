@@ -8,10 +8,10 @@
     PathChain,
     Shape,
     PoseVariable,
-    PathVariable,
-    NumberVariable,
+    Variable,
     EventTriggerType,
     TimePrediction,
+    ChainProfile,
   } from "./types";
   import * as d3 from "d3";
   import {
@@ -43,6 +43,7 @@
     calculateMotionProfileTime,
     calculateMotionProfileVelocityAtDistance,
     calculatePathTime,
+    profileVelocityAtDistance,
     getAnimationDuration,
     getPathSpeed,
   } from "./utils";
@@ -50,23 +51,36 @@
 
   import {
     calculateRobotState,
+    checkClearance,
+    footprintFromSettings,
     generateGhostPathPoints,
     generateOnionLayers,
   } from "./utils";
   import {
+    buildExpressionScope,
     easeInOutQuad,
     getCurvePoint,
     getRandomColor,
-    resolveBasePointExpressions,
+    migrateLine,
+    migrateSequenceItem,
+    migrateVariables,
+    poseVariablesOf,
+    resolveLineExpressions,
     resolvePointExpressions,
-    resolvePoseVariableExpressions,
+    resolveSequenceItemExpressions,
+    resolveVariableValues,
+    skippedLineIds,
+    isEnabled,
+    buildChainRuns,
+    buildLineStartPoints,
+    buildRoute,
+    CHAIN_BREAK_LABELS,
+    reconcileSequence,
     quadraticToCubic,
     radiansToDegrees,
     shortestRotation,
     downloadTrajectory,
     loadTrajectoryFromFile,
-    loadRobotImage,
-    updateRobotImageDisplay,
   } from "./utils";
   import {
     POINT_RADIUS,
@@ -143,220 +157,104 @@
     }));
   }
 
-  function normalizePoseVariables(
-    input: PoseVariable[] | undefined,
-    sourceNumberVariables: NumberVariable[] = [],
-  ): PoseVariable[] {
-    if (!Array.isArray(input)) return [];
+  /** Fills in missing ids/names so every variable is addressable. */
+  function normalizeVariable(variable: Variable, index: number): Variable {
+    const id = variable.id || `var-${Math.random().toString(36).slice(2)}`;
+    const name = (variable.name || "").trim() || `value${index + 1}`;
 
-    return resolvePoseVariableExpressions(
-      input.map((variable, index) => ({
-      id: variable.id || `pose-${Math.random().toString(36).slice(2)}`,
-      name: (variable.name || "").trim() || `Pose ${index + 1}`,
-      x: Number.isFinite(Number(variable.x)) ? Number(variable.x) : 0,
-      xExpression:
-        typeof variable.xExpression === "string" ? variable.xExpression.trim() || undefined : undefined,
-      y: Number.isFinite(Number(variable.y)) ? Number(variable.y) : 0,
-      yExpression:
-        typeof variable.yExpression === "string" ? variable.yExpression.trim() || undefined : undefined,
-      heading: Number.isFinite(Number(variable.heading))
-        ? Number(variable.heading)
-        : 0,
-      headingExpression:
-        typeof variable.headingExpression === "string"
-          ? variable.headingExpression.trim() || undefined
-          : undefined,
-    })),
-      sourceNumberVariables,
-    );
-  }
-
-  function normalizeNumberVariables(input: NumberVariable[] | undefined): NumberVariable[] {
-    if (!Array.isArray(input)) return [];
-
-    return input.map((variable, index) => {
-      const value = Number(variable.value);
+    if (variable.type === "pose") {
       return {
-        id: variable.id || `number-${Math.random().toString(36).slice(2)}`,
-        name: (variable.name || "").trim() || `Number ${index + 1}`,
-        value: Number.isFinite(value) ? value : 0,
+        ...variable,
+        id,
+        name,
+        x: Number.isFinite(Number(variable.x)) ? Number(variable.x) : 0,
+        y: Number.isFinite(Number(variable.y)) ? Number(variable.y) : 0,
+        heading: Number.isFinite(Number(variable.heading))
+          ? Number(variable.heading)
+          : 0,
       };
-    });
+    }
+
+    if (variable.type === "number") {
+      const value = Number(variable.value);
+      return { ...variable, id, name, value: Number.isFinite(value) ? value : 0 };
+    }
+
+    if (variable.type === "boolean") {
+      return { ...variable, id, name, value: Boolean(variable.value) };
+    }
+
+    return { ...variable, id, name };
   }
 
-  function numberVariableValue(
-    variableId: string | undefined,
-    variablesById: Map<string, NumberVariable>,
-    fallback: number,
-  ): number {
-    if (!variableId) return fallback;
-    const value = Number(variablesById.get(variableId)?.value);
-    return Number.isFinite(value) ? value : fallback;
-  }
+  /**
+   * Builds the unified variable list from a save file, accepting both the
+   * current `variables` field and the legacy per-type arrays.
+   */
+  function normalizeVariables(source: {
+    variables?: Variable[];
+    numberVariables?: any[];
+    poseVariables?: any[];
+    pathVariables?: any[];
+  }): Variable[] {
+    const migrated = migrateVariables(source).map(normalizeVariable);
+    const resolved = resolveVariableValues(migrated);
+    const poseVariables = poseVariablesOf(resolved);
 
-  function applyNumberVariablesToLines(
-    sourceLines: Line[],
-    sourceNumberVariables: NumberVariable[],
-  ): Line[] {
-    const variablesById = new Map(
-      sourceNumberVariables.map((variable) => [variable.id, variable]),
-    );
+    // Path variables hold their own lines, so normalize those too.
+    return resolved.map((variable) => {
+      if (variable.type !== "path") return variable;
 
-    return sourceLines.map((line) => ({
-      ...line,
-      endPoint: line.endPoint.poseVariableId
-        ? line.endPoint
-        : resolvePointExpressions(line.endPoint, sourceNumberVariables),
-      controlPoints: (line.controlPoints || []).map((point) =>
-        resolveBasePointExpressions(point, sourceNumberVariables),
-      ),
-      speed: Math.max(
-        0.05,
-        Math.min(
-          1,
-          numberVariableValue(
-            line.speedVariableId,
-            variablesById,
-            Number(line.speed ?? 1) || 1,
-          ),
-        ),
-      ),
-      eventMarkers: (line.eventMarkers || []).map((marker) => ({
-        ...marker,
-        position: Math.max(
-          0,
-          Math.min(
-            1,
-            numberVariableValue(
-              marker.positionVariableId,
-              variablesById,
-              Number(marker.position ?? 0.5) || 0.5,
-            ) > 1
-              ? numberVariableValue(
-                  marker.positionVariableId,
-                  variablesById,
-                  Number(marker.position ?? 0.5) || 0.5,
-                ) / 100
-              : numberVariableValue(
-                  marker.positionVariableId,
-                  variablesById,
-                  Number(marker.position ?? 0.5) || 0.5,
-                ),
-          ),
-        ),
-        triggerMs: Math.max(
-          0,
-          Math.round(
-            numberVariableValue(
-              marker.triggerMsVariableId,
-              variablesById,
-              Number(marker.triggerMs ?? 0) || 0,
-            ),
-          ),
-        ),
-        poseX: numberVariableValue(
-          marker.poseXVariableId,
-          variablesById,
-          Number(marker.poseX ?? line.endPoint?.x ?? 0) || 0,
-        ),
-        poseY: numberVariableValue(
-          marker.poseYVariableId,
-          variablesById,
-          Number(marker.poseY ?? line.endPoint?.y ?? 0) || 0,
-        ),
-        durationMs: Math.max(
-          0,
-          Math.round(
-            numberVariableValue(
-              marker.durationVariableId,
-              variablesById,
-              Number(marker.durationMs ?? 0) || 0,
-            ),
-          ),
-        ),
-      })),
-    }));
-  }
-
-  function applyNumberVariablesToSequence(
-    sourceSequence: SequenceItem[],
-    sourceNumberVariables: NumberVariable[],
-  ): SequenceItem[] {
-    const variablesById = new Map(
-      sourceNumberVariables.map((variable) => [variable.id, variable]),
-    );
-
-    return sourceSequence.map((item) => {
-      if (item.kind === "repeat") {
-        return {
-          ...item,
-          count: Math.max(
-            1,
-            Math.min(
-              20,
-              Math.round(
-                numberVariableValue(item.countVariableId, variablesById, item.count),
-              ),
-            ),
-          ),
-        };
-      }
-
-      if (item.kind === "wait" || item.kind === "event") {
-        return {
-          ...item,
-          durationMs: Math.max(
-            0,
-            Math.round(
-              numberVariableValue(
-                item.durationVariableId,
-                variablesById,
-                item.durationMs,
-              ),
-            ),
-          ),
-        };
-      }
-
-      return item;
-    });
-  }
-
-  function normalizePathVariables(
-    input: PathVariable[] | undefined,
-    sourcePoseVariables: PoseVariable[] = [],
-    sourceNumberVariables: NumberVariable[] = [],
-  ): PathVariable[] {
-    if (!Array.isArray(input)) return [];
-
-    return input.map((variable, index) => {
-      const normalizedLines = applyNumberVariablesToLines(
+      const normalizedLines = applyVariablesToLines(
         normalizeLines(variable.lines || []),
-        sourceNumberVariables,
-      );
-      const resolvedPoseVariables = resolvePoseVariableExpressions(
-        sourcePoseVariables,
-        sourceNumberVariables,
+        resolved,
       );
       const normalizedPath = applyPoseVariablesToPath(
         resolvePointExpressions(
           variable.startPoint || getDefaultStartPoint(),
-          sourceNumberVariables,
+          resolved,
         ),
         normalizedLines,
-        resolvedPoseVariables,
+        poseVariables,
       );
 
       return {
-        id: variable.id || `path-variable-${Math.random().toString(36).slice(2)}`,
-        name: (variable.name || "").trim() || `Path Variable ${index + 1}`,
+        ...variable,
         startPoint: normalizedPath.startPoint,
         lines: normalizedPath.lines,
       };
     });
   }
 
-  function bindPointToPoseVariable(point: Point, variable: PoseVariable): Point {
+  function applyVariablesToLines(
+    sourceLines: Line[],
+    sourceVariables: Variable[],
+  ): Line[] {
+    const scope = buildExpressionScope(sourceVariables);
+    return sourceLines.map((line) =>
+      resolveLineExpressions(migrateLine(line, sourceVariables), sourceVariables, scope),
+    );
+  }
+
+  function applyVariablesToSequence(
+    sourceSequence: SequenceItem[],
+    sourceVariables: Variable[],
+  ): SequenceItem[] {
+    const scope = buildExpressionScope(sourceVariables);
+    return sourceSequence.map((item) =>
+      resolveSequenceItemExpressions(
+        migrateSequenceItem(item, sourceVariables),
+        sourceVariables,
+        scope,
+      ),
+    );
+  }
+
+  function bindPointToPoseVariable(
+    point: Point,
+    variable: PoseVariable,
+    forcePoseHeading = false,
+  ): Point {
     const targetHeading = Number.isFinite(Number(variable.heading))
       ? Number(variable.heading)
       : 0;
@@ -366,6 +264,17 @@
       locked: point.locked,
       poseVariableId: variable.id,
     };
+
+    // The start point keeps its heading in `startDeg`/`degrees`, never `endDeg`,
+    // so writing the pose heading into the linear branch would leave the real
+    // start heading behind. Give it a definite heading instead.
+    if (forcePoseHeading) {
+      return {
+        ...basePoint,
+        heading: "constant",
+        degrees: targetHeading,
+      };
+    }
 
     if (point.heading === "linear") {
       return {
@@ -394,12 +303,16 @@
     };
   }
 
-  function clearMissingPoseVariable(point: Point, variablesById: Map<string, PoseVariable>): Point {
+  function clearMissingPoseVariable(
+    point: Point,
+    variablesById: Map<string, PoseVariable>,
+    isStartPoint = false,
+  ): Point {
     if (!point.poseVariableId) return point;
 
     const variable = variablesById.get(point.poseVariableId);
     if (variable) {
-      return bindPointToPoseVariable(point, variable);
+      return bindPointToPoseVariable(point, variable, isStartPoint);
     }
 
     const { poseVariableId, ...nextPoint } = point;
@@ -416,7 +329,7 @@
     );
 
     return {
-      startPoint: clearMissingPoseVariable(sourceStartPoint, variablesById),
+      startPoint: clearMissingPoseVariable(sourceStartPoint, variablesById, true),
       lines: sourceLines.map((line) => ({
         ...line,
         endPoint: clearMissingPoseVariable(line.endPoint, variablesById),
@@ -438,9 +351,7 @@
   // Animation state
   let percent: number = 0;
   let playing = false;
-  let animationFrame: number;
-  let startTime: number | null = null;
-  let previousTime: number | null = null;
+  // Playback timing lives entirely in the animation controller.
   // Save dialog state
   let showSaveDialog = false;
   let showDualPathSaveDialog = false;
@@ -454,9 +365,7 @@
   let settings: Settings = { ...DEFAULT_SETTINGS };
   let startPoint: Point = getDefaultStartPoint();
   let lines: Line[] = normalizeLines(getDefaultLines());
-  let poseVariables: PoseVariable[] = [];
-  let pathVariables: PathVariable[] = [];
-  let numberVariables: NumberVariable[] = [];
+  let variables: Variable[] = [];
 
   function normalizeLegacyFieldMap(input: Settings): Settings {
     const next = { ...input };
@@ -515,9 +424,7 @@
     shapes: Shape[];
     settings: Settings;
     pathChains?: PathChain[];
-    poseVariables?: PoseVariable[];
-    pathVariables?: PathVariable[];
-    numberVariables?: NumberVariable[];
+    variables?: Variable[];
     color?: string; // Optional custom color for this path
   }
   let additionalPaths: AdditionalPathData[] = [];
@@ -533,10 +440,6 @@
   type EventTimelineOverlay = {
     elements: CanvasPathElement[];
     labels: PathOverlayItem[];
-  };
-  type LineTiming = {
-    startTime: number;
-    duration: number;
   };
   type SwerveWheelOverlay = {
     id: string;
@@ -556,6 +459,11 @@
     lineIndex: number;
     t?: number;
   };
+  /** What the timeline says about driving a given path. */
+  type TravelState = {
+    chain?: ChainProfile;
+  };
+
   type CurveSample = {
     point: BasePoint;
     distance: number;
@@ -802,22 +710,41 @@
     }
   }
 
+  /**
+   * Colours a path by the speed the robot is really doing there.
+   *
+   * Two things decide that, and neither is visible from the path on its own:
+   * the profile belongs to the whole PathChain, so a path in the middle of one
+   * is driven at cruise rather than ramping up and back down; and both cornering
+   * and turning cap the speed where they happen. All of it comes from the
+   * timeline's own speed curve, so the colours cannot disagree with the clock.
+   */
   function createVelocityGradientPathElements(
     line: Line,
     sourceStartPoint: BasePoint,
     idBase: string,
     opacity: number,
     routeSettings: Settings,
+    chain?: ChainProfile,
   ): CanvasPathElement[] {
     const samples = sampleLineCurve(sourceStartPoint, line);
-    const totalLength = samples[samples.length - 1]?.distance || 0;
+    const pathLength = samples[samples.length - 1]?.distance || 0;
     const motion = getLineMotionValues(line, routeSettings);
 
+    // Without a chain the path is its own move, which is what a route that has
+    // not been timed yet looks like.
+    const profileLength = chain?.length ?? pathLength;
+    const profileOffset = chain?.offset ?? 0;
+    const maxVelocity = chain?.maxVelocity ?? motion.maxVelocity;
+    const maxAcceleration = chain?.maxAcceleration ?? motion.maxAcceleration;
+    const maxDeceleration = chain?.maxDeceleration ?? motion.maxDeceleration;
+
     if (
-      totalLength <= 0 ||
-      motion.maxVelocity <= 0 ||
-      motion.maxAcceleration <= 0 ||
-      motion.maxDeceleration <= 0 ||
+      pathLength <= 0 ||
+      profileLength <= 0 ||
+      maxVelocity <= 0 ||
+      maxAcceleration <= 0 ||
+      maxDeceleration <= 0 ||
       motion.referenceVelocity <= 0
     ) {
       return [];
@@ -829,13 +756,15 @@
       const previous = samples[i - 1];
       const current = samples[i];
       const midpointDistance = (previous.distance + current.distance) / 2;
-      const velocity = calculateMotionProfileVelocityAtDistance(
-        midpointDistance,
-        totalLength,
-        motion.maxVelocity,
-        motion.maxAcceleration,
-        motion.maxDeceleration,
-      );
+      const velocity = chain?.profile
+        ? profileVelocityAtDistance(chain.profile, profileOffset + midpointDistance)
+        : calculateMotionProfileVelocityAtDistance(
+            profileOffset + midpointDistance,
+            profileLength,
+            maxVelocity,
+            maxAcceleration,
+            maxDeceleration,
+          );
       const color = velocityToColor(velocity / motion.referenceVelocity);
       const segment = new Two.Line(
         x(previous.point.x),
@@ -857,6 +786,7 @@
     stroke: string,
     opacity: number,
     routeSettings: Settings,
+    travel?: TravelState,
   ): CanvasPathElement[] {
     if (routeSettings.showVelocityGradient) {
       const gradientElements = createVelocityGradientPathElements(
@@ -865,6 +795,7 @@
         idBase,
         opacity,
         routeSettings,
+        travel?.chain,
       );
       if (gradientElements.length > 0) return gradientElements;
     }
@@ -872,37 +803,6 @@
     const lineElem = createStandardPathElement(line, sourceStartPoint);
     stylePathElement(lineElem, idBase, stroke, opacity, line.locked);
     return [lineElem];
-  }
-
-  function getLineDurationMap(timePrediction: TimePrediction | null | undefined) {
-    const durationMap = new Map<number, number>();
-    timePrediction?.timeline?.forEach((event) => {
-      if (
-        event.type === "travel" &&
-        event.lineIndex !== undefined &&
-        Number.isFinite(event.duration)
-      ) {
-        durationMap.set(event.lineIndex, event.duration);
-      }
-    });
-    return durationMap;
-  }
-
-  function getLineTimingMap(timePrediction: TimePrediction | null | undefined) {
-    const timingMap = new Map<number, LineTiming>();
-    timePrediction?.timeline?.forEach((event) => {
-      if (
-        event.type === "travel" &&
-        event.lineIndex !== undefined &&
-        Number.isFinite(event.duration)
-      ) {
-        timingMap.set(event.lineIndex, {
-          startTime: Number(event.startTime) || 0,
-          duration: Number(event.duration) || 0,
-        });
-      }
-    });
-    return timingMap;
   }
 
   function getLineLength(sourceStartPoint: BasePoint, line: Line): number {
@@ -1020,61 +920,41 @@
     return colors[Math.abs(hash) % colors.length];
   }
 
-  function getFallbackLineDuration(
-    sourceStartPoint: BasePoint,
-    line: Line,
-    routeSettings: Settings,
-  ): number {
-    const length = getLineLength(sourceStartPoint, line);
-    const motion = getLineMotionValues(line, routeSettings);
-
-    if (
-      motion.maxVelocity > 0 &&
-      motion.maxAcceleration > 0 &&
-      motion.maxDeceleration > 0
-    ) {
-      return calculateMotionProfileTime(
-        length,
-        motion.maxVelocity,
-        motion.maxAcceleration,
-        motion.maxDeceleration,
-      );
-    }
-
-    const averageVelocity =
-      ((routeSettings.xVelocity + routeSettings.yVelocity) / 2) * getPathSpeed(line);
-    return averageVelocity > 0 ? length / averageVelocity : 0;
-  }
-
   function buildPathAnnotations(
     idPrefix: string,
     sourceStartPoint: Point,
     sourceLines: Line[],
     timePrediction: TimePrediction | null | undefined,
     routeSettings: Settings,
+    sourceSequence: SequenceItem[] = [],
+    sourceVariables: Variable[] = [],
   ): PathOverlayItem[] {
-    const durationMap = getLineDurationMap(timePrediction);
-
-    return sourceLines
-      .map((line, lineIndex) => {
-        const lineStartPoint = getLineStartPoint(sourceStartPoint, sourceLines, lineIndex);
-        if (!lineStartPoint || !line?.endPoint) return null;
-
-        const length = getLineLength(lineStartPoint, line);
-        const duration =
-          durationMap.get(lineIndex) ??
-          getFallbackLineDuration(lineStartPoint, line, routeSettings);
-        const midpoint = getLinePointAtDistance(lineStartPoint, line, length / 2);
+    // Labels follow the route, so a path inside a repeat loop or an `if` block
+    // is measured from where the robot actually reaches it.
+    return buildTravelLineTimingMetas(
+      sourceStartPoint,
+      sourceLines,
+      timePrediction,
+      routeSettings,
+      sourceSequence,
+      sourceVariables,
+    )
+      .filter((meta) => meta.iteration === 0)
+      .map((meta) => {
+        const midpoint = getLinePointAtDistance(
+          meta.startPoint,
+          meta.line,
+          meta.length / 2,
+        );
 
         return {
-          id: `${idPrefix}-path-label-${lineIndex}`,
+          id: `${idPrefix}-path-label-${meta.lineIndex}`,
           x: x(midpoint.x),
           y: y(midpoint.y),
-          label: `${length.toFixed(1)} in / ${formatSeconds(duration)}`,
-          color: line.color,
+          label: `${meta.length.toFixed(1)} in / ${formatSeconds(meta.duration)}`,
+          color: meta.line.color,
         };
-      })
-      .filter(Boolean) as PathOverlayItem[];
+      });
   }
 
   function buildEventPins(
@@ -1083,21 +963,33 @@
     sourceLines: Line[],
     timePrediction: TimePrediction | null | undefined,
     routeSettings: Settings,
+    sourceSequence: SequenceItem[] = [],
+    sourceVariables: Variable[] = [],
   ): PathOverlayItem[] {
-    const durationMap = getLineDurationMap(timePrediction);
     const pins: PathOverlayItem[] = [];
 
-    sourceLines.forEach((line, lineIndex) => {
-      const lineStartPoint = getLineStartPoint(sourceStartPoint, sourceLines, lineIndex);
-      if (!lineStartPoint || !line?.eventMarkers?.length) return;
+    buildTravelLineTimingMetas(
+      sourceStartPoint,
+      sourceLines,
+      timePrediction,
+      routeSettings,
+      sourceSequence,
+      sourceVariables,
+    ).forEach((meta) => {
+      const line = meta.line;
+      const lineIndex = meta.lineIndex;
+      const lineStartPoint = meta.startPoint;
+      if (meta.iteration !== 0 || !line?.eventMarkers?.length) return;
 
-      const length = getLineLength(lineStartPoint, line);
-      const duration =
-        durationMap.get(lineIndex) ??
-        getFallbackLineDuration(lineStartPoint, line, routeSettings);
+      const length = meta.length;
+      const duration = meta.duration;
       const motion = getLineMotionValues(line, routeSettings);
 
       line.eventMarkers.forEach((marker, markerIndex) => {
+        // Markers switched off by their own condition are skipped in generated
+        // code, so they get no pin either.
+        if (!isEnabled(marker, sourceVariables)) return;
+
         const triggerType =
           marker.triggerType === "temporal" || marker.triggerType === "pose"
             ? marker.triggerType
@@ -1187,6 +1079,7 @@
     timePrediction: TimePrediction | null | undefined,
     routeSettings: Settings,
     sourceSequence: SequenceItem[] = [],
+    sourceVariables: Variable[] = [],
   ): EventTimelineOverlay {
     const elements: CanvasPathElement[] = [];
     const lineMetas = buildTravelLineTimingMetas(
@@ -1195,6 +1088,7 @@
       timePrediction,
       routeSettings,
       sourceSequence,
+      sourceVariables,
     ).map((meta) => ({
       ...meta,
       motion: {
@@ -1225,6 +1119,8 @@
       if (!meta || !meta.line.eventMarkers?.length) return;
 
       meta.line.eventMarkers.forEach((marker, markerIndex) => {
+        if (!isEnabled(marker, sourceVariables)) return;
+
         const triggerType =
           marker.triggerType === "temporal" || marker.triggerType === "pose"
             ? marker.triggerType
@@ -1285,10 +1181,10 @@
 
         const eventDuration = Math.max(0, Number(marker.durationMs ?? 0) || 0) / 1000;
         const absoluteStartTime = meta.startTime + localTriggerTime;
-        const absoluteEndTime =
-          eventDuration > 0
-            ? absoluteStartTime + eventDuration
-            : Math.max(...lineMetas.map((item) => item?.endTime || 0));
+        // A zero duration fires once — the generated code finishes the event
+        // straight away — so it is drawn as a tick at the trigger point rather
+        // than as a strip running to the end of the auto.
+        const absoluteEndTime = absoluteStartTime + eventDuration;
         const eventName = marker.name || `Event ${markerIndex + 1}`;
         const color = eventTimelineColor(
           eventName,
@@ -1363,7 +1259,11 @@
 
     const lineIndex = activeEvent.lineIndex;
     const line = sourceLines[lineIndex];
-    const lineStart = getLineStartPoint(sourceStartPoint, sourceLines, lineIndex);
+    // Follow the route, not the array: a repeated or branched path does not
+    // start where the previous entry in `lines` ends.
+    const lineStart =
+      activeEvent.startPoint ??
+      getLineStartPoint(sourceStartPoint, sourceLines, lineIndex);
 
     if (!line || !lineStart || activeEvent.duration <= 0) {
       return null;
@@ -1474,6 +1374,8 @@
     sourceLines: Line[],
     timePrediction: TimePrediction | null | undefined,
     routeSettings: Settings,
+    sourceStartPoints?: Map<string, BasePoint>,
+    sourceHeadingTransitions?: Map<string, { entryHeading: number; catchUp: number }>,
   ): OnionLayerState[] {
     let layers = generateOnionLayers(
       sourceStartPoint,
@@ -1481,6 +1383,8 @@
       routeSettings.rWidth,
       routeSettings.rHeight,
       routeSettings.onionLayerSpacing || 6,
+      sourceStartPoints,
+      sourceHeadingTransitions,
     ) as OnionLayerState[];
 
     if (
@@ -1524,10 +1428,13 @@
     layers: OnionLayerState[],
     opacity: number,
     color: string,
+    sourceStartPoints?: Map<string, BasePoint>,
   ): SwerveWheelOverlay[] {
     return layers.flatMap((layer, layerIndex) => {
       const line = sourceLines[layer.lineIndex];
-      const lineStart = getLineStartPoint(sourceStartPoint, sourceLines, layer.lineIndex);
+      const lineStart =
+        (line?.id ? sourceStartPoints?.get(line.id) : undefined) ??
+        getLineStartPoint(sourceStartPoint, sourceLines, layer.lineIndex);
       if (!line || !lineStart) return [];
 
       const wheelAngle = tangentCssAngleForLine(lineStart, line, layer.t ?? 0.5);
@@ -1555,9 +1462,7 @@
       sequence,
       settings,
       pathChains,
-      poseVariables,
-      pathVariables,
-      numberVariables,
+      variables,
     };
   }
 
@@ -1578,9 +1483,7 @@
       sequence = prev.sequence;
       settings = prev.settings;
       pathChains = prev.pathChains;
-      poseVariables = prev.poseVariables || [];
-      pathVariables = prev.pathVariables || [];
-      numberVariables = prev.numberVariables || [];
+      variables = prev.variables || [];
       isUnsaved.set(true);
       two && two.update();
     }
@@ -1597,9 +1500,7 @@
       sequence = next.sequence;
       settings = next.settings;
       pathChains = next.pathChains;
-      poseVariables = next.poseVariables || [];
-      pathVariables = next.pathVariables || [];
-      numberVariables = next.numberVariables || [];
+      variables = next.variables || [];
       isUnsaved.set(true);
       two && two.update();
     }
@@ -1655,12 +1556,12 @@
   // Animation controller
   let loopAnimation = true;
   let animationController: ReturnType<typeof createAnimationController>;
-  $: timePrediction = calculatePathTime(startPoint, lines, settings, sequence);
+  $: timePrediction = calculatePathTime(startPoint, lines, settings, sequence, variables);
   $: animationDuration = getAnimationDuration(timePrediction.totalTime / 1000);
   
   // Second path timeline (for dual path mode)
   $: secondTimePrediction = $dualPathMode && secondStartPoint && secondLines.length > 0 
-    ? calculatePathTime(secondStartPoint, secondLines, settings, secondSequence)
+    ? calculatePathTime(secondStartPoint, secondLines, settings, secondSequence, variables)
     : null;
   
   // Calculate max duration across all paths for playbar scaling
@@ -1674,7 +1575,8 @@
             pathData.startPoint,
             pathData.lines,
             pathData.settings,
-            pathData.sequence
+            pathData.sequence,
+            pathData.variables,
           );
           if (pathTime) {
             maxTime = Math.max(maxTime, pathTime.totalTime);
@@ -1721,26 +1623,22 @@
           const data = JSON.parse(content);
 
         if (data.startPoint && data.lines) {
-          const loadedNumberVariables = normalizeNumberVariables(data.numberVariables);
-          const loadedPoseVariables = normalizePoseVariables(
-            data.poseVariables,
-            loadedNumberVariables,
-          );
-          const normalizedLines = applyNumberVariablesToLines(
+          const loadedVariables = normalizeVariables(data);
+          const normalizedLines = applyVariablesToLines(
             normalizeLines(data.lines || []),
-            loadedNumberVariables,
+            loadedVariables,
           );
           const normalizedPath = applyPoseVariablesToPath(
-            resolvePointExpressions(data.startPoint, loadedNumberVariables),
+            resolvePointExpressions(data.startPoint, loadedVariables),
             normalizedLines,
-            loadedPoseVariables,
+            poseVariablesOf(loadedVariables),
           );
-          const normalizedSequence = applyNumberVariablesToSequence(
+          const normalizedSequence = applyVariablesToSequence(
             data.sequence || normalizedPath.lines.map((ln: Line) => ({
               kind: "path",
               lineId: ln.id!,
             })),
-            loadedNumberVariables,
+            loadedVariables,
           );
           newAdditionalPaths.push({
             filePath,
@@ -1750,13 +1648,7 @@
             sequence: normalizedSequence,
             settings: data.settings || { ...DEFAULT_SETTINGS },
             pathChains: normalizePathChains(data.pathChains, normalizedPath.lines),
-            poseVariables: loadedPoseVariables,
-            pathVariables: normalizePathVariables(
-              data.pathVariables,
-              loadedPoseVariables,
-              loadedNumberVariables,
-            ),
-            numberVariables: loadedNumberVariables,
+            variables: loadedVariables,
             color: colors[i],
           });
         }
@@ -1784,26 +1676,8 @@
     .scaleLinear()
     .domain([0, FIELD_SIZE])
     .range([height || FIELD_SIZE, 0]);
-  $: {
-    // Calculate robot state using the Timeline
-    if (timePrediction && timePrediction.timeline && lines.length > 0) {
-      const state = calculateRobotState(
-        percent,
-        timePrediction.timeline,
-        lines,
-        startPoint,
-        settings,
-        x,
-        y,
-      );
-      robotXY = { x: state.x, y: state.y };
-      robotHeading = state.heading;
-    } else {
-      // Fallback for initialization
-      robotXY = { x: x(startPoint.x), y: y(startPoint.y) };
-      robotHeading = 0;
-    }
-  }
+  // The main robot state is computed in a single place further down, which also
+  // handles multi-path mode. A second copy here would race with it.
 
   $: points = (() => {
     let _points = [];
@@ -1816,7 +1690,10 @@
         x(POINT_RADIUS),
       );
       startPointElem.id = `point-0-0`;
-      startPointElem.fill = lines[0].color;
+      // A route can legitimately have no paths (every path deleted, or a file
+      // that stores none). Throwing here would break every later reactive
+      // statement and freeze the whole editor, so fall back to a plain colour.
+      startPointElem.fill = lines[0]?.color || "#ffc516";
       startPointElem.noStroke();
 
       _points.push(startPointElem);
@@ -2034,6 +1911,166 @@
     return _points;
   })();
 
+  /**
+   * Every path must appear in the route exactly once. Without this, a save file
+   * whose step list has drifted from its paths (an older build, a hand-edited
+   * file, a duplicate that renumbered ids) leaves paths that are missing from
+   * the route: they sit in the editor but are not drawn, not timed and not
+   * exported. Reconciling here keeps the field and the step list describing the
+   * same thing no matter what was loaded.
+   */
+  $: {
+    const reconciled = reconcileSequence(lines, sequence);
+    if (reconciled !== sequence) sequence = reconciled;
+  }
+
+  // Paths individually switched off by their own "Enabled if" condition.
+  $: inactiveLineIds = skippedLineIds(lines, variables);
+
+  // Start points follow the sequence, so branches of an if share a start.
+  $: mainRoute = buildRoute(startPoint, lines, sequence, variables);
+  $: lineStartPoints = mainRoute.startPoints;
+
+  /**
+   * Consecutive paths are followed as one PathChain, so the robot only comes to
+   * a stop where a chain ends. Those stops are what cost time, so the field
+   * marks them.
+   */
+  $: chainRuns = buildChainRuns(mainRoute.steps);
+
+  /**
+   * How each path picks up its heading goal. Where two paths meet the goal can
+   * jump — a tangential path after a linear one starts wherever its curve points
+   * — and the robot answers by rotating on the move. The previews read the same
+   * transition the animated robot does so nothing ever snaps.
+   */
+  /**
+   * The chain each path belongs to and how much turning slows it, taken from
+   * the timeline so the field cannot disagree with the estimate.
+   */
+  const travelStatesFrom = (
+    prediction: TimePrediction | null | undefined,
+    sourceLines: Line[],
+  ) => {
+    const states = new Map<string, TravelState>();
+    prediction?.timeline?.forEach((event) => {
+      if (event.type !== "travel" || event.lineIndex === undefined) return;
+      const lineId = sourceLines[event.lineIndex]?.id;
+      if (!lineId || states.has(lineId)) return;
+      states.set(lineId, { chain: event.chain });
+    });
+    return states;
+  };
+
+  const headingTransitionsFrom = (
+    prediction: TimePrediction | null | undefined,
+    sourceLines: Line[],
+  ) => {
+    const transitions = new Map<string, { entryHeading: number; catchUp: number }>();
+    prediction?.timeline?.forEach((event) => {
+      if (event.type !== "travel" || event.lineIndex === undefined) return;
+      const lineId = sourceLines[event.lineIndex]?.id;
+      if (!lineId || transitions.has(lineId)) return;
+      transitions.set(lineId, {
+        entryHeading: Number(event.startHeading) || 0,
+        catchUp: Number(event.headingCatchUp) || 0,
+      });
+    });
+    return transitions;
+  };
+
+  $: travelStates = travelStatesFrom(timePrediction, lines);
+  $: secondTravelStates = travelStatesFrom(secondTimePrediction, secondLines);
+  $: headingTransitions = headingTransitionsFrom(timePrediction, lines);
+
+  /**
+   * The shape that actually has to fit through the gaps. A path is a curve
+   * through the middle of the robot, and the middle of the robot fits places the
+   * robot does not.
+   */
+  $: robotFootprint = footprintFromSettings(settings);
+
+  /**
+   * Where the robot is closer to an obstacle or a wall than the safety margin
+   * allows, checked at the heading the robot is really holding — a path that is
+   * clear driving straight can clip a corner once the robot turns on it.
+   */
+  $: clearanceReport = checkClearance(
+    {
+      startPoint,
+      lines,
+      footprint: robotFootprint,
+      obstacles: shapes,
+      lineStartPoints,
+      headingTransitions,
+    },
+    { fieldSize: FIELD_SIZE, margin: settings.safetyMargin },
+  );
+  $: secondHeadingTransitions = headingTransitionsFrom(
+    secondTimePrediction,
+    secondLines,
+  );
+  $: additionalTravelStates = additionalPaths.map((pathData) =>
+    travelStatesFrom(
+      calculatePathTime(
+        pathData.startPoint || startPoint,
+        pathData.lines,
+        pathData.settings,
+        pathData.sequence,
+        pathData.variables,
+      ),
+      pathData.lines,
+    ),
+  );
+  $: additionalHeadingTransitions = additionalPaths.map((pathData) =>
+    headingTransitionsFrom(
+      calculatePathTime(
+        pathData.startPoint || startPoint,
+        pathData.lines,
+        pathData.settings,
+        pathData.sequence,
+        pathData.variables,
+      ),
+      pathData.lines,
+    ),
+  );
+  $: stopPoints = (() => {
+    if (!settings.showStopPoints) return [];
+
+    const seen = new Set<string>();
+    return chainRuns
+      .map((run, runIndex) => {
+        const last = run.steps[run.steps.length - 1];
+        if (!last?.line?.endPoint) return null;
+        // A repeat loop drives the same endpoint on every pass; one marker is
+        // enough.
+        const key = `${last.lineId}-${run.breakReason}`;
+        if (seen.has(key)) return null;
+        seen.add(key);
+
+        return {
+          id: `stop-${runIndex}-${last.lineId}`,
+          x: x(last.line.endPoint.x),
+          y: y(last.line.endPoint.y),
+          label: CHAIN_BREAK_LABELS[run.breakReason],
+        };
+      })
+      .filter(Boolean) as { id: string; x: number; y: number; label: string }[];
+  })();
+  $: secondLineStartPoints = secondStartPoint
+    ? buildLineStartPoints(secondStartPoint, secondLines, secondSequence, variables)
+    : new Map<string, Point>();
+  $: additionalLineStartPoints = additionalPaths.map((pathData) =>
+    pathData.startPoint
+      ? buildLineStartPoints(
+          pathData.startPoint,
+          pathData.lines,
+          pathData.sequence,
+          pathData.variables,
+        )
+      : new Map<string, Point>(),
+  );
+
   $: path = (() => {
     // Hide main path when in multi-path mode (isolated visualization)
     if ($activePaths.length > 0) {
@@ -2044,9 +2081,18 @@
 
     lines.forEach((line, idx) => {
       if (!line || !line.endPoint) return; // Skip invalid lines or lines without endPoint
-      let _startPoint =
-        idx === 0 ? startPoint : lines[idx - 1]?.endPoint || null;
-      if (!_startPoint) return; // Skip if previous line's endPoint is missing
+      // No start point means the route does not reach this path, so it is not
+      // drawn — the field always matches the step list.
+      const _startPoint = lineStartPoints.get(line.id || "");
+      if (!_startPoint) return;
+
+      // A path switched off by its own "Enabled if" condition stays visible
+      // but faded. Paths inside an if block are never faded — the block header
+      // reports whether it runs.
+      const baseOpacity = settings.pathOpacity || 1.0;
+      const opacity = inactiveLineIds.has(line.id || "")
+        ? baseOpacity * 0.25
+        : baseOpacity;
 
       _path.push(
         ...createPathDrawElements(
@@ -2054,8 +2100,9 @@
           _startPoint,
           `line-${idx + 1}`,
           line.color,
-          settings.pathOpacity || 1.0,
+          opacity,
           settings,
+          travelStates.get(line.id || ""),
         ),
       );
     });
@@ -2074,8 +2121,9 @@
 
     secondLines.forEach((line, idx) => {
       if (!line || !line.endPoint) return;
-      let _startPoint =
-        idx === 0 ? secondStartPoint : secondLines[idx - 1]?.endPoint || null;
+      // Route order, matching the main path: a path the sequence never reaches
+      // is not drawn.
+      const _startPoint = secondLineStartPoints.get(line.id || "") || null;
       if (!_startPoint) return;
 
       _path.push(
@@ -2089,6 +2137,7 @@
             ...settings,
             showVelocityGradient: settings.showVelocityGradient,
           },
+          secondTravelStates.get(line.id || ""),
         ),
       );
     });
@@ -2107,10 +2156,11 @@
     const pathOpacityBase = settings.pathOpacity || 1.0;
     const opacity = (1.0 - (pathIdx * 0.1)) * pathOpacityBase;
 
+    const startPoints = additionalLineStartPoints[pathIdx];
+
     pathData.lines.forEach((line, idx) => {
       if (!line || !line.endPoint) return;
-      let _startPoint =
-        idx === 0 ? pathData.startPoint : pathData.lines[idx - 1]?.endPoint || null;
+      const _startPoint = startPoints?.get(line.id || "") || null;
       if (!_startPoint) return;
 
       _path.push(
@@ -2124,6 +2174,7 @@
             ...pathData.settings,
             showVelocityGradient: settings.showVelocityGradient,
           },
+          additionalTravelStates[pathIdx]?.get(line.id || ""),
         ),
       );
     });
@@ -2140,6 +2191,7 @@
           pathData.lines,
           pathData.settings,
           pathData.sequence,
+          pathData.variables,
         );
         return Math.max(maxTime, pathTime.totalTime || 0);
       }, 0);
@@ -2174,6 +2226,7 @@
           pathData.lines,
           pathData.settings,
           pathData.sequence,
+          pathData.variables,
         );
         return buildPathAnnotations(
           `additional-${pathIndex}`,
@@ -2181,6 +2234,8 @@
           pathData.lines,
           pathTime,
           pathData.settings,
+          pathData.sequence,
+          pathData.variables,
         );
       });
     }
@@ -2191,6 +2246,8 @@
       lines,
       timePrediction,
       settings,
+      sequence,
+      variables,
     );
 
     if ($dualPathMode && secondStartPoint && secondLines.length > 0) {
@@ -2201,6 +2258,8 @@
           secondLines,
           secondTimePrediction,
           settings,
+          secondSequence,
+          variables,
         ),
       );
     }
@@ -2219,6 +2278,7 @@
           pathData.lines,
           pathData.settings,
           pathData.sequence,
+          pathData.variables,
         );
         return buildEventPins(
           `additional-${pathIndex}`,
@@ -2226,6 +2286,8 @@
           pathData.lines,
           pathTime,
           pathData.settings,
+          pathData.sequence,
+          pathData.variables,
         );
       });
     }
@@ -2236,6 +2298,8 @@
       lines,
       timePrediction,
       settings,
+      sequence,
+      variables,
     );
 
     if ($dualPathMode && secondStartPoint && secondLines.length > 0) {
@@ -2246,6 +2310,8 @@
           secondLines,
           secondTimePrediction,
           settings,
+          secondSequence,
+          variables,
         ),
       );
     }
@@ -2265,6 +2331,7 @@
           pathData.lines,
           pathData.settings,
           pathData.sequence,
+          pathData.variables,
         );
         const overlay = buildEventTimelineOverlays(
           `additional-${pathIndex}`,
@@ -2273,6 +2340,7 @@
           pathTime,
           pathData.settings,
           pathData.sequence,
+          pathData.variables,
         );
         acc.elements.push(...overlay.elements);
         acc.labels.push(...overlay.labels);
@@ -2287,6 +2355,7 @@
       timePrediction,
       settings,
       sequence,
+      variables,
     );
 
     if ($dualPathMode && secondStartPoint && secondLines.length > 0) {
@@ -2297,6 +2366,7 @@
         secondTimePrediction,
         settings,
         secondSequence,
+        variables,
       );
       overlays.elements.push(...secondOverlay.elements);
       overlays.labels.push(...secondOverlay.labels);
@@ -2320,6 +2390,7 @@
           pathData.lines,
           pathData.settings,
           pathData.sequence,
+          pathData.variables,
         );
         const maxDuration = effectiveAnimationDuration;
         const thisDuration = getAnimationDuration(pathTimePrediction.totalTime / 1000);
@@ -2404,6 +2475,8 @@
         lines,
         timePrediction,
         settings,
+        lineStartPoints,
+        headingTransitions,
       );
       overlays.push(
         ...buildOnionSwerveModules(
@@ -2413,6 +2486,7 @@
           mainLayers,
           0.72,
           settings.onionColor || "#dc2626",
+          lineStartPoints,
         ),
       );
 
@@ -2422,6 +2496,8 @@
           secondLines,
           secondTimePrediction,
           settings,
+          secondLineStartPoints,
+          secondHeadingTransitions,
         );
         overlays.push(
           ...buildOnionSwerveModules(
@@ -2517,6 +2593,8 @@
         settings.rWidth,
         settings.rHeight,
         50,
+        lineStartPoints,
+        headingTransitions,
       );
 
       if (ghostPoints.length >= 3) {
@@ -2591,6 +2669,8 @@
         settings.rWidth,
         settings.rHeight,
         50,
+        secondLineStartPoints,
+        secondHeadingTransitions,
       );
 
       if (ghostPoints.length >= 3) {
@@ -2663,6 +2743,8 @@
           settings.rWidth,
           settings.rHeight,
           50,
+          additionalLineStartPoints[pathIdx],
+          additionalHeadingTransitions[pathIdx],
         );
 
         if (ghostPoints.length >= 3) {
@@ -2729,49 +2811,16 @@
 
     // Don't show onion layers in multi-path mode
     if ($activePaths.length === 0 && settings.showOnionLayers && lines.length > 0) {
-      const spacing = settings.onionLayerSpacing || 6;
-      let layers = generateOnionLayers(
+      // Same helper the swerve overlay uses, so the two can never disagree
+      // about which layers are visible.
+      const layers = getVisibleOnionLayers(
         startPoint,
         lines,
-        settings.rWidth,
-        settings.rHeight,
-        spacing,
+        timePrediction,
+        settings,
+        lineStartPoints,
+        headingTransitions,
       );
-
-      // If user requested onion layers only for the next point, filter to the relevant line
-      if (
-        settings.onionNextPointOnly &&
-        timePrediction &&
-        timePrediction.timeline
-      ) {
-        const currentTime = (timePrediction.totalTime || 0) * (percent / 100);
-        const travelEvents = (timePrediction.timeline || []).filter(
-          (ev) => ev.type === "travel",
-        );
-
-        let selectedLineIndex: number | null = null;
-
-        // Current travel segment
-        const currentTravel = travelEvents.find(
-          (ev) => ev.startTime <= currentTime && ev.endTime >= currentTime,
-        );
-        if (currentTravel) {
-          selectedLineIndex = currentTravel.lineIndex as number;
-        } else {
-          // Next upcoming travel segment
-          const nextTravel = travelEvents.find(
-            (ev) => ev.startTime > currentTime,
-          );
-          if (nextTravel) selectedLineIndex = nextTravel.lineIndex as number;
-          else if (travelEvents.length)
-            selectedLineIndex = travelEvents[travelEvents.length - 1]
-              .lineIndex as number;
-        }
-
-        if (selectedLineIndex !== null) {
-          layers = layers.filter((l: any) => l.lineIndex === selectedLineIndex);
-        }
-      }
 
       layers.forEach((layer, idx) => {
         // Create a rectangle from the robot corners
@@ -2835,53 +2884,72 @@
     return onionLayers;
   })();
 
+  /**
+   * The robot drawn where it comes too close to something, so the problem is
+   * visible as a shape on the field rather than only as a number in a list.
+   * Red for contact, amber for inside the margin.
+   */
+  $: clearanceElements = (() => {
+    const elements: Path[] = [];
+    if ($activePaths.length > 0 || settings.showClearance === false) return elements;
+
+    clearanceReport.spans.forEach((span, index) => {
+      const outline = span.worstFootprint;
+      if (!outline?.length) return;
+
+      const vertices = outline.map((corner, cornerIndex) =>
+        new Two.Anchor(
+          x(corner.x),
+          y(corner.y),
+          0,
+          0,
+          0,
+          0,
+          cornerIndex === 0 ? Two.Commands.move : Two.Commands.line,
+        ),
+      );
+      vertices.push(
+        new Two.Anchor(
+          x(outline[0].x),
+          y(outline[0].y),
+          0,
+          0,
+          0,
+          0,
+          Two.Commands.close,
+        ),
+      );
+      vertices.forEach((point) => (point.relative = false));
+
+      const hit = span.severity === "hit";
+      const body = new Two.Path(vertices);
+      body.id = `clearance-${index}-${span.lineId}`;
+      body.stroke = hit ? "#dc2626" : "#f59e0b";
+      body.fill = hit ? "rgba(220, 38, 38, 0.22)" : "rgba(245, 158, 11, 0.16)";
+      body.linewidth = x(hit ? 0.4 : 0.3);
+      body.opacity = 0.95;
+      body.automatic = false;
+
+      elements.push(body);
+    });
+
+    return elements;
+  })();
+
   // Second onion layers for dual path mode
   $: secondOnionLayerElements = (() => {
     let onionLayers: Path[] = [];
 
     // Don't show second onion layers in multi-path mode
     if ($activePaths.length === 0 && $dualPathMode && settings.showOnionLayers && secondLines.length > 0 && secondStartPoint) {
-      const spacing = settings.onionLayerSpacing || 6;
-      let layers = generateOnionLayers(
+      const layers = getVisibleOnionLayers(
         secondStartPoint,
         secondLines,
-        settings.rWidth,
-        settings.rHeight,
-        spacing,
+        secondTimePrediction,
+        settings,
+        secondLineStartPoints,
+        secondHeadingTransitions,
       );
-
-      // If user requested onion layers only for the next point, filter to the relevant line
-      if (
-        settings.onionNextPointOnly &&
-        secondTimePrediction &&
-        secondTimePrediction.timeline
-      ) {
-        const currentTime = (secondTimePrediction.totalTime || 0) * (percent / 100);
-        const travelEvents = (secondTimePrediction.timeline || []).filter(
-          (ev) => ev.type === "travel",
-        );
-
-        let selectedLineIndex: number | null = null;
-
-        const currentTravel = travelEvents.find(
-          (ev) => ev.startTime <= currentTime && ev.endTime >= currentTime,
-        );
-        if (currentTravel) {
-          selectedLineIndex = currentTravel.lineIndex as number;
-        } else {
-          const nextTravel = travelEvents.find(
-            (ev) => ev.startTime > currentTime,
-          );
-          if (nextTravel) selectedLineIndex = nextTravel.lineIndex as number;
-          else if (travelEvents.length)
-            selectedLineIndex = travelEvents[travelEvents.length - 1]
-              .lineIndex as number;
-        }
-
-        if (selectedLineIndex !== null) {
-          layers = layers.filter((l: any) => l.lineIndex === selectedLineIndex);
-        }
-      }
 
       layers.forEach((layer, idx) => {
         let vertices: any[] = [];
@@ -2942,10 +3010,21 @@
   })();
 
   let isLoaded = false;
+  /**
+   * Loading a file replaces every tracked value, which would otherwise trip the
+   * watcher below and mark the freshly opened project as unsaved. Loaders set
+   * this so the next pass is treated as "already saved".
+   */
+  let suppressUnsavedOnce = false;
   // Reactively trigger when any saveable data changes
   $: {
-    if (isLoaded && (lines || shapes || startPoint || settings)) {
-      isUnsaved.set(true);
+    if (isLoaded && (lines || shapes || startPoint || settings || sequence || variables)) {
+      if (suppressUnsavedOnce) {
+        suppressUnsavedOnce = false;
+        isUnsaved.set(false);
+      } else {
+        isUnsaved.set(true);
+      }
     }
   }
 
@@ -3025,9 +3104,7 @@
         shapes: pathData.shapes,
         sequence: pathData.sequence,
         pathChains: pathData.pathChains || [],
-        poseVariables: pathData.poseVariables || [],
-        pathVariables: pathData.pathVariables || [],
-        numberVariables: pathData.numberVariables || [],
+        variables: pathData.variables || [],
         settings: pathData.settings,
         version: "1.2.1",
         timestamp: new Date().toISOString(),
@@ -3144,20 +3221,21 @@
             pathData.startPoint,
             pathData.lines,
             pathData.settings,
-            pathData.sequence
+            pathData.sequence,
+            pathData.variables,
           );
           totalDuration = Math.max(totalDuration, pathTime?.totalTime || 0);
         }
       } else if (hasDualPath) {
         // Dual path mode - use the longer path
-        const path1Time = calculatePathTime(startPoint, lines, settings, sequence);
+        const path1Time = calculatePathTime(startPoint, lines, settings, sequence, variables);
         const path2Time = secondStartPoint 
-          ? calculatePathTime(secondStartPoint, secondLines, settings, secondSequence)
+          ? calculatePathTime(secondStartPoint, secondLines, settings, secondSequence, variables)
           : { totalTime: 0 };
         totalDuration = Math.max(path1Time?.totalTime || 0, path2Time?.totalTime || 0);
       } else {
         // Single path mode
-        const pathTime = calculatePathTime(startPoint, lines, settings, sequence);
+        const pathTime = calculatePathTime(startPoint, lines, settings, sequence, variables);
         totalDuration = pathTime?.totalTime || 0;
       }
 
@@ -3345,7 +3423,8 @@
         pathData.startPoint,
         pathData.lines,
         pathData.settings,
-        pathData.sequence
+        pathData.sequence,
+        pathData.variables,
       );
       
       if (pathTimePrediction && pathTimePrediction.timeline && pathData.lines.length > 0 && pathData.startPoint) {
@@ -3413,6 +3492,9 @@
     if (secondOnionLayerElements.length > 0) {
       two.add(...secondOnionLayerElements);
     }
+    if (clearanceElements.length > 0) {
+      two.add(...clearanceElements);
+    }
     two.add(...path);
     if ($dualPathMode && secondPath.length > 0) {
       two.add(...secondPath);
@@ -3441,9 +3523,7 @@
         shapes,
         sequence,
         pathChains,
-        poseVariables,
-        pathVariables,
-        numberVariables,
+        variables,
         settings,
         version: "1.2.1",
         timestamp: new Date().toISOString(),
@@ -3541,9 +3621,7 @@
           shapes,
           sequence,
           pathChains,
-          poseVariables,
-          pathVariables,
-          numberVariables,
+          variables,
           settings,
         );
       } catch (err2) {
@@ -3552,27 +3630,6 @@
           "Failed to save file. Your browser may not support file picker APIs.",
         );
       }
-    }
-  }
-
-  function animate(timestamp: number) {
-    if (!startTime) {
-      startTime = timestamp;
-    }
-
-    if (previousTime !== null) {
-      const deltaTime = timestamp - previousTime;
-      if (percent >= 100) {
-        percent = 0;
-      } else {
-        percent += (0.65 / lines.length) * (deltaTime * 0.1);
-      }
-    }
-
-    previousTime = timestamp;
-
-    if (playing) {
-      requestAnimationFrame(animate);
     }
   }
 
@@ -3603,8 +3660,6 @@
       fitted: true,
       type: Two.Types.svg,
     }).appendTo(twoElement);
-
-    updateRobotImageDisplay();
 
     let currentElem: string | null = null;
     let isDown = false;
@@ -3690,8 +3745,8 @@
             if (point === 0 && secondLines[line].endPoint) {
               secondLines[line].endPoint.x = inchX;
               secondLines[line].endPoint.y = inchY;
-            } else {
-              if (secondLines[line]?.locked) return;
+            } else if (secondLines[line].controlPoints?.[point - 1]) {
+              if (secondLines[line].locked) return;
               secondLines[line].controlPoints[point - 1].x = inchX;
               secondLines[line].controlPoints[point - 1].y = inchY;
             }
@@ -3742,8 +3797,11 @@
               if (lines[line].endPoint.poseVariableId) return;
               lines[line].endPoint.x = inchX;
               lines[line].endPoint.y = inchY;
-            } else {
-              if (lines[line]?.locked) return;
+            } else if (lines[line].controlPoints?.[point - 1]) {
+              // The control point can disappear mid-drag (undo, reload, a
+              // removal); writing to it blindly would throw and stop the
+              // whole editor from updating.
+              if (lines[line].locked) return;
               lines[line].controlPoints[point - 1].x = inchX;
               lines[line].controlPoints[point - 1].y = inchY;
             }
@@ -3939,9 +3997,7 @@
           shapes,
           sequence,
           pathChains,
-          poseVariables,
-          pathVariables,
-          numberVariables,
+          variables,
           settings,
           version: "1.2.1",
           timestamp: new Date().toISOString(),
@@ -3985,11 +4041,7 @@
 
 	    // Parse and load the uploaded file, then cache it into the browser store.
 	    loadTrajectoryFromFile(evt, async (data) => {
-	      const loadedNumberVariables = normalizeNumberVariables(data.numberVariables);
-	      const loadedPoseVariables = normalizePoseVariables(
-	        data.poseVariables,
-	        loadedNumberVariables,
-	      );
+	      const loadedVariables = normalizeVariables(data);
 
       // Ensure startPoint has all required fields
       const loadedStartPoint = resolvePointExpressions(data.startPoint || {
@@ -3997,30 +4049,24 @@
         y: 72,
         heading: "tangential",
         reverse: false,
-      }, loadedNumberVariables);
+      }, loadedVariables);
 
       // Normalize lines with all required fields
-	      const normalizedLines = applyNumberVariablesToLines(
+	      const normalizedLines = applyVariablesToLines(
 	        normalizeLines(data.lines || []),
-	        loadedNumberVariables,
+	        loadedVariables,
 	      );
       const normalizedPath = applyPoseVariablesToPath(
         loadedStartPoint,
         normalizedLines,
-        loadedPoseVariables,
+        poseVariablesOf(loadedVariables),
       );
       startPoint = normalizedPath.startPoint;
 	      lines = normalizedPath.lines;
-	      poseVariables = loadedPoseVariables;
-	      numberVariables = loadedNumberVariables;
-	      pathVariables = normalizePathVariables(
-	        data.pathVariables,
-	        loadedPoseVariables,
-	        loadedNumberVariables,
-	      );
+	      variables = loadedVariables;
 
       // Derive sequence from data or create default
-	      sequence = applyNumberVariablesToSequence(
+	      sequence = applyVariablesToSequence(
 	        (
 	          data.sequence && data.sequence.length
 	            ? data.sequence
@@ -4029,7 +4075,7 @@
 	                lineId: ln.id!,
 	              }))
 	        ) as SequenceItem[],
-	        loadedNumberVariables,
+	        loadedVariables,
 	      );
       pathChains = normalizePathChains(data.pathChains, normalizedPath.lines);
 
@@ -4043,6 +4089,7 @@
         robotHeight = settings.rHeight;
       }
 
+      suppressUnsavedOnce = true;
       isUnsaved.set(false);
       recordChange();
 
@@ -4064,11 +4111,7 @@
 
   // Helper function to load data into app state
 	  function loadData(data: any) {
-	    const loadedNumberVariables = normalizeNumberVariables(data.numberVariables);
-	    const loadedPoseVariables = normalizePoseVariables(
-	      data.poseVariables,
-	      loadedNumberVariables,
-	    );
+	    const loadedVariables = normalizeVariables(data);
 
     // Ensure startPoint has all required fields
     const loadedStartPoint = resolvePointExpressions(data.startPoint || {
@@ -4076,30 +4119,24 @@
       y: 72,
       heading: "tangential",
       reverse: false,
-    }, loadedNumberVariables);
+    }, loadedVariables);
 
     // Normalize lines with all required fields
-	    const normalizedLines = applyNumberVariablesToLines(
+	    const normalizedLines = applyVariablesToLines(
 	      normalizeLines(data.lines || []),
-	      loadedNumberVariables,
+	      loadedVariables,
 	    );
     const normalizedPath = applyPoseVariablesToPath(
       loadedStartPoint,
       normalizedLines,
-      loadedPoseVariables,
+      poseVariablesOf(loadedVariables),
     );
     startPoint = normalizedPath.startPoint;
 	    lines = normalizedPath.lines;
-	    poseVariables = loadedPoseVariables;
-	    numberVariables = loadedNumberVariables;
-	    pathVariables = normalizePathVariables(
-	      data.pathVariables,
-	      loadedPoseVariables,
-	      loadedNumberVariables,
-	    );
+	    variables = loadedVariables;
 
     // Derive sequence from data or create default
-	    sequence = applyNumberVariablesToSequence(
+	    sequence = applyVariablesToSequence(
 	      (
 	        data.sequence && data.sequence.length
 	          ? data.sequence
@@ -4108,7 +4145,7 @@
 	              lineId: ln.id!,
 	            }))
 	      ) as SequenceItem[],
-	      loadedNumberVariables,
+	      loadedVariables,
 	    );
     pathChains = normalizePathChains(data.pathChains, normalizedPath.lines);
 
@@ -4122,6 +4159,7 @@
       robotHeight = settings.rHeight;
     }
 
+    suppressUnsavedOnce = true;
     isUnsaved.set(false);
     recordChange();
   }
@@ -4141,8 +4179,11 @@
     const line = lines[lineIndex];
     if (!line) throw new Error("Line not found");
 
+    // Optimize the path where the robot actually drives it: inside a repeat loop
+    // or an `if` block that is not the previous entry in `lines`.
     const startPt =
-      lineIndex === 0 ? startPoint : lines[lineIndex - 1]?.endPoint;
+      lineStartPoints.get(line.id || "") ??
+      (lineIndex === 0 ? startPoint : lines[lineIndex - 1]?.endPoint);
     if (!startPt) throw new Error("Missing start point for optimization");
 
     const waypoints = [startPt, ...line.controlPoints, line.endPoint].map(
@@ -4309,13 +4350,6 @@
     }
   }
 
-  function loadRobot(evt: Event) {
-    const file = (evt.currentTarget as HTMLInputElement).files?.[0];
-    if (file) {
-      loadRobotImage(file, () => updateRobotImageDisplay());
-    }
-  }
-
   function addNewLine() {
     lines = [
       ...lines,
@@ -4465,9 +4499,7 @@
           shapes,
           sequence,
           pathChains,
-          poseVariables,
-          pathVariables,
-          numberVariables,
+          variables,
           settings,
         });
         
@@ -4499,9 +4531,7 @@
             shapes,
             sequence,
             pathChains,
-            poseVariables,
-            pathVariables,
-            numberVariables,
+            variables,
             settings,
             version: "1.2.1",
             timestamp: new Date().toISOString(),
@@ -4528,9 +4558,7 @@
               shapes,
               sequence,
               pathChains,
-              poseVariables,
-              pathVariables,
-              numberVariables,
+              variables,
               settings,
               version: "1.2.1",
               timestamp: new Date().toISOString(),
@@ -4578,14 +4606,13 @@
 />
 
 <Navbar
+  {clearanceReport}
   bind:lines
   bind:startPoint
   bind:shapes
   bind:sequence
   bind:pathChains
-  bind:poseVariables
-  bind:pathVariables
-  bind:numberVariables
+  bind:variables
   bind:secondStartPoint
   bind:secondLines
   bind:secondShapes
@@ -4714,6 +4741,22 @@
           style={`left: ${annotation.x}px; top: ${annotation.y}px; border-left: 3px solid ${annotation.color || "#2563eb"};`}
         >
           {annotation.label}
+        </div>
+      {/each}
+
+      <!--
+        Where the robot actually comes to a full stop. Everything else is driven
+        straight through as one PathChain.
+      -->
+      {#each stopPoints as stop (stop.id)}
+        <div
+          class="absolute z-[42] pointer-events-none -translate-x-1/2 -translate-y-1/2"
+          style={`left: ${stop.x}px; top: ${stop.y}px;`}
+          title={`Full stop: ${stop.label}`}
+        >
+          <div
+            class="h-3.5 w-3.5 rounded-full border-2 border-amber-500 bg-amber-100/70 dark:bg-amber-950/70 shadow-sm"
+          />
         </div>
       {/each}
 
@@ -4912,9 +4955,7 @@ pointer-events: none; opacity: ${1.0 - idx * 0.15};`}
     bind:lines
     bind:sequence
     bind:pathChains
-    bind:poseVariables
-    bind:pathVariables
-    bind:numberVariables
+    bind:variables
     bind:robotWidth
     bind:robotHeight
     bind:settings
@@ -4929,5 +4970,6 @@ pointer-events: none; opacity: ${1.0 - idx * 0.15};`}
     {recordChange}
     {optimizeLine}
     {optimizingLineIds}
+    {clearanceReport}
   />
 </div>

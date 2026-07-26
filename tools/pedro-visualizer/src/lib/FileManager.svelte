@@ -15,19 +15,24 @@
     SequenceItem,
     PathChain,
     PoseVariable,
-    PathVariable,
-    NumberVariable,
+    Variable,
     Settings,
     EventTriggerType,
   } from "../types";
   import * as browserFileStore from "../utils/browserFileStore";
   import { currentFilePath, isUnsaved, dualPathMode, secondFilePath } from "../stores";
   import {
+    buildExpressionScope,
     getRandomColor,
+    migrateLine,
+    migrateSequenceItem,
+    migrateVariables,
     mirrorPathData,
-    resolveBasePointExpressions,
+    poseVariablesOf,
+    resolveLineExpressions,
     resolvePointExpressions,
-    resolvePoseVariableExpressions,
+    resolveSequenceItemExpressions,
+    resolveVariableValues,
   } from "../utils";
   import {
     saveAutoPathsDirectory,
@@ -41,9 +46,7 @@
   export let shapes: Shape[];
   export let sequence: SequenceItem[];
   export let pathChains: PathChain[] = [];
-  export let poseVariables: PoseVariable[] = [];
-  export let pathVariables: PathVariable[] = [];
-  export let numberVariables: NumberVariable[] = [];
+  export let variables: Variable[] = [];
   export let settings: Settings;
   export let secondStartPoint: Point | null = null;
   export let secondLines: Line[] = [];
@@ -151,210 +154,103 @@
     }));
   }
 
-  function normalizePoseVariables(
-    input: PoseVariable[] | undefined,
-    sourceNumberVariables: NumberVariable[] = [],
-  ): PoseVariable[] {
-    if (!Array.isArray(input)) return [];
+  /** Fills in missing ids/names so every variable is addressable. */
+  function normalizeVariable(variable: Variable, index: number): Variable {
+    const id = variable.id || `var-${Math.random().toString(36).slice(2)}`;
+    const name = (variable.name || "").trim() || `value${index + 1}`;
 
-    return resolvePoseVariableExpressions(
-      input.map((variable, index) => ({
-      id: variable.id || `pose-${Math.random().toString(36).slice(2)}`,
-      name: (variable.name || "").trim() || `Pose ${index + 1}`,
-      x: Number.isFinite(Number(variable.x)) ? Number(variable.x) : 0,
-      xExpression:
-        typeof variable.xExpression === "string" ? variable.xExpression.trim() || undefined : undefined,
-      y: Number.isFinite(Number(variable.y)) ? Number(variable.y) : 0,
-      yExpression:
-        typeof variable.yExpression === "string" ? variable.yExpression.trim() || undefined : undefined,
-      heading: Number.isFinite(Number(variable.heading))
-        ? Number(variable.heading)
-        : 0,
-      headingExpression:
-        typeof variable.headingExpression === "string"
-          ? variable.headingExpression.trim() || undefined
-          : undefined,
-    })),
-      sourceNumberVariables,
-    );
-  }
-
-  function normalizeNumberVariables(input: NumberVariable[] | undefined): NumberVariable[] {
-    if (!Array.isArray(input)) return [];
-
-    return input.map((variable, index) => {
-      const value = Number(variable.value);
+    if (variable.type === "pose") {
       return {
-        id: variable.id || `number-${Math.random().toString(36).slice(2)}`,
-        name: (variable.name || "").trim() || `Number ${index + 1}`,
-        value: Number.isFinite(value) ? value : 0,
+        ...variable,
+        id,
+        name,
+        x: Number.isFinite(Number(variable.x)) ? Number(variable.x) : 0,
+        y: Number.isFinite(Number(variable.y)) ? Number(variable.y) : 0,
+        heading: Number.isFinite(Number(variable.heading))
+          ? Number(variable.heading)
+          : 0,
       };
-    });
+    }
+
+    if (variable.type === "number") {
+      const value = Number(variable.value);
+      return { ...variable, id, name, value: Number.isFinite(value) ? value : 0 };
+    }
+
+    if (variable.type === "boolean") {
+      return { ...variable, id, name, value: Boolean(variable.value) };
+    }
+
+    return { ...variable, id, name };
   }
 
-  function numberVariableValue(
-    variableId: string | undefined,
-    variablesById: Map<string, NumberVariable>,
-    fallback: number,
-  ): number {
-    if (!variableId) return fallback;
-    const value = Number(variablesById.get(variableId)?.value);
-    return Number.isFinite(value) ? value : fallback;
-  }
-
-  function positionVariableValue(
-    variableId: string | undefined,
-    variablesById: Map<string, NumberVariable>,
-    fallback: number,
-  ): number {
-    const value = numberVariableValue(variableId, variablesById, fallback);
-    return Math.max(0, Math.min(1, value > 1 ? value / 100 : value));
-  }
-
-  function applyNumberVariablesToLines(
-    sourceLines: Line[],
-    sourceNumberVariables: NumberVariable[],
-  ): Line[] {
-    const variablesById = new Map(
-      sourceNumberVariables.map((variable) => [variable.id, variable]),
+  /** Builds the unified variable list, accepting the legacy per-type arrays. */
+  function normalizeVariables(source: {
+    variables?: Variable[];
+    numberVariables?: any[];
+    poseVariables?: any[];
+    pathVariables?: any[];
+  }): Variable[] {
+    const resolved = resolveVariableValues(
+      migrateVariables(source).map(normalizeVariable),
     );
+    const poses = poseVariablesOf(resolved);
 
-    return sourceLines.map((line) => ({
-      ...line,
-      endPoint: line.endPoint.poseVariableId
-        ? line.endPoint
-        : resolvePointExpressions(line.endPoint, sourceNumberVariables),
-      controlPoints: (line.controlPoints || []).map((point) =>
-        resolveBasePointExpressions(point, sourceNumberVariables),
-      ),
-      speed: Math.max(
-        0.05,
-        Math.min(
-          1,
-          numberVariableValue(
-            line.speedVariableId,
-            variablesById,
-            Number(line.speed ?? 1) || 1,
-          ),
-        ),
-      ),
-      eventMarkers: (line.eventMarkers || []).map((marker) => ({
-        ...marker,
-        position: positionVariableValue(
-          marker.positionVariableId,
-          variablesById,
-          Number(marker.position ?? 0.5) || 0.5,
-        ),
-        triggerMs: Math.max(
-          0,
-          Math.round(
-            numberVariableValue(
-              marker.triggerMsVariableId,
-              variablesById,
-              Number(marker.triggerMs ?? 0) || 0,
-            ),
-          ),
-        ),
-        poseX: numberVariableValue(
-          marker.poseXVariableId,
-          variablesById,
-          Number(marker.poseX ?? line.endPoint?.x ?? 0) || 0,
-        ),
-        poseY: numberVariableValue(
-          marker.poseYVariableId,
-          variablesById,
-          Number(marker.poseY ?? line.endPoint?.y ?? 0) || 0,
-        ),
-        durationMs: Math.max(
-          0,
-          Math.round(
-            numberVariableValue(
-              marker.durationVariableId,
-              variablesById,
-              Number(marker.durationMs ?? 0) || 0,
-            ),
-          ),
-        ),
-      })),
-    }));
-  }
+    return resolved.map((variable) => {
+      if (variable.type !== "path") return variable;
 
-  function applyNumberVariablesToSequence(
-    sourceSequence: SequenceItem[],
-    sourceNumberVariables: NumberVariable[],
-  ): SequenceItem[] {
-    const variablesById = new Map(
-      sourceNumberVariables.map((variable) => [variable.id, variable]),
-    );
-
-    return sourceSequence.map((item) => {
-      if (item.kind === "repeat") {
-        return {
-          ...item,
-          count: Math.max(
-            1,
-            Math.min(
-              20,
-              Math.round(
-                numberVariableValue(item.countVariableId, variablesById, item.count),
-              ),
-            ),
-          ),
-        };
-      }
-
-      if (item.kind === "wait" || item.kind === "event") {
-        return {
-          ...item,
-          durationMs: Math.max(
-            0,
-            Math.round(
-              numberVariableValue(
-                item.durationVariableId,
-                variablesById,
-                item.durationMs,
-              ),
-            ),
-          ),
-        };
-      }
-
-      return item;
-    });
-  }
-
-  function normalizePathVariables(
-    input: PathVariable[] | undefined,
-    sourcePoseVariables: PoseVariable[] = [],
-    sourceNumberVariables: NumberVariable[] = [],
-  ): PathVariable[] {
-    if (!Array.isArray(input)) return [];
-
-    return input.map((variable, index) => {
-      const normalizedLines = applyNumberVariablesToLines(
+      const normalizedLines = applyVariablesToLines(
         normalizeLines(variable.lines || []),
-        sourceNumberVariables,
-      );
-      const resolvedPoseVariables = resolvePoseVariableExpressions(
-        sourcePoseVariables,
-        sourceNumberVariables,
+        resolved,
       );
       const normalizedPath = applyPoseVariablesToLoadedPath(
         resolvePointExpressions(
-          variable.startPoint || startPoint,
-          sourceNumberVariables,
+          variable.startPoint || {
+            x: 72,
+            y: 72,
+            heading: "tangential",
+            reverse: false,
+          },
+          resolved,
         ),
         normalizedLines,
-        resolvedPoseVariables,
+        poses,
       );
 
       return {
-        id: variable.id || `path-variable-${Math.random().toString(36).slice(2)}`,
-        name: (variable.name || "").trim() || `Path Variable ${index + 1}`,
+        ...variable,
         startPoint: normalizedPath.startPoint,
         lines: normalizedPath.lines,
       };
     });
+  }
+
+  function applyVariablesToLines(
+    sourceLines: Line[],
+    sourceVariables: Variable[],
+  ): Line[] {
+    const scope = buildExpressionScope(sourceVariables);
+    return sourceLines.map((line) =>
+      resolveLineExpressions(
+        migrateLine(line, sourceVariables),
+        sourceVariables,
+        scope,
+      ),
+    );
+  }
+
+  function applyVariablesToSequence(
+    sourceSequence: SequenceItem[],
+    sourceVariables: Variable[],
+  ): SequenceItem[] {
+    const scope = buildExpressionScope(sourceVariables);
+    return sourceSequence.map((item) =>
+      resolveSequenceItemExpressions(
+        migrateSequenceItem(item, sourceVariables),
+        sourceVariables,
+        scope,
+      ),
+    );
   }
 
   function createCurrentSaveData() {
@@ -364,11 +260,9 @@
       shapes,
       sequence,
       pathChains,
-      poseVariables,
-      pathVariables,
-      numberVariables,
+      variables,
       settings,
-      version: "1.2.1",
+      version: "1.3.0",
       timestamp: new Date().toISOString(),
     };
   }
@@ -590,37 +484,27 @@
         throw new Error("Invalid file format: missing required fields");
       }
 
-      const loadedNumberVariables = normalizeNumberVariables(data.numberVariables);
-      const loadedPoseVariables = normalizePoseVariables(
-        data.poseVariables,
-        loadedNumberVariables,
-      );
+      const loadedVariables = normalizeVariables(data);
 
       // Update the application state
-      const normalizedLines = applyNumberVariablesToLines(
+      const normalizedLines = applyVariablesToLines(
         normalizeLines(data.lines || []),
-        loadedNumberVariables,
+        loadedVariables,
       );
       const normalizedPath = applyPoseVariablesToLoadedPath(
-        resolvePointExpressions(data.startPoint, loadedNumberVariables),
+        resolvePointExpressions(data.startPoint, loadedVariables),
         normalizedLines,
-        loadedPoseVariables,
+        poseVariablesOf(loadedVariables),
       );
       startPoint = normalizedPath.startPoint;
       lines = normalizedPath.lines;
       shapes = data.shapes || [];
-      sequence = applyNumberVariablesToSequence(
+      sequence = applyVariablesToSequence(
         deriveSequence(data, normalizedPath.lines),
-        loadedNumberVariables,
+        loadedVariables,
       );
       pathChains = data.pathChains || [];
-      poseVariables = loadedPoseVariables;
-      numberVariables = loadedNumberVariables;
-      pathVariables = normalizePathVariables(
-        data.pathVariables,
-        loadedPoseVariables,
-        loadedNumberVariables,
-      );
+      variables = loadedVariables;
       if (data.settings) {
         settings = { ...settings, ...data.settings };
       }

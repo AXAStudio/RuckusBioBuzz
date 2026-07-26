@@ -6,9 +6,7 @@
     Settings,
     SequenceItem,
     PathChain,
-    PoseVariable,
-    PathVariable,
-    NumberVariable,
+    Variable,
   } from "../types";
   import { onMount, onDestroy } from "svelte";
   import {
@@ -33,7 +31,12 @@
   import SettingsDialog from "./components/SettingsDialog.svelte";
   import ExportCodeDialog from "./components/ExportCodeDialog.svelte";
   import MultiplePathsDialog from "./components/MultiplePathsDialog.svelte";
-  import { calculatePathTime, formatTime } from "../utils";
+  import {
+    calculatePathTime,
+    EMPTY_CLEARANCE_REPORT,
+    formatTime,
+    type ClearanceReport,
+  } from "../utils";
   import html2canvas from "html2canvas";
 
   export let loadFile: (evt: any) => any;
@@ -43,9 +46,7 @@
   export let shapes: Shape[];
   export let sequence: SequenceItem[];
   export let pathChains: PathChain[] = [];
-  export let poseVariables: PoseVariable[] = [];
-  export let pathVariables: PathVariable[] = [];
-  export let numberVariables: NumberVariable[] = [];
+  export let variables: Variable[] = [];
   export let secondStartPoint: Point | null = null;
   export let secondLines: Line[] = [];
   export let secondShapes: Shape[] = [];
@@ -54,6 +55,11 @@
   export let robotWidth: number;
   export let robotHeight: number;
   export let settings: Settings;
+  /**
+   * Where the robot's body comes too close to something solid. The export
+   * warnings read it so a collision is raised before the auto reaches a match.
+   */
+  export let clearanceReport: ClearanceReport = EMPTY_CLEARANCE_REPORT;
 
   export let saveProject: () => any;
   export let saveFileAs: () => any;
@@ -93,7 +99,7 @@
     exportMenuOpen = false;
   }
 
-  $: timePrediction = calculatePathTime(startPoint, lines, settings, sequence);
+  $: timePrediction = calculatePathTime(startPoint, lines, settings, sequence, variables);
   $: elapsedSeconds = (percent / 100) * (timePrediction?.totalTime || 0);
 
   onMount(() => {
@@ -178,14 +184,25 @@
 
   function resetPath() {
     startPoint = getDefaultStartPoint();
-    lines = getDefaultLines();
+    lines = getDefaultLines().map((ln) => ({
+      ...ln,
+      id: ln.id || `line-${Math.random().toString(36).slice(2)}`,
+    }));
     sequence = lines.map((ln) => ({
       kind: "path",
-      lineId: ln.id || `line-${Math.random().toString(36).slice(2)}`,
+      lineId: ln.id!,
     }));
-    poseVariables = [];
-    pathVariables = [];
-    numberVariables = [];
+    variables = [];
+    // Chains reference the old line ids, so leaving them behind would keep an
+    // empty chain around and drop the fresh path out of every chain.
+    pathChains = [
+      {
+        id: `chain-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+        name: "Main Chain",
+        color: getRandomColor(),
+        lineIds: lines.map((ln) => ln.id!),
+      },
+    ];
     shapes = getDefaultShapes();
   }
 
@@ -291,9 +308,7 @@
     bind:shapes
     bind:sequence
     bind:pathChains
-    bind:poseVariables
-    bind:pathVariables
-    bind:numberVariables
+    bind:variables
     bind:settings
     bind:secondStartPoint
     bind:secondLines
@@ -309,8 +324,8 @@
   bind:lines
   bind:sequence
   bind:pathChains
-  bind:poseVariables
-  bind:numberVariables
+  bind:variables
+  {clearanceReport}
 />
 
 <SettingsDialog bind:isOpen={settingsOpen} bind:settings />

@@ -23,6 +23,7 @@ public class blobDetection implements VisionProcessor {
     public String hex = "";
     int x, y, x2, y2;
     public double rawAngle;
+    public List<Double> rgbCoeffs = new ArrayList<>(List.of(130.0, 130.0, 100.0));
     public int frameWidth, frameHeight;
     public List<Integer> xList = new ArrayList<>();
     public double median;
@@ -65,7 +66,7 @@ public class blobDetection implements VisionProcessor {
                 int g = (int) mean.val[1];
                 int b = (int) mean.val[2];
 
-                if (r > 130 && g > 130 && b < 100) { // must tune on field before using this code
+                if (r > rgbCoeffs.get(0) && g > rgbCoeffs.get(1) && b < rgbCoeffs.get(2)) { // must tune on field before using this code
                     xList.add((x+x2)/2);
                     //UNNECESSARY TESTING MASK EFFICIENCY BOOST:
                     if(y < lastTopY) {

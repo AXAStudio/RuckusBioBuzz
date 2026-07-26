@@ -1,7 +1,13 @@
 <script lang="ts">
-  import type { Shape } from "../../types";
-  import { createTriangle } from "../../utils";
+  import type { Shape, Variable } from "../../types";
+  import {
+    createTriangle,
+    pointCoordinateFieldDisplayValue,
+    resolveBasePointExpressions,
+  } from "../../utils";
   import { snapToGrid, showGrid, gridSize } from "../../stores";
+  import ExpressionInput from "./ExpressionInput.svelte";
+  import { scrubbable } from "../../utils/scrub";
 
   const colorChoices = [
     { label: "Red", color: "#dc2626", fill: "#ff6b6b" },
@@ -10,14 +16,51 @@
 
   function setPresetColor(shape: Shape, color: string) {
     const choice = colorChoices.find((c) => c.color === color);
-    if (choice) {
-      shape.color = choice.color;
-      shape.fillColor = choice.fill;
-    }
+    if (!choice) return;
+
+    // Reassign so the field repaints: mutating the shape in place left the
+    // canvas showing the old colour until some other change came along.
+    shapes = shapes.map((item) =>
+      item === shape
+        ? { ...item, color: choice.color, fillColor: choice.fill }
+        : item,
+    );
+    recordChange?.();
   }
 
   export let shapes: Shape[];
   export let collapsedObstacles: boolean[];
+  export let variables: Variable[] = [];
+  export let recordChange: () => void = () => {};
+
+  function updateVertex(
+    shapeIdx: number,
+    vertexIdx: number,
+    field: "x" | "y",
+    value: string,
+  ) {
+    const expressionField = `${field}Expression` as "xExpression" | "yExpression";
+    const numeric = Number(value);
+
+    shapes = shapes.map((shape, index) => {
+      if (index !== shapeIdx) return shape;
+      return {
+        ...shape,
+        vertices: shape.vertices.map((vertex, idx) =>
+          idx === vertexIdx
+            ? resolveBasePointExpressions(
+                {
+                  ...vertex,
+                  [field]: Number.isFinite(numeric) ? numeric : vertex[field],
+                  [expressionField]: value.trim() ? value : undefined,
+                },
+                variables,
+              )
+            : vertex,
+        ),
+      };
+    });
+  }
 
   $: snapToGridTitle =
     $snapToGrid && $showGrid ? `Snapping to ${$gridSize} grid` : "No snapping";
@@ -164,26 +207,42 @@
         {#each shape.vertices as vertex, vertexIdx}
           <div class="flex flex-row justify-start items-center gap-2">
             <div class="font-bold text-sm">{vertexIdx + 1}:</div>
-            <div class="font-extralight text-sm">X:</div>
-            <input
-              bind:value={vertex.x}
-              type="number"
-              min="0"
-              max="141.5"
-              step={$snapToGrid && $showGrid ? $gridSize : 0.1}
-              title={snapToGridTitle}
-              class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-950 dark:border-neutral-700 border-[0.5px] focus:outline-none w-24 text-sm"
-            />
-            <div class="font-extralight text-sm">Y:</div>
-            <input
-              bind:value={vertex.y}
-              type="number"
-              min="0"
-              max="141.5"
-              step={$snapToGrid && $showGrid ? $gridSize : 0.1}
-              class="pl-1.5 rounded-md bg-neutral-100 dark:bg-neutral-950 dark:border-neutral-700 border-[0.5px] focus:outline-none w-24 text-sm"
-              title={snapToGridTitle}
-            />
+            <div
+              class="font-extralight text-sm"
+              use:scrubbable={{
+                value: pointCoordinateFieldDisplayValue(vertex, "x"),
+                onInput: (raw) => updateVertex(shapeIdx, vertexIdx, "x", raw),
+                onCommit: () => recordChange?.(),
+              }}
+            >X:</div>
+            <div class="w-24">
+              <ExpressionInput
+                compact
+                {variables}
+                title={snapToGridTitle}
+                value={pointCoordinateFieldDisplayValue(vertex, "x")}
+                onInput={(raw) => updateVertex(shapeIdx, vertexIdx, "x", raw)}
+                onCommit={() => recordChange?.()}
+              />
+            </div>
+            <div
+              class="font-extralight text-sm"
+              use:scrubbable={{
+                value: pointCoordinateFieldDisplayValue(vertex, "y"),
+                onInput: (raw) => updateVertex(shapeIdx, vertexIdx, "y", raw),
+                onCommit: () => recordChange?.(),
+              }}
+            >Y:</div>
+            <div class="w-24">
+              <ExpressionInput
+                compact
+                {variables}
+                title={snapToGridTitle}
+                value={pointCoordinateFieldDisplayValue(vertex, "y")}
+                onInput={(raw) => updateVertex(shapeIdx, vertexIdx, "y", raw)}
+                onCommit={() => recordChange?.()}
+              />
+            </div>
             {#if $snapToGrid && $showGrid}
               <span class="text-xs text-green-500" title="Snapping enabled"
                 >✓</span

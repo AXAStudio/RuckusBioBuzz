@@ -4,7 +4,7 @@ import type {
   Point,
   PoseVariable,
   PathVariable,
-  NumberVariable,
+  Variable,
 } from "../types";
 import { mirrorPoseExpression } from "./numberExpressions";
 
@@ -13,9 +13,7 @@ export type MirrorAxis = "x" | "y";
 type PathMirrorData = {
   startPoint?: Point;
   lines?: Line[];
-  poseVariables?: PoseVariable[];
-  pathVariables?: PathVariable[];
-  numberVariables?: NumberVariable[];
+  variables?: Variable[];
 };
 
 const DEFAULT_FIELD_SIZE = 141.5;
@@ -148,59 +146,32 @@ export function mirrorLine(
     controlPoints: (line.controlPoints || []).map((point) =>
       mirrorBasePoint(point, axis, fieldSize),
     ),
-    eventMarkers: (line.eventMarkers || []).map((marker) => ({
-      ...marker,
-      poseX: mirrorEventMarkerCoordinate(
-        marker.poseX,
-        marker.triggerType === "pose" && axis === "x",
-        fieldSize,
-      ),
-      poseY: mirrorEventMarkerCoordinate(
-        marker.poseY,
-        marker.triggerType === "pose" && axis === "y",
-        fieldSize,
-      ),
-    })),
+    eventMarkers: (line.eventMarkers || []).map((marker) => {
+      const mirrorX = marker.triggerType === "pose" && axis === "x";
+      const mirrorY = marker.triggerType === "pose" && axis === "y";
+
+      return {
+        ...marker,
+        poseX: mirrorEventMarkerCoordinate(marker.poseX, mirrorX, fieldSize),
+        poseY: mirrorEventMarkerCoordinate(marker.poseY, mirrorY, fieldSize),
+        // Mirror the expression itself so it keeps tracking its variables.
+        poseXExpression: mirrorX
+          ? mirrorPoseExpression(
+              marker.poseXExpression,
+              Number(marker.poseX) || 0,
+              (inner) => `(${fieldSize} - (${inner}))`,
+            )
+          : marker.poseXExpression,
+        poseYExpression: mirrorY
+          ? mirrorPoseExpression(
+              marker.poseYExpression,
+              Number(marker.poseY) || 0,
+              (inner) => `(${fieldSize} - (${inner}))`,
+            )
+          : marker.poseYExpression,
+      };
+    }),
   };
-}
-
-function collectMirroredNumberVariableIds(
-  lines: Line[] | undefined,
-  axis: MirrorAxis,
-  output: Set<string>,
-) {
-  if (!Array.isArray(lines)) return;
-
-  lines.forEach((line) => {
-    (line.eventMarkers || []).forEach((marker) => {
-      if (marker.triggerType !== "pose") return;
-
-      const variableId =
-        axis === "x" ? marker.poseXVariableId : marker.poseYVariableId;
-      if (variableId) {
-        output.add(variableId);
-      }
-    });
-  });
-}
-
-function mirrorNumberVariables(
-  variables: NumberVariable[] | undefined,
-  mirroredIds: Set<string>,
-  fieldSize: number,
-): NumberVariable[] | undefined {
-  if (!Array.isArray(variables) || mirroredIds.size === 0) {
-    return variables;
-  }
-
-  return variables.map((variable) =>
-    mirroredIds.has(variable.id)
-      ? {
-          ...variable,
-          value: mirrorCoordinate(variable.value, fieldSize),
-        }
-      : variable,
-  );
 }
 
 export function mirrorPathVariable(
@@ -215,21 +186,30 @@ export function mirrorPathVariable(
   };
 }
 
+/**
+ * Mirrors a variable across the field. Numbers and booleans are left alone:
+ * they may be used for things that have nothing to do with position, and the
+ * expressions that reference them are mirrored at the usage site instead.
+ */
+export function mirrorVariable(
+  variable: Variable,
+  axis: MirrorAxis,
+  fieldSize = DEFAULT_FIELD_SIZE,
+): Variable {
+  if (variable.type === "pose") {
+    return mirrorPoseVariable(variable, axis, fieldSize);
+  }
+  if (variable.type === "path") {
+    return mirrorPathVariable(variable, axis, fieldSize);
+  }
+  return variable;
+}
+
 export function mirrorPathData<T extends PathMirrorData>(
   data: T,
   axis: MirrorAxis = "x",
   fieldSize = DEFAULT_FIELD_SIZE,
 ): T {
-  const mirroredNumberVariableIds = new Set<string>();
-  collectMirroredNumberVariableIds(data.lines, axis, mirroredNumberVariableIds);
-  (data.pathVariables || []).forEach((variable) =>
-    collectMirroredNumberVariableIds(
-      variable.lines,
-      axis,
-      mirroredNumberVariableIds,
-    ),
-  );
-
   return {
     ...data,
     startPoint: data.startPoint
@@ -238,20 +218,10 @@ export function mirrorPathData<T extends PathMirrorData>(
     lines: Array.isArray(data.lines)
       ? data.lines.map((line) => mirrorLine(line, axis, fieldSize))
       : data.lines,
-    poseVariables: Array.isArray(data.poseVariables)
-      ? data.poseVariables.map((variable) =>
-          mirrorPoseVariable(variable, axis, fieldSize),
+    variables: Array.isArray(data.variables)
+      ? data.variables.map((variable) =>
+          mirrorVariable(variable, axis, fieldSize),
         )
-      : data.poseVariables,
-    pathVariables: Array.isArray(data.pathVariables)
-      ? data.pathVariables.map((variable) =>
-          mirrorPathVariable(variable, axis, fieldSize),
-        )
-      : data.pathVariables,
-    numberVariables: mirrorNumberVariables(
-      data.numberVariables,
-      mirroredNumberVariableIds,
-      fieldSize,
-    ),
+      : data.variables,
   };
 }

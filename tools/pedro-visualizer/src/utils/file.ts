@@ -4,9 +4,7 @@ import type {
   Shape,
   SequenceItem,
   PathChain,
-  PoseVariable,
-  PathVariable,
-  NumberVariable,
+  Variable,
   Settings,
 } from "../types";
 
@@ -21,9 +19,13 @@ export interface SaveData {
   settings?: Settings;
   sequence?: SequenceItem[];
   pathChains?: PathChain[];
-  poseVariables?: PoseVariable[];
-  pathVariables?: PathVariable[];
-  numberVariables?: NumberVariable[];
+  variables?: Variable[];
+  /** @deprecated Legacy per-type arrays, still read for older files. */
+  poseVariables?: unknown[];
+  /** @deprecated */
+  pathVariables?: unknown[];
+  /** @deprecated */
+  numberVariables?: unknown[];
   version?: string;
   timestamp?: string;
 }
@@ -37,9 +39,7 @@ export function downloadTrajectory(
   shapes: Shape[],
   sequence?: SequenceItem[],
   pathChains?: PathChain[],
-  poseVariables?: PoseVariable[],
-  pathVariables?: PathVariable[],
-  numberVariables?: NumberVariable[],
+  variables?: Variable[],
   settings?: Settings,
 ): void {
   const jsonString = JSON.stringify({
@@ -48,11 +48,9 @@ export function downloadTrajectory(
     shapes,
     sequence,
     pathChains,
-    poseVariables,
-    pathVariables,
-    numberVariables,
+    variables,
     settings,
-    version: "1.2.1",
+    version: "1.3.0",
     timestamp: new Date().toISOString(),
   });
   const blob = new Blob([jsonString], { type: "application/json" });
@@ -104,19 +102,6 @@ export function loadTrajectoryFromFile(
     };
 
     reader.readAsText(file);
-  }
-}
-
-/**
- * Update the robot image displayed on the canvas
- */
-export function updateRobotImageDisplay(): void {
-  const robotImage = document.querySelector(
-    'img[alt="Robot"]',
-  ) as HTMLImageElement;
-  const storedImage = localStorage.getItem("robot.png");
-  if (robotImage && storedImage) {
-    robotImage.src = storedImage;
   }
 }
 

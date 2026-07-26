@@ -1,10 +1,16 @@
 <script lang="ts">
   import { createEventDispatcher } from "svelte";
   import { clampHeadingCurve, shapeHeadingProgress } from "../../utils/math";
-  import type { Point } from "../../types";
+  import {
+    expressionDisplayValue,
+    resolveNumberExpression,
+  } from "../../utils";
+  import type { Point, Variable } from "../../types";
+  import ExpressionInput from "./ExpressionInput.svelte";
 
   export let endPoint: Point;
   export let locked = false;
+  export let variables: Variable[] = [];
 
   const dispatch = createEventDispatcher();
   const width = 220;
@@ -38,7 +44,8 @@
 
   function updateCurve(nextCurve: number) {
     if (endPoint.heading !== "linear") return;
-    endPoint.headingCurve = clampHeadingCurve(nextCurve);
+    // Assign rather than mutate so the `bind:endPoint` in the parent fires.
+    endPoint = { ...endPoint, headingCurve: clampHeadingCurve(nextCurve) };
     dispatch("change");
   }
 
@@ -48,6 +55,20 @@
     const nextCurve = Number(target.value);
     if (!Number.isFinite(nextCurve)) return;
     updateCurve(nextCurve);
+  }
+
+  /** The curve can also be driven by an expression referencing variables. */
+  function handleCurveExpressionInput(raw: string) {
+    if (endPoint.heading !== "linear") return;
+
+    const expression = raw.trim() ? raw : undefined;
+    const resolved = resolveNumberExpression(expression, curve, variables);
+    endPoint = {
+      ...endPoint,
+      headingCurveExpression: expression,
+      headingCurve: clampHeadingCurve(resolved.value),
+    };
+    dispatch("change");
   }
 
   function commit() {
@@ -137,19 +158,24 @@
       value={curve}
       on:input={handleCurveInput}
       on:change={commit}
-      disabled={locked}
+      disabled={locked || Boolean(endPoint.heading === "linear" && endPoint.headingCurveExpression)}
       class="flex-1"
     />
-    <input
-      type="number"
-      min="0.25"
-      max="4"
-      step="0.05"
-      value={curve}
-      on:input={handleCurveInput}
-      on:blur={commit}
-      disabled={locked}
-      class="w-20 px-2 py-1 text-xs rounded border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-950"
-    />
+    <div class="w-28">
+      <ExpressionInput
+        compact
+        {variables}
+        disabled={locked}
+        title="Heading curve 0.25–4 (literal or expression)"
+        value={expressionDisplayValue(
+          endPoint.heading === "linear"
+            ? endPoint.headingCurveExpression
+            : undefined,
+          curve,
+        )}
+        onInput={handleCurveExpressionInput}
+        onCommit={() => dispatch("commit")}
+      />
+    </div>
   </div>
 </div>

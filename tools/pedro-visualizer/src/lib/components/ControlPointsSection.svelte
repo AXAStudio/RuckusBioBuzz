@@ -1,18 +1,45 @@
 <script lang="ts">
-  import type { Line } from "../../types";
+  import type { Line, Variable } from "../../types";
   import { snapToGrid, showGrid, gridSize } from "../../stores";
+  import {
+    pointCoordinateFieldDisplayValue,
+    resolveBasePointExpressions,
+  } from "../../utils";
+  import ExpressionInput from "./ExpressionInput.svelte";
+  import { scrubbable } from "../../utils/scrub";
 
   export let line: Line;
   export let lineIdx: number;
   export let collapsed: boolean;
   export let recordChange: () => void;
   export let onAddControlPoint: () => void;
+  export let variables: Variable[] = [];
 
   $: snapToGridTitle =
     $snapToGrid && $showGrid ? `Snapping to ${$gridSize} grid` : "No snapping";
 
   function toggleCollapsed() {
     collapsed = !collapsed;
+  }
+
+  function updateControlPoint(index: number, field: "x" | "y", value: string) {
+    const expressionField = `${field}Expression` as "xExpression" | "yExpression";
+    const numeric = Number(value);
+    const current = line.controlPoints[index];
+    if (!current) return;
+
+    line.controlPoints = line.controlPoints.map((point, pointIndex) =>
+      pointIndex === index
+        ? resolveBasePointExpressions(
+            {
+              ...point,
+              [field]: Number.isFinite(numeric) ? numeric : point[field],
+              [expressionField]: value.trim() ? value : undefined,
+            },
+            variables,
+          )
+        : point,
+    );
   }
 </script>
 
@@ -113,40 +140,46 @@
 
           <!-- Control Point Position Inputs -->
           <div class="flex items-center gap-2">
-            <span class="text-xs text-neutral-600 dark:text-neutral-400"
-              >X:</span
-            >
-            <input
-              bind:value={point.x}
-              type="number"
-              min="0"
-              max="141.5"
-              step={$snapToGrid && $showGrid ? $gridSize : 0.1}
-              class="w-20 px-2 py-1 text-xs rounded-md bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              on:change={() => {
-                // Update the array to trigger reactivity
-                line.controlPoints = [...line.controlPoints];
+            <span
+              class="text-xs text-neutral-600 dark:text-neutral-400"
+              use:scrubbable={{
+                value: pointCoordinateFieldDisplayValue(point, "x"),
+                disabled: line.locked,
+                onInput: (raw) => updateControlPoint(idx1, "x", raw),
+                onCommit: () => recordChange(),
               }}
-              disabled={line.locked}
-              title={snapToGridTitle}
-            />
-            <span class="text-xs text-neutral-600 dark:text-neutral-400"
-              >Y:</span
-            >
-            <input
-              bind:value={point.y}
-              type="number"
-              min="0"
-              max="141.5"
-              step={$snapToGrid && $showGrid ? $gridSize : 0.1}
-              class="w-20 px-2 py-1 text-xs rounded-md bg-white dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              on:change={() => {
-                // Update the array to trigger reactivity
-                line.controlPoints = [...line.controlPoints];
+            >X:</span>
+            <div class="w-24">
+              <ExpressionInput
+                compact
+                {variables}
+                value={pointCoordinateFieldDisplayValue(point, "x")}
+                onInput={(raw) => updateControlPoint(idx1, "x", raw)}
+                onCommit={() => recordChange()}
+                disabled={line.locked}
+                title={snapToGridTitle}
+              />
+            </div>
+            <span
+              class="text-xs text-neutral-600 dark:text-neutral-400"
+              use:scrubbable={{
+                value: pointCoordinateFieldDisplayValue(point, "y"),
+                disabled: line.locked,
+                onInput: (raw) => updateControlPoint(idx1, "y", raw),
+                onCommit: () => recordChange(),
               }}
-              disabled={line.locked}
-              title={snapToGridTitle}
-            />
+            >Y:</span>
+            <div class="w-24">
+              <ExpressionInput
+                compact
+                {variables}
+                value={pointCoordinateFieldDisplayValue(point, "y")}
+                onInput={(raw) => updateControlPoint(idx1, "y", raw)}
+                onCommit={() => recordChange()}
+                disabled={line.locked}
+                title={snapToGridTitle}
+              />
+            </div>
           </div>
 
           <div class="mt-1 text-xs text-neutral-500 dark:text-neutral-400">

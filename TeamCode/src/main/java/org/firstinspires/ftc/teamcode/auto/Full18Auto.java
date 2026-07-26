@@ -12,7 +12,6 @@ import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 @Autonomous(name = "Full18Auto", group = "Auto")
 public class Full18Auto extends OpMode {
 
-  private static final double NUMBER_XPOS = 1.000;
   private static final PathStep POSE_GATE_INTAKE_STEP = new PathStep(
     11.05245972673443,
     51.90197461212974,
@@ -363,9 +362,9 @@ public class Full18Auto extends OpMode {
 
     long clampedDurationMs = Math.max(0L, durationMs);
     if (clampedDurationMs == 0L) {
-      // A zero duration means "fire once" -- finish immediately instead of leaving the event
-      // permanently active, since updateParallelEvents() never finishes an event with a
-      // non-positive duration.
+      // A zero duration means "fire once" -- finish immediately instead of leaving the
+      // event permanently active, since updateParallelEvents() never finishes an event
+      // with a non-positive duration.
       finishEvent(eventName);
       return;
     }

@@ -4,8 +4,7 @@
     Line,
     SequenceItem,
     PathChain,
-    PoseVariable,
-    NumberVariable,
+    Variable,
   } from "../../types";
   import Highlight from "svelte-highlight";
   import { java } from "svelte-highlight/languages";
@@ -21,14 +20,25 @@
     generateTeamCodeAutoCode,
   } from "../../utils/codeExporter";
   import { validateJavaDelimiters } from "../../utils/javaValidation";
+  import { buildRoute } from "../../utils/sequence";
+  import {
+    getAngularDifference,
+    getLineEndHeading,
+    getLineStartHeading,
+  } from "../../utils/math";
+  import {
+    EMPTY_CLEARANCE_REPORT,
+    type ClearanceReport,
+  } from "../../utils/clearance";
 
   export let isOpen = false;
   export let startPoint: Point;
   export let lines: Line[];
   export let sequence: SequenceItem[];
   export let pathChains: PathChain[] = [];
-  export let poseVariables: PoseVariable[] = [];
-  export let numberVariables: NumberVariable[] = [];
+  export let variables: Variable[] = [];
+  /** Where the robot's footprint comes too close to an obstacle or a wall. */
+  export let clearanceReport: ClearanceReport = EMPTY_CLEARANCE_REPORT;
 
   let exportMode: "full" | "class" | "coordinates" = "class";
   let exportFormat: "java" | "points" | "sequential" | "teamcode" = "java";
@@ -74,6 +84,8 @@
           lines,
           exportMode,
           pathChains,
+          variables,
+          sequence,
         );
         currentLanguage = java;
       } else if (format === "points") {
@@ -96,6 +108,7 @@
           lines,
           sequentialClassName,
           sequence,
+          variables,
         );
         currentLanguage = java;
       } else if (format === "teamcode") {
@@ -113,8 +126,7 @@
           pathChains,
           teamCodeClassName,
           sequence,
-          poseVariables,
-          numberVariables,
+          variables,
         );
         currentLanguage = java;
         validationMessages = validateTeamCodeExport();
@@ -140,6 +152,7 @@
           lines,
           sequentialClassName,
           sequence,
+          variables,
         );
       } catch (error) {
         console.error("Refresh failed:", error);
@@ -160,8 +173,7 @@
           pathChains,
           teamCodeClassName,
           sequence,
-          poseVariables,
-          numberVariables,
+          variables,
         );
         validationMessages = validateTeamCodeExport();
       } catch (error) {
@@ -174,7 +186,14 @@
 
   async function handleExportModeChange() {
     if (exportFormat === "java") {
-      exportedCode = await generateJavaCode(startPoint, lines, exportMode, pathChains);
+      exportedCode = await generateJavaCode(
+        startPoint,
+        lines,
+        exportMode,
+        pathChains,
+        variables,
+        sequence,
+      );
     }
   }
 
@@ -218,8 +237,82 @@
       messages.push({ level: "warning", message: "Starting point is outside the field bounds." });
     }
 
+    // Paths inside a repeat loop or an `if` block do not start where the
+    // previous entry in `lines` ends, so the geometry checks below follow the
+    // route the same way the exporter does.
+    const route = buildRoute(startPoint, lines, sequence, variables);
+    const routeStartPoints = route.startPoints;
+
+    // A path whose heading goal does not pick up where the previous one left
+    // off makes the robot turn while it drives — inside a PathChain it cannot
+    // stop to do it, so a large jump is worth flagging before it reaches a match.
+    let previousEndHeading: number | null = null;
+    route.steps.forEach((step) => {
+      if (step.kind !== "path") {
+        previousEndHeading = null;
+        return;
+      }
+
+      const entry = previousEndHeading;
+      const goal = getLineStartHeading(step.line, step.startPoint);
+      previousEndHeading = getLineEndHeading(step.line, step.startPoint);
+
+      if (entry === null) return;
+      const jump = Math.abs(getAngularDifference(entry, goal));
+      if (jump < 20) return;
+
+      messages.push({
+        level: "warning",
+        message: `${step.line.name?.trim() || `Path ${step.lineIndex + 1}`} starts ${Math.round(jump)}° away from the heading the robot arrives with, so it turns while driving.`,
+      });
+    });
+
+    // The robot's body, not the path through the middle of it, is what has to
+    // fit. Worth saying before the auto is loaded onto a robot at a competition.
+    clearanceReport.spans.forEach((span) => {
+      const line = lines[span.lineIndex];
+      const pathName = line?.name?.trim() || `Path ${span.lineIndex + 1}`;
+      const target =
+        span.kind === "wall" ? "the field wall" : span.obstacleName?.trim() || "an obstacle";
+
+      messages.push({
+        level: "warning",
+        message:
+          span.severity === "hit"
+            ? `${pathName} drives the robot into ${target} — ${Math.abs(span.worstClearance).toFixed(1)}in of overlap, ${span.startDistance.toFixed(1)}in into the path.`
+            : `${pathName} passes within ${span.worstClearance.toFixed(1)}in of ${target}.`,
+      });
+    });
+    const groupedLineIds = new Set(
+      sequence.flatMap((item) =>
+        item.kind === "repeat" || item.kind === "conditional"
+          ? item.lineIds || []
+          : [],
+      ),
+    );
+
     lines.forEach((line, index) => {
-      const previousPoint = index === 0 ? startPoint : lines[index - 1].endPoint;
+      const previousPoint =
+        routeStartPoints.get(line.id || "") ??
+        (index === 0 ? startPoint : lines[index - 1].endPoint);
+
+      if (line.enabledExpression?.trim() && groupedLineIds.has(line.id || "")) {
+        messages.push({
+          level: "warning",
+          message: `Path ${index + 1} has an "Enabled if" condition, but paths inside a repeat loop or if block always run in the generated code — move the condition onto the block instead.`,
+        });
+      }
+
+      if (
+        line.endPoint.heading === "tangential" &&
+        line.endPoint.reverseExpression?.trim()
+      ) {
+        messages.push({
+          level: "warning",
+          message: `Path ${index + 1} drives Reverse from an expression, which is baked in as ${line.endPoint.reverse ? "reversed" : "not reversed"} at export time.`,
+        });
+      }
+
       if (isOutsideField(line.endPoint)) {
         messages.push({
           level: "warning",
@@ -258,7 +351,10 @@
     });
 
     const firstPathIndex = sequence.findIndex(
-      (item) => item.kind === "path" || (item.kind === "repeat" && item.lineIds.length > 0),
+      (item) =>
+        item.kind === "path" ||
+        ((item.kind === "repeat" || item.kind === "conditional") &&
+          item.lineIds.length > 0),
     );
     if (firstPathIndex === -1) {
       messages.push({

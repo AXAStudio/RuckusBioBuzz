@@ -5,9 +5,7 @@ import type {
   SequenceItem,
   Settings,
   PathChain,
-  PoseVariable,
-  PathVariable,
-  NumberVariable,
+  Variable,
 } from "../types";
 import { writable } from "svelte/store";
 
@@ -18,9 +16,7 @@ export type AppState = {
   sequence: SequenceItem[];
   settings: Settings;
   pathChains: PathChain[];
-  poseVariables: PoseVariable[];
-  pathVariables: PathVariable[];
-  numberVariables: NumberVariable[];
+  variables: Variable[];
 };
 
 type PersistedHistory = {

@@ -26,9 +26,14 @@ function migrateSettings(stored: Partial<StoredSettings>): Settings {
   // and removed settings are not persisted
   const migrated: Settings = { ...defaults };
 
-  // Copy only the properties that exist in both objects
+  // Optional settings that have no default: they are still part of the schema,
+  // so they must survive a reload. `customFieldImage` in particular holds the
+  // uploaded field picture, and dropping it silently reverted the field.
+  const optionalKeys = new Set(["customFieldImage"]);
+
+  // Copy only the properties that belong to the settings schema
   Object.keys(stored.settings).forEach((key) => {
-    if (key in migrated) {
+    if (key in migrated || optionalKeys.has(key)) {
       // @ts-ignore - We know the key exists in Settings
       migrated[key] = stored.settings[key];
     }

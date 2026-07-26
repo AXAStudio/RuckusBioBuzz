@@ -178,6 +178,101 @@ export function getLineEndHeading(
   return 0;
 }
 
+/**
+ * The heading a path's interpolation is aiming for at a point along it.
+ *
+ * This is the *goal*, not necessarily where the robot is: a path states its own
+ * interpolation with no regard for the heading the robot arrives with.
+ */
+export function goalHeadingAt(
+  line: Line,
+  curvePoints: { x: number; y: number }[],
+  progress: number,
+): number {
+  const t = Math.max(0, Math.min(1, progress));
+  const endPoint = line.endPoint;
+
+  if (endPoint.heading === "constant") return endPoint.degrees;
+
+  if (endPoint.heading === "linear") {
+    return shapedShortestRotation(
+      endPoint.startDeg,
+      endPoint.endDeg,
+      t,
+      endPoint.headingCurve,
+    );
+  }
+
+  // Tangential: face along the curve, sampling just ahead (or behind, reversed).
+  // At the very ends of the curve the step would run off the end, so take the
+  // sample from the other side and keep the same sense — clamping it instead
+  // collapses the two samples onto one point and loses the heading entirely.
+  const step = 0.01 * (endPoint.reverse ? -1 : 1);
+  let fromT = t;
+  let toT = t + step;
+  if (toT > 1 || toT < 0) {
+    fromT = t - step;
+    toT = t;
+  }
+
+  const from = getCurvePoint(fromT, curvePoints);
+  const to = getCurvePoint(toT, curvePoints);
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  if (dx === 0 && dy === 0) return 0;
+
+  return radiansToDegrees(Math.atan2(dy, dx));
+}
+
+/**
+ * The heading the robot actually holds partway along a path.
+ *
+ * Where two paths meet, the heading *goal* can jump — a tangential path
+ * following a linear one picks up wherever its curve points, regardless of
+ * where the previous path left off. The robot cannot jump: it rotates toward
+ * the new goal at the rate the drivetrain allows, while it carries on driving.
+ * Blending over that catch-up window keeps the heading continuous instead of
+ * snapping the instant one path ends and the next begins.
+ *
+ * `catchUp` is the fraction of the path spent catching up, so this stays a pure
+ * function of progress and every caller — the animated robot, the swept-area
+ * preview, the onion layers — shows the same motion.
+ */
+export function headingAlongPath(
+  goalHeading: number,
+  entryHeading: number | undefined,
+  progress: number,
+  catchUp: number | undefined,
+): number {
+  if (entryHeading === undefined || !Number.isFinite(entryHeading)) {
+    return goalHeading;
+  }
+  const window = Number(catchUp);
+  if (!Number.isFinite(window) || window <= 0) return goalHeading;
+
+  const blend = Math.min(1, Math.max(0, progress) / window);
+  return shortestRotation(entryHeading, goalHeading, blend);
+}
+
+/**
+ * How much of a path is spent turning to pick up its heading goal, as a
+ * fraction of the path. Zero when the robot already arrives facing the right
+ * way, which is the normal case.
+ */
+export function headingCatchUpFraction(
+  entryHeading: number,
+  goalHeading: number,
+  pathDuration: number,
+  angularVelocityRadPerSec: number,
+): number {
+  const difference = Math.abs(getAngularDifference(entryHeading, goalHeading));
+  if (difference <= 0.1) return 0;
+  if (!(pathDuration > 0) || !(angularVelocityRadPerSec > 0)) return 0;
+
+  const turnSeconds = (difference * (Math.PI / 180)) / angularVelocityRadPerSec;
+  return Math.min(1, turnSeconds / pathDuration);
+}
+
 export function vh(percent: number) {
   var h = Math.max(
     document.documentElement.clientHeight,

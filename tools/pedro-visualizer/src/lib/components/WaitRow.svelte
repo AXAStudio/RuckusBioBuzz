@@ -1,14 +1,19 @@
 <script lang="ts">
-  import type { NumberVariable } from "../../types";
+  import type { Variable } from "../../types";
+  import { expressionDisplayValue } from "../../utils";
+  import ExpressionInput from "./ExpressionInput.svelte";
 
   export let name: string;
   export let durationMs: number;
-  export let durationVariableId: string = "";
-  export let numberVariables: NumberVariable[] = [];
+  export let durationExpression: string | undefined = undefined;
+  export let enabledExpression: string | undefined = undefined;
+  export let variables: Variable[] = [];
   export let locked: boolean = false;
   export let onToggleLock: () => void;
   export let onChange: (newName: string, newDuration: number) => void;
-  export let onDurationVariableChange: (variableId: string) => void = () => {};
+  export let onDurationExpressionChange: (raw: string) => void = () => {};
+  export let onEnabledExpressionChange: (raw: string) => void = () => {};
+  export let onCommit: () => void = () => {};
   export let onRemove: () => void;
   export let onInsertAfter: () => void;
   export let onAddPathAfter: () => void;
@@ -24,14 +29,19 @@
     if (!locked) onChange(target?.value ?? "", durationMs);
   }
 
-  function handleDurationChange(e: Event) {
-    const target = e.currentTarget as HTMLInputElement;
-    const v = Number(target?.value ?? 0);
-    if (!locked) onChange(name, Math.max(0, Number.isFinite(v) ? v : 0));
-  }
+  function handleDurationInput(raw: string) {
+    if (locked) return;
 
-  function handleDurationVariableChange(e: Event) {
-    if (!locked) onDurationVariableChange((e.currentTarget as HTMLSelectElement).value);
+    // A bare number stays a literal; anything else becomes an expression.
+    const trimmed = raw.trim();
+    const numeric = Number(trimmed);
+    if (trimmed && Number.isFinite(numeric) && !/[a-zA-Z]/.test(trimmed)) {
+      onDurationExpressionChange("");
+      onChange(name, Math.max(0, numeric));
+      return;
+    }
+
+    onDurationExpressionChange(raw);
   }
 </script>
 
@@ -64,28 +74,31 @@
         <option value="Arm Down" />
       </datalist>
     {/if}
-    <input
-      class="pl-1.5 rounded-md bg-neutral-50 dark:bg-neutral-950 dark:border-neutral-700 border-[0.5px] focus:outline-none w-28"
-      type="number"
-      min="0"
-      step="50"
-      bind:value={durationMs}
-      on:change={handleDurationChange}
-      disabled={locked || Boolean(durationVariableId)}
-    />
-    <select
-      value={durationVariableId}
-      on:change={handleDurationVariableChange}
-      disabled={locked || numberVariables.length === 0}
-      class="pl-1.5 rounded-md bg-neutral-50 dark:bg-neutral-950 dark:border-neutral-700 border-[0.5px] focus:outline-none text-xs max-w-36 disabled:opacity-40"
-      title="{label} duration variable"
-    >
-      <option value="">Custom</option>
-      {#each numberVariables as variable (variable.id)}
-        <option value={variable.id}>{variable.name}</option>
-      {/each}
-    </select>
+    <div class="w-32">
+      <ExpressionInput
+        compact
+        {variables}
+        disabled={locked}
+        placeholder="0"
+        title="{label} duration in ms (literal or expression)"
+        value={expressionDisplayValue(durationExpression, durationMs)}
+        onInput={handleDurationInput}
+        onCommit={onCommit}
+      />
+    </div>
     <span>ms</span>
+    <div class="w-32" title="Optional boolean expression; when false this step is skipped">
+      <ExpressionInput
+        compact
+        kind="boolean"
+        {variables}
+        disabled={locked}
+        placeholder="if…"
+        value={enabledExpression || ""}
+        onInput={onEnabledExpressionChange}
+        onCommit={onCommit}
+      />
+    </div>
   </div>
 
   <div class="flex items-center gap-2">

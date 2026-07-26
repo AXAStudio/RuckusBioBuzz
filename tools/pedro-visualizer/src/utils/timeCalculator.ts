@@ -1,22 +1,41 @@
 import type {
   Point,
   BasePoint,
+  ChainProfile,
   Line,
   Settings,
   TimePrediction,
   TimelineEvent,
   SequenceItem,
+  Variable,
 } from "../types";
 import {
   getCurvePoint,
   getLineStartHeading,
   getLineEndHeading,
   getAngularDifference,
+  goalHeadingAt,
+  headingCatchUpFraction,
 } from "./math";
+import { buildChainRuns, buildRoute } from "./sequence";
+import {
+  buildMotionProfile,
+  curveParameterAtDistance,
+  profileDistanceAtTime,
+  profilePointsFromPolyline,
+  profileTimeAtDistance,
+  profileVelocityAtDistance,
+} from "./motionProfile";
+import { buildExpressionScope } from "./numberExpressions";
+import { isEnabled } from "./variables";
 
 export interface TravelLineTimingMeta {
   executionIndex: number;
   lineIndex: number;
+  /** 0-based repeat iteration; always 0 outside a repeat loop. */
+  iteration: number;
+  /** The PathChain this path is driven as part of, when there is one. */
+  chain?: ChainProfile;
   line: Line;
   startPoint: BasePoint;
   length: number;
@@ -42,6 +61,21 @@ export interface EventTimingWindow {
   endPercent: number;
   triggerPathPercent: number;
 }
+
+/**
+ * Samples per path used to build the arc-length table.
+ *
+ * The table is inverted to turn a distance back into a curve parameter, and it
+ * is the *slope* of that inversion the animation rides. A Bezier with bunched
+ * control points can cover ground twenty times faster at one end than the
+ * other, so a coarse table makes the speed step at every entry — enough of them
+ * and the robot visibly stutters along an otherwise smooth path.
+ */
+const CHAIN_PROFILE_SAMPLES = 200;
+/** Spacing, in inches, of the evenly spread samples the profile is built on. */
+const CHAIN_SAMPLE_STEP = 0.5;
+const MAX_CHAIN_SAMPLES = 2000;
+const DEFAULT_MIN_CORNER_RADIUS = 8;
 
 function clampNumber(value: number, min: number, max: number) {
   if (!Number.isFinite(value)) return min;
@@ -306,15 +340,6 @@ export function getPathSpeed(line: Line): number {
   return Math.max(0.05, Math.min(1, speed));
 }
 
-function getLineStartPointAtIndex(
-  startPoint: Point,
-  lines: Line[],
-  lineIndex: number,
-): BasePoint | null {
-  if (lineIndex === 0) return startPoint;
-  return lines[lineIndex - 1]?.endPoint || null;
-}
-
 function sampleLineCurve(
   sourceStartPoint: BasePoint,
   line: Line,
@@ -409,6 +434,7 @@ export function calculatePathTime(
   lines: Line[],
   settings: Settings,
   sequence?: SequenceItem[],
+  variables: Variable[] = [],
 ): TimePrediction {
   const msToSeconds = (value?: number | string) => {
     const numeric = Number(value);
@@ -419,6 +445,27 @@ export function calculatePathTime(
   const useMotionProfile =
     settings.maxVelocity !== undefined &&
     settings.maxAcceleration !== undefined;
+  // A zero/negative angular velocity would make every rotation take forever
+  // (Infinity), which poisons the whole timeline.
+  const angularVelocity =
+    Number(settings.aVelocity) > 0 ? Number(settings.aVelocity) : 0;
+  // How much turning eats into driving speed; 1 when unset, matching a
+  // drivetrain with no power to spare.
+  const turnCoupling = Number.isFinite(Number(settings.turnCoupling))
+    ? Math.max(0, Math.min(1, Number(settings.turnCoupling)))
+    : 1;
+  // Sideways grip caps speed through a curve. Falling back to the forward limit
+  // assumes the robot corners as hard as it accelerates.
+  const lateralAcceleration = Math.max(
+    0,
+    Number(settings.maxLateralAcceleration ?? settings.maxAcceleration) || 0,
+  );
+  // Sampled geometry reports a near-zero radius at a hard join between paths;
+  // half the robot is the tightest turn worth modelling as cornering.
+  const minCorneringRadius = Math.max(
+    1,
+    (Number(settings.rWidth) || DEFAULT_MIN_CORNER_RADIUS * 2) / 2,
+  );
 
   const segmentLengths: number[] = [];
   const segmentTimes: number[] = [];
@@ -427,64 +474,52 @@ export function calculatePathTime(
   let currentTime = 0;
   let currentHeading = 0;
 
-  // Initialize heading based on start point settings
-  // Note: This initialization is technically overridden by the idx===0 check below
-  // to ensure no initial turning, but kept for fallback logic.
-  if (startPoint.heading === "linear") currentHeading = startPoint.startDeg;
-  else if (startPoint.heading === "constant")
-    currentHeading = startPoint.degrees;
-  else if (startPoint.heading === "tangential") {
-    if (lines.length > 0) {
-      const firstLine = lines[0];
-      const nextP =
-        firstLine.controlPoints.length > 0
-          ? firstLine.controlPoints[0]
-          : firstLine.endPoint;
-      const angle =
-        Math.atan2(nextP.y - startPoint.y, nextP.x - startPoint.x) *
-        (180 / Math.PI);
-      currentHeading = startPoint.reverse ? angle + 180 : angle;
-    } else {
-      currentHeading = 0;
-    }
+  // One shared walk of the sequence: repeats expanded, only the taken `if`
+  // branch included, disabled steps dropped, and every path carrying the start
+  // point the robot will really be at.
+  const { steps } = buildRoute(startPoint, lines, sequence, variables);
+
+  /**
+   * The robot starts at the heading the start point declares, and turning from
+   * there to whatever the first path needs costs real time — so it is timed like
+   * any other rotation instead of being assumed away.
+   *
+   * A tangential start point stores no heading of its own; it is defined as
+   * facing the way the first path needs, which is what the start point editor
+   * shows, so it never produces a phantom turn.
+   */
+  const firstRouteLine = steps.find((step) => step.kind === "path")?.line;
+  if (startPoint.heading === "linear") {
+    currentHeading = Number(startPoint.startDeg) || 0;
+  } else if (startPoint.heading === "constant") {
+    currentHeading = Number(startPoint.degrees) || 0;
+  } else {
+    currentHeading = firstRouteLine
+      ? getLineStartHeading(firstRouteLine, startPoint)
+      : 0;
   }
-
-  // Create map and default sequence
-  const lineById = new Map<string, Line>();
-  lines.forEach((ln) => {
-    if (!ln.id) ln.id = `line-${Math.random().toString(36).slice(2)}`;
-    lineById.set(ln.id, ln);
-  });
-
-  const seq: SequenceItem[] =
-    sequence && sequence.length
-      ? sequence
-      : lines.map((ln) => ({ kind: "path", lineId: ln.id! }));
-
-  const expandedSeq: SequenceItem[] = [];
-  seq.forEach((item) => {
-    if (item.kind !== "repeat") {
-      expandedSeq.push(item);
-      return;
-    }
-
-    const repeatCount = Math.max(1, Math.min(20, Math.round(Number(item.count) || 1)));
-    for (let repeatIndex = 0; repeatIndex < repeatCount; repeatIndex++) {
-      (item.lineIds || []).forEach((lineId) => {
-        expandedSeq.push({ kind: "path", lineId });
-      });
-    }
-  });
 
   let lastPoint: Point = startPoint;
 
-  expandedSeq.forEach((item, idx) => {
-    if (item.kind === "wait" || item.kind === "event") {
-      const waitSeconds = msToSeconds(item.durationMs);
+  /**
+   * Consecutive paths are driven as one PathChain, which decelerates only on its
+   * last path, so the profile spans the whole chain instead of braking to a stop
+   * on every waypoint. Each path still gets its own travel event, timed as its
+   * slice of the chain's profile.
+   */
+  const chainRuns = buildChainRuns(steps);
+  let runCursor = 0;
+  let stepIndex = 0;
+
+  while (stepIndex < steps.length) {
+    const step = steps[stepIndex];
+
+    if (step.kind !== "path") {
+      const waitSeconds = msToSeconds(step.item.durationMs);
       if (waitSeconds > 0) {
         timeline.push({
           type: "wait",
-          name: item.name,
+          name: step.item.name,
           duration: waitSeconds,
           startTime: currentTime,
           endTime: currentTime + waitSeconds,
@@ -494,77 +529,218 @@ export function calculatePathTime(
         });
         currentTime += waitSeconds;
       }
-      return;
+      stepIndex++;
+      continue;
     }
 
-    if (item.kind !== "path") {
-      return;
+    // Runs cover the path steps in order, so the next one starts here.
+    const run = chainRuns[runCursor++];
+    if (!run || run.steps.length === 0) {
+      stepIndex++;
+      continue;
     }
 
-    const line = lineById.get(item.lineId);
-    if (!line || !line.endPoint) {
-      // Skip missing or malformed lines in sequence
-      return;
-    }
-    const prevPoint = lastPoint;
+    const firstMember = run.steps[0];
 
-    // --- ROTATION CHECK ---
-    const requiredStartHeading = getLineStartHeading(line, prevPoint);
-    if (idx === 0) currentHeading = requiredStartHeading;
-    const diff = Math.abs(
-      getAngularDifference(currentHeading, requiredStartHeading),
-    );
-    if (diff > 0.1) {
-      const diffRad = diff * (Math.PI / 180);
-      const rotTime = diffRad / settings.aVelocity;
-      timeline.push({
-        type: "wait",
-        duration: rotTime,
-        startTime: currentTime,
-        endTime: currentTime + rotTime,
-        startHeading: currentHeading,
-        targetHeading: requiredStartHeading,
-        atPoint: prevPoint,
-      });
-      currentTime += rotTime;
-      currentHeading = requiredStartHeading;
-    }
+    // --- TRAVEL: one profile across the whole chain ---
+    // Sample the chain's geometry end to end. The profile needs the shape, not
+    // just the length: a corner caps speed however long the chain is.
+    const memberLengths: number[] = [];
+    // Distance reached at each evenly spaced curve parameter, per member. The
+    // animation needs it to turn a distance back into a curve parameter.
+    const memberArcLengths: Float32Array[] = [];
 
-    // --- TRAVEL ---
-    const length = calculateCurveLength(
-      prevPoint,
-      line.controlPoints as any,
-      line.endPoint as any,
-    );
-    segmentLengths.push(length);
-    let segmentTime = 0;
-    const pathSpeed = getPathSpeed(line);
-    if (useMotionProfile) {
-      segmentTime = calculateMotionProfileTime(
-        length,
-        settings.maxVelocity! * pathSpeed,
-        settings.maxAcceleration! * pathSpeed,
-        settings.maxDeceleration !== undefined
-          ? settings.maxDeceleration * pathSpeed
-          : undefined,
-      );
-    } else {
-      const avgVelocity = ((settings.xVelocity + settings.yVelocity) / 2) * pathSpeed;
-      segmentTime = length / avgVelocity;
-    }
-    segmentTimes.push(segmentTime);
-    const lineIndex = lines.findIndex((l) => l.id === line.id);
-    timeline.push({
-      type: "travel",
-      duration: segmentTime,
-      startTime: currentTime,
-      endTime: currentTime + segmentTime,
-      lineIndex,
+    run.steps.forEach((member, memberIndex) => {
+      const curvePoints = [
+        member.startPoint,
+        ...member.line.controlPoints,
+        member.line.endPoint,
+      ];
+      const arcLengths = new Float32Array(CHAIN_PROFILE_SAMPLES + 1);
+      let memberLength = 0;
+      let previous: BasePoint = member.startPoint;
+
+      for (let i = 1; i <= CHAIN_PROFILE_SAMPLES; i++) {
+        const point = getCurvePoint(i / CHAIN_PROFILE_SAMPLES, curvePoints);
+        memberLength += Math.hypot(point.x - previous.x, point.y - previous.y);
+        arcLengths[i] = memberLength;
+        previous = point;
+      }
+
+      memberLengths.push(memberLength);
+      memberArcLengths.push(arcLengths);
     });
-    currentTime += segmentTime;
-    currentHeading = getLineEndHeading(line, prevPoint);
-    lastPoint = line.endPoint as Point;
-  });
+
+    // Re-sample the chain at an even spacing along the curve itself.
+    //
+    // The samples above sit at evenly spaced curve parameters, which on a
+    // Bezier bunch up wherever the control points do. Curvature read across
+    // three nearly-touching points is mostly rounding error, and reading it
+    // across a wide gap smears a corner out — either way the speed cap ends up
+    // oscillating. Walking the arc-length table and evaluating the real curve
+    // at each step gives points that are both evenly spread and actually on the
+    // path, which is what makes the speed curve come out smooth.
+    const evenPoints: BasePoint[] = [];
+    // Heading goal at each sample, so the profile can see how fast the robot
+    // has to spin per inch travelled.
+    const evenHeadings: number[] = [];
+    // Where each sample sits along the chain, on the same ruler the chain
+    // offsets use.
+    const evenDistances: number[] = [];
+    let travelledSoFar = 0;
+    run.steps.forEach((member, memberIndex) => {
+      const curvePoints = [
+        member.startPoint,
+        ...member.line.controlPoints,
+        member.line.endPoint,
+      ];
+      const arcLengths = memberArcLengths[memberIndex];
+      const memberLength = memberLengths[memberIndex];
+      const steps = Math.max(
+        1,
+        Math.min(MAX_CHAIN_SAMPLES, Math.ceil(memberLength / CHAIN_SAMPLE_STEP)),
+      );
+
+      if (memberIndex === 0) {
+        evenPoints.push({ x: member.startPoint.x, y: member.startPoint.y });
+        // The heading the robot arrives with, so a goal that does not pick up
+        // where the last one left off is paid for like any other rotation.
+        evenHeadings.push(currentHeading);
+        evenDistances.push(0);
+      }
+      for (let i = 1; i <= steps; i++) {
+        const intoMember = (memberLength * i) / steps;
+        const t = curveParameterAtDistance(arcLengths, intoMember);
+        const point = getCurvePoint(t, curvePoints);
+        evenPoints.push({ x: point.x, y: point.y });
+        evenHeadings.push(goalHeadingAt(member.line, curvePoints, t));
+        evenDistances.push(travelledSoFar + intoMember);
+      }
+      travelledSoFar += memberLength;
+    });
+
+    const chainLength = memberLengths.reduce((sum, value) => sum + value, 0);
+
+    // The speed is uniform across a run, so any member gives the chain's motion.
+    const pathSpeed = run.speed;
+    const chainMotion = {
+      maxVelocity: useMotionProfile
+        ? Math.max(0, Number(settings.maxVelocity) || 0) * pathSpeed
+        : 0,
+      maxAcceleration: useMotionProfile
+        ? Math.max(0, Number(settings.maxAcceleration) || 0) * pathSpeed
+        : 0,
+      maxDeceleration: useMotionProfile
+        ? Math.max(
+            0,
+            Number(settings.maxDeceleration ?? settings.maxAcceleration) || 0,
+          ) * pathSpeed
+        : 0,
+    };
+    const hasProfile =
+      chainLength > 0 &&
+      chainMotion.maxVelocity > 0 &&
+      chainMotion.maxAcceleration > 0 &&
+      chainMotion.maxDeceleration > 0;
+    // Guard the fallback: a zero average velocity would make the chain take
+    // Infinity seconds and turn every later timestamp into NaN.
+    const averageVelocity =
+      ((Number(settings.xVelocity) + Number(settings.yVelocity)) / 2) * pathSpeed;
+
+    const chainProfile = hasProfile
+      ? buildMotionProfile(
+          profilePointsFromPolyline(
+            evenPoints,
+            evenHeadings,
+            minCorneringRadius,
+            evenDistances,
+          ),
+          {
+            ...chainMotion,
+            // Grip and spin rate are properties of the robot, not of the power
+            // the path asks for, so the path speed scale does not touch them.
+            maxLateralAcceleration: lateralAcceleration,
+            maxAngularVelocity: angularVelocity,
+            turnCoupling,
+            minRadius: minCorneringRadius,
+          },
+        )
+      : null;
+
+    const timeAtChainDistance = (distance: number): number => {
+      const clamped = clampNumber(distance, 0, chainLength);
+      if (chainProfile) return profileTimeAtDistance(chainProfile, clamped);
+      return averageVelocity > 0 ? clamped / averageVelocity : 0;
+    };
+
+    const chainStartTime = currentTime;
+    let travelled = 0;
+    // Wall-clock cursor: turning stretches a path past its time on the chain
+    // profile, so the two clocks drift apart as the chain goes on.
+    let elapsed = 0;
+
+    run.steps.forEach((member, memberIndex) => {
+      const length = memberLengths[memberIndex];
+      const enterTime = timeAtChainDistance(travelled);
+      travelled += length;
+      const exitTime = timeAtChainDistance(travelled);
+      const translationTime = Math.max(0, exitTime - enterTime);
+
+      // The robot never stops to turn — not even at the head of a chain, where
+      // the follower starts driving and correcting heading in the same command.
+      // The cost of turning is already in the chain's speed curve, charged
+      // where the turning actually happens, so the path takes exactly as long
+      // as the profile says. Stretching it per path instead would make the
+      // speed jump at every boundary between paths that turn by different
+      // amounts.
+      const entryHeading = currentHeading;
+      const goalHeading = getLineStartHeading(member.line, member.startPoint);
+      const segmentTime = translationTime;
+
+      // How much of the path is spent picking the heading goal up, measured
+      // against the time the path really takes.
+      const catchUp = headingCatchUpFraction(
+        entryHeading,
+        goalHeading,
+        segmentTime,
+        angularVelocity,
+      );
+
+      segmentLengths.push(length);
+      segmentTimes.push(segmentTime);
+      timeline.push({
+        type: "travel",
+        duration: segmentTime,
+        startTime: chainStartTime + elapsed,
+        endTime: chainStartTime + elapsed + segmentTime,
+        lineIndex: member.lineIndex,
+        startPoint: member.startPoint,
+        arcLengths: memberArcLengths[memberIndex],
+        startHeading: entryHeading,
+        targetHeading: goalHeading,
+        headingCatchUp: catchUp,
+        chain: {
+          index: run.index,
+          startTime: chainStartTime,
+          length: chainLength,
+          offset: travelled - length,
+          enterTime,
+          translationDuration: translationTime,
+          maxVelocity: chainMotion.maxVelocity,
+          maxAcceleration: chainMotion.maxAcceleration,
+          maxDeceleration: chainMotion.maxDeceleration,
+          profile: chainProfile ?? undefined,
+        },
+      });
+
+      elapsed += segmentTime;
+      currentHeading = getLineEndHeading(member.line, member.startPoint);
+      lastPoint = member.line.endPoint as Point;
+    });
+
+    currentTime = chainStartTime + elapsed;
+    stepIndex += run.steps.length;
+  }
 
   const totalTime = currentTime;
   const totalDistance = segmentLengths.reduce((sum, length) => sum + length, 0);
@@ -583,60 +759,18 @@ export function buildTravelLineTimingMetas(
   timePrediction: TimePrediction | null | undefined,
   settings: Settings,
   sequence?: SequenceItem[],
+  variables: Variable[] = [],
 ): TravelLineTimingMeta[] {
-  const lineById = new Map<string, Line>();
-  lines.forEach((line, index) => {
-    if (!line.id) {
-      line.id = `line-${index + 1}`;
-    }
-    lineById.set(line.id, line);
-  });
-
-  const seq: SequenceItem[] =
-    sequence && sequence.length
-      ? sequence
-      : lines.map((line) => ({ kind: "path", lineId: line.id! }));
-
-  const expandedPaths: Array<{
-    lineIndex: number;
-    line: Line;
-    startPoint: BasePoint;
-  }> = [];
-
-  let currentPoint: Point = startPoint;
-  seq.forEach((item) => {
-    if (item.kind === "repeat") {
-      const repeatCount = Math.max(
-        1,
-        Math.min(20, Math.round(Number(item.count) || 1)),
-      );
-      for (let repeatIndex = 0; repeatIndex < repeatCount; repeatIndex++) {
-        (item.lineIds || []).forEach((lineId) => {
-          const line = lineById.get(lineId);
-          if (!line || !line.endPoint) return;
-          const lineIndex = lines.findIndex((candidate) => candidate.id === line.id);
-          expandedPaths.push({
-            lineIndex,
-            line,
-            startPoint: currentPoint,
-          });
-          currentPoint = line.endPoint as Point;
-        });
-      }
-      return;
-    }
-
-    if (item.kind !== "path") return;
-    const line = lineById.get(item.lineId);
-    if (!line || !line.endPoint) return;
-    const lineIndex = lines.findIndex((candidate) => candidate.id === line.id);
-    expandedPaths.push({
-      lineIndex,
-      line,
-      startPoint: currentPoint,
-    });
-    currentPoint = line.endPoint as Point;
-  });
+  // The same route walk the timeline was built from, so entry N here is
+  // travel event N there.
+  const expandedPaths = buildRoute(
+    startPoint,
+    lines,
+    sequence,
+    variables,
+  ).steps.filter((step): step is Extract<typeof step, { kind: "path" }> =>
+    step.kind === "path",
+  );
 
   const travelEvents = (timePrediction?.timeline || []).filter(
     (event) => event.type === "travel" && Number.isFinite(event.duration),
@@ -669,6 +803,8 @@ export function buildTravelLineTimingMetas(
     return {
       executionIndex,
       lineIndex: entry.lineIndex,
+      iteration: entry.iteration,
+      chain: travelEvent?.chain,
       line: entry.line,
       startPoint: entry.startPoint,
       length,
@@ -683,12 +819,91 @@ export function buildTravelLineTimingMetas(
   });
 }
 
+/**
+ * How far into a travel segment the robot is at a time within it.
+ *
+ * A path driven as part of a PathChain has no profile of its own — it is a slice
+ * of the chain's single accelerate/cruise/decelerate curve, so the robot can be
+ * moving at full speed at both ends of it. Reading the position from a per-path
+ * profile would show it braking to a stop on a waypoint it drives straight
+ * through.
+ */
+export function travelDistanceAtLocalTime(
+  meta: TravelLineTimingMeta,
+  localTime: number,
+): number {
+  const clampedTime = clampNumber(localTime, 0, meta.duration);
+  const chain = meta.chain;
+
+  if (chain && chain.length > 0) {
+    // Wall-clock time within the path maps onto the chain's own profile in
+    // proportion, since turning stretches the path evenly rather than changing
+    // where along the chain it sits.
+    const progress = meta.duration > 0 ? clampedTime / meta.duration : 1;
+    const timeIntoChain = chain.enterTime + progress * chain.translationDuration;
+    const distanceAlongChain = chain.profile
+      ? profileDistanceAtTime(chain.profile, timeIntoChain)
+      : chain.offset + meta.length * progress;
+    return clampNumber(distanceAlongChain - chain.offset, 0, meta.length);
+  }
+
+  if (meta.hasMotionProfile) {
+    return calculateMotionProfileDistanceAtTime(
+      clampedTime,
+      meta.length,
+      meta.maxVelocity,
+      meta.maxAcceleration,
+      meta.maxDeceleration,
+    );
+  }
+
+  return meta.length * (meta.duration > 0 ? clampedTime / meta.duration : 1);
+}
+
+/** The inverse of {@link travelDistanceAtLocalTime}. */
+export function travelLocalTimeAtDistance(
+  meta: TravelLineTimingMeta,
+  distance: number,
+): number {
+  const clampedDistance = clampNumber(distance, 0, meta.length);
+  const chain = meta.chain;
+
+  if (chain && chain.length > 0) {
+    if (chain.profile && chain.translationDuration > 0) {
+      const timeIntoChain = profileTimeAtDistance(
+        chain.profile,
+        chain.offset + clampedDistance,
+      );
+      const progress = clampNumber(
+        (timeIntoChain - chain.enterTime) / chain.translationDuration,
+        0,
+        1,
+      );
+      return progress * meta.duration;
+    }
+    return meta.duration * (meta.length > 0 ? clampedDistance / meta.length : 0);
+  }
+
+  if (meta.hasMotionProfile) {
+    return calculateMotionProfileTimeAtDistance(
+      clampedDistance,
+      meta.length,
+      meta.maxVelocity,
+      meta.maxAcceleration,
+      meta.maxDeceleration,
+    );
+  }
+
+  return meta.duration * (meta.length > 0 ? clampedDistance / meta.length : 0);
+}
+
 export function buildEventTimingWindows(
   startPoint: Point,
   lines: Line[],
   timePrediction: TimePrediction | null | undefined,
   settings: Settings,
   sequence?: SequenceItem[],
+  variables: Variable[] = [],
 ): EventTimingWindow[] {
   const metas = buildTravelLineTimingMetas(
     startPoint,
@@ -696,6 +911,7 @@ export function buildEventTimingWindows(
     timePrediction,
     settings,
     sequence,
+    variables,
   );
   const totalTimelineTime = Math.max(
     timePrediction?.totalTime || 0,
@@ -703,22 +919,14 @@ export function buildEventTimingWindows(
   );
   const windows: EventTimingWindow[] = [];
 
-  function distanceAtLocalTime(meta: TravelLineTimingMeta, localTime: number) {
-    const clampedTime = clampNumber(localTime, 0, meta.duration);
-    if (meta.hasMotionProfile) {
-      return calculateMotionProfileDistanceAtTime(
-        clampedTime,
-        meta.length,
-        meta.maxVelocity,
-        meta.maxAcceleration,
-        meta.maxDeceleration,
-      );
-    }
-    return meta.length * (meta.duration > 0 ? clampedTime / meta.duration : 1);
-  }
+  const scope = buildExpressionScope(variables);
 
   metas.forEach((meta) => {
     (meta.line.eventMarkers || []).forEach((marker, markerIndex) => {
+      // A marker switched off by its own condition is skipped in generated
+      // code, so it must not show up in the estimate either.
+      if (!isEnabled(marker, variables, scope)) return;
+
       const triggerType =
         marker.triggerType === "temporal" || marker.triggerType === "pose"
           ? marker.triggerType
@@ -736,41 +944,25 @@ export function buildEventTimingWindows(
           x: Number(marker.poseX),
           y: Number(marker.poseY),
         });
-        localTriggerTime = meta.hasMotionProfile
-          ? calculateMotionProfileTimeAtDistance(
-              triggerDistance,
-              meta.length,
-              meta.maxVelocity,
-              meta.maxAcceleration,
-              meta.maxDeceleration,
-            )
-          : meta.duration * (meta.length > 0 ? triggerDistance / meta.length : 0);
+        localTriggerTime = travelLocalTimeAtDistance(meta, triggerDistance);
       } else if (triggerType === "temporal") {
         localTriggerTime = clampNumber(
           Math.max(0, Number(marker.triggerMs ?? 0) || 0) / 1000,
           0,
           meta.duration,
         );
-        triggerDistance = distanceAtLocalTime(meta, localTriggerTime);
+        triggerDistance = travelDistanceAtLocalTime(meta, localTriggerTime);
       } else {
         triggerDistance = getLineDistanceAtT(meta.startPoint, meta.line, position);
-        localTriggerTime = meta.hasMotionProfile
-          ? calculateMotionProfileTimeAtDistance(
-              triggerDistance,
-              meta.length,
-              meta.maxVelocity,
-              meta.maxAcceleration,
-              meta.maxDeceleration,
-            )
-          : meta.duration * (meta.length > 0 ? triggerDistance / meta.length : position);
+        localTriggerTime = travelLocalTimeAtDistance(meta, triggerDistance);
       }
 
       const durationMs = Math.max(0, Math.round(Number(marker.durationMs ?? 0) || 0));
       const startTime = meta.startTime + localTriggerTime;
-      const endTime =
-        durationMs > 0
-          ? startTime + durationMs / 1000
-          : totalTimelineTime;
+      // A zero duration fires once: the generated `startParallelEvent` finishes
+      // the event immediately, so it must not read as "active until the end of
+      // auto" here either.
+      const endTime = startTime + durationMs / 1000;
 
       windows.push({
         name: marker.name?.trim() || `Event ${markerIndex + 1}`,
