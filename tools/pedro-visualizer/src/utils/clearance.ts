@@ -629,20 +629,29 @@ export type FixHandleKind =
   | "controlPoint"
   | "endPoint"
   | "previousEndPoint"
+  | "poseVariable"
   | "startPoint";
 
 export const FIX_HANDLE_LABELS: Record<FixHandleKind, string> = {
   controlPoint: "control point",
   endPoint: "endpoint",
   previousEndPoint: "the previous path's endpoint",
+  poseVariable: "pose variable",
   startPoint: "starting point",
 };
 
 /** A move that gets the robot clear of whatever it was hitting. */
 export interface ClearanceFix {
   handle: FixHandleKind;
-  /** The path the handle belongs to; empty for the route's start point. */
+  /**
+   * The path the handle belongs to; empty for the route's start point and for a
+   * pose variable, which is not tied to one path.
+   */
   lineId: string;
+  /** Which pose variable moves, when the handle is one. */
+  poseVariableId?: string;
+  /** Every path a pose-variable move touches, for reporting. */
+  affectedLineIds?: string[];
   /** Which control point, when the handle is one. */
   controlPointIndex?: number;
   dx: number;
@@ -692,6 +701,8 @@ interface FixHandle {
   kind: FixHandleKind;
   lineId: string;
   controlPointIndex?: number;
+  poseVariableId?: string;
+  affectedLineIds?: string[];
   measureLineIds: Set<string>;
   apply: (dx: number, dy: number) => ClearanceInput;
   /**
@@ -948,6 +959,107 @@ export function suggestClearanceFix(
 }
 
 /**
+ * Moving a pose variable, which moves every point bound to it at once.
+ *
+ * This is the handle for a collision the path buttons have to refuse: an
+ * endpoint driven by a pose takes its position from the variable, so writing
+ * x/y on the point would not stick. The variable itself can move — but it moves
+ * everywhere it is used, so every bound path and the path after each of them is
+ * measured, and a move that clears one while burying another is not offered.
+ */
+function poseVariableHandle(
+  input: ClearanceInput,
+  poseVariableId: string,
+): FixHandle | null {
+  const routeLines = routeLinesOf({ ...input, measureLineIds: new Set<string>() });
+
+  const boundIndexes: number[] = [];
+  input.lines.forEach((line, index) => {
+    if (line?.endPoint?.poseVariableId === poseVariableId) boundIndexes.push(index);
+  });
+  const startBound = input.startPoint?.poseVariableId === poseVariableId;
+
+  if (!boundIndexes.length && !startBound) return null;
+
+  const measured = new Set<string>();
+  const affected: string[] = [];
+
+  boundIndexes.forEach((index) => {
+    const id = input.lines[index]?.id;
+    if (!id) return;
+    affected.push(id);
+    measured.add(id);
+
+    // The path after a bound endpoint starts on it, so it moves too.
+    const position = routeLines.findIndex((entry) => entry.line.id === id);
+    const follower = position >= 0 ? routeLines[position + 1] : undefined;
+    if (follower?.line.id) measured.add(follower.line.id);
+  });
+
+  if (startBound && routeLines[0]?.line.id) measured.add(routeLines[0].line.id);
+  if (!measured.size) return null;
+
+  return {
+    kind: "poseVariable",
+    lineId: "",
+    poseVariableId,
+    affectedLineIds: affected,
+    measureLineIds: measured,
+    apply: (dx, dy) => {
+      const lines = input.lines.map((line, index) =>
+        boundIndexes.includes(index)
+          ? {
+              ...line,
+              endPoint: {
+                ...line.endPoint,
+                x: line.endPoint.x + dx,
+                y: line.endPoint.y + dy,
+              },
+            }
+          : line,
+      );
+
+      const startPoint = startBound
+        ? { ...input.startPoint, x: input.startPoint.x + dx, y: input.startPoint.y + dy }
+        : input.startPoint;
+
+      // Every follower of a moved endpoint has to start from the new position.
+      let lineStartPoints = input.lineStartPoints;
+      if (lineStartPoints) {
+        lineStartPoints = new Map(lineStartPoints);
+        boundIndexes.forEach((index) => {
+          const id = lines[index]?.id;
+          if (!id) return;
+          const position = routeLines.findIndex((entry) => entry.line.id === id);
+          const follower = position >= 0 ? routeLines[position + 1] : undefined;
+          if (follower?.line.id) lineStartPoints!.set(follower.line.id, lines[index].endPoint);
+        });
+        if (startBound && routeLines[0]?.line.id) {
+          lineStartPoints.set(routeLines[0].line.id, startPoint);
+        }
+      }
+
+      return { ...input, lines, startPoint, lineStartPoints };
+    },
+  };
+}
+
+/**
+ * Finds the smallest move of a pose variable that gets everything using it
+ * clear. `null` when the variable is not what is in the way.
+ */
+export function suggestPoseVariableFix(
+  input: ClearanceInput,
+  options: ClearanceOptions,
+  poseVariableId: string,
+  search: ClearanceFixSearch = {},
+): ClearanceFix | null {
+  const handle = poseVariableHandle(input, poseVariableId);
+  if (!handle) return null;
+  return bestFixAcross([handle], input, options, search);
+}
+
+/**
  * Finds the smallest move of the route's start point that gets the robot clear.
  *
  * Offered on its own because the start pose is a problem the paths cannot fix:
@@ -1030,6 +1142,8 @@ function bestFixAcross(
       handle: handle.kind,
       lineId: handle.lineId,
       controlPointIndex: handle.controlPointIndex,
+      poseVariableId: handle.poseVariableId,
+      affectedLineIds: handle.affectedLineIds,
       dx: candidate.dx,
       dy: candidate.dy,
       distance: Math.hypot(candidate.dx, candidate.dy),

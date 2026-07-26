@@ -198,9 +198,11 @@
             class="rounded-full px-2 py-0.5 text-[10px] font-semibold disabled:opacity-60 {clearance.hit
               ? 'bg-red-100 dark:bg-red-900/60 text-red-700 dark:text-red-200 hover:bg-red-200 dark:hover:bg-red-900'
               : 'bg-amber-100 dark:bg-amber-900/60 text-amber-700 dark:text-amber-200 hover:bg-amber-200 dark:hover:bg-amber-900'}"
-            title="{startClearanceTitle} Click to move the starting point on X and Y until the robot clears."
+            title="{startClearanceTitle} Click to move the starting point on X and Y until the robot clears where it is staged. This only moves the start position — it does not touch any path."
           >
-            {fixingClearance ? "Fixing…" : `${startClearanceLabel} — fix collision issues`}
+            {fixingClearance
+              ? "Fixing…"
+              : `${startClearanceLabel} — fix start position only`}
           </button>
         {:else}
           <span

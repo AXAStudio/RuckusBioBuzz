@@ -210,11 +210,26 @@ Fix collision issues:
   reaches the safety margin wins. A **control point** only bends the curve
   between two waypoints the robot still hits, so it is nearly free and goes
   first; an **endpoint** changes where the robot parks, usually a scoring
-  position; the **starting point** changes where the robot is staged, which
-  someone has to physically do differently. A collision partway along a path is
-  normally a control-point problem and out of an endpoint's reach entirely.
-- The starting point has its own button rather than being one more handle on the
-  path button. It is judged on where the robot is *staged*, not on the whole
+  position; the **previous path's endpoint** goes last, because it edits a
+  different path than the button that was pressed. A collision partway along a
+  path is normally a control-point problem and out of an endpoint's reach
+  entirely.
+- The first stretch of a path is pinned to wherever the previous path left the
+  robot, so a collision there is not really that path's at all: its own endpoint
+  and control points are downstream of the problem and none of them can move it.
+  That is why the button has to be able to reach back. On the first real auto
+  this ran against, three of the five collisions were at a hand-off like that,
+  and the button reported it could do nothing while pressing the *other* path's
+  button fixed them.
+- When nothing works, the message names the thing that would have to change
+  rather than shrugging: which path hands the robot over, whether that endpoint
+  is locked or comes from a pose variable, or that the gap is simply tighter than
+  the robot. A path handed a bad pose by a pose-variable endpoint says so —
+  that position is owned by the variable, and no amount of moving points here
+  will shift it.
+- The starting point has its own button, labelled `fix start position only` so it
+  is clear it moves where the robot is staged and nothing else. It is a separate
+  button rather than one more handle on the path button. It is judged on where the robot is *staged*, not on the whole
   first path, because a path that drives through a goal is that path's problem
   and re-staging cannot fix it. Mixing the two objectives made the search
   re-stage the robot to gain an inch at the start while leaving the path driven
@@ -244,6 +259,35 @@ Fix collision issues:
   a plain label there. Where nothing can help, the button says so instead of
   moving the path for nothing.
 - It is one edit on the undo stack.
+
+Fix all collisions:
+
+- One button in the step toolbar walks everything currently flagged, worst
+  first, applying the best fix for each until nothing more improves. The
+  per-path buttons each fix one thing; a chain of hand-offs would otherwise have
+  to be clicked through one at a time. On the first real auto this ran against
+  it reported `6 moves — everything clears by 1in`, from five collisions.
+- Targets are re-derived after every applied fix rather than planned up front:
+  moving one waypoint moves the start of the path after it, so what is still in
+  trouble changes as it goes. A target that cannot be fixed is not retried, since
+  its geometry has not changed and retrying would spin.
+- Poses are tried before the paths bound to them. A path whose endpoint a pose
+  owns cannot be fixed on its own, so going path-first would only burn a round
+  marking it unfixable.
+- It yields to the page between rounds. Each round runs a few hundred candidate
+  measurements and would otherwise freeze the frame.
+
+Pose variables:
+
+- A point bound to a pose takes its position from the variable, so the path it
+  sits on cannot move it — writing x/y on the point is overwritten on the next
+  resolve. The pose itself is a handle, and the Variables tab shows a fix button
+  on any pose something flagged depends on.
+- Moving a pose moves everywhere it is used, so every bound path and the path
+  after each of them is measured on every candidate. A move that clears one and
+  buries another is not offered.
+- The fix is written to the variable, not to the points, and the usual sync
+  carries it to everything bound to it.
 
 Dragging numbers:
 

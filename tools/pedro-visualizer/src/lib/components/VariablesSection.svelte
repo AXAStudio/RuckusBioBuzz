@@ -23,6 +23,15 @@
   export let onCommit: () => void = () => {};
   export let onStoreChain: (id?: string) => void = () => {};
   export let onInsertPath: (id: string) => void = () => {};
+  /**
+   * Pose variables something currently flagged depends on. A pose owns the
+   * position of every point bound to it, so when one of those points is in an
+   * obstacle the pose is the only thing that can move it.
+   */
+  export let flaggedPoseIds: Set<string> = new Set();
+  export let onFixPoseClearance: (id: string) => void = () => {};
+  export let fixingPoseId = "";
+  export let clearanceFixNotes: Record<string, string> = {};
 
   let newType: VariableType = "number";
   let filter = "";
@@ -176,6 +185,36 @@
               {/each}
             </select>
           </div>
+
+          <!--
+            A point bound to this pose takes its position from here, so the path
+            it sits on cannot move it. This is where that collision gets fixed.
+          -->
+          {#if variable.type === "pose" && flaggedPoseIds.has(variable.id)}
+            <div class="mt-1 flex flex-wrap items-center gap-1">
+              <button
+                on:click={() => onFixPoseClearance(variable.id)}
+                disabled={Boolean(fixingPoseId)}
+                title="Something using this pose is too close to an obstacle or a wall. Click to move the pose on X and Y until everything bound to it clears."
+                class="rounded-full bg-red-100 dark:bg-red-900/60 px-2 py-0.5 text-[10px] font-semibold text-red-700 dark:text-red-200 hover:bg-red-200 dark:hover:bg-red-900 disabled:opacity-60"
+              >
+                {fixingPoseId === variable.id
+                  ? "Fixing…"
+                  : "Collision here — fix collision issues"}
+              </button>
+            </div>
+          {/if}
+
+          {#if clearanceFixNotes[variable.id]}
+            <div class="mt-1">
+              <span
+                class="rounded-full bg-neutral-200 dark:bg-neutral-800 px-2 py-0.5 text-[10px] font-semibold text-neutral-600 dark:text-neutral-300"
+                title={clearanceFixNotes[variable.id]}
+              >
+                {clearanceFixNotes[variable.id]}
+              </span>
+            </div>
+          {/if}
 
           <div class="mt-2">
             {#if variable.type === "number"}

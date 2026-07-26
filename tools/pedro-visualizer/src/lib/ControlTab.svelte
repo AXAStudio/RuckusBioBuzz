@@ -16,6 +16,7 @@
     VariableType,
   } from "../types";
   import _ from "lodash";
+  import { tick } from "svelte";
   import { FIELD_SIZE } from "../config/defaults";
   import {
     buildChainRuns,
@@ -24,6 +25,7 @@
     calculatePathTime,
     canMoveEndpoint,
     CHAIN_BREAK_LABELS,
+    checkClearance,
     EMPTY_CLEARANCE_REPORT,
     footprintFromSettings,
     getAngularDifference,
@@ -47,6 +49,7 @@
     resolveVariableValues,
     FIX_HANDLE_LABELS,
     suggestClearanceFix,
+    suggestPoseVariableFix,
     suggestStartPointFix,
     uniqueVariableName,
     type ClearanceFix,
@@ -359,6 +362,209 @@
   }
 
   const START_POINT_FIX_ID = "__start-point__";
+  const ALL_FIX_ID = "__fix-all__";
+
+  /**
+   * Moving a pose variable moves every point bound to it, which is the only
+   * handle that can shift an endpoint the pose owns.
+   */
+  async function fixPoseVariableClearance(poseVariableId: string) {
+    fixingClearanceLineId = poseVariableId;
+    clearanceFixNotes = { ...clearanceFixNotes, [poseVariableId]: "" };
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    try {
+      const fix = suggestPoseVariableFix(
+        clearanceInput(),
+        { fieldSize: FIELD_SIZE, margin: settings.safetyMargin },
+        poseVariableId,
+      );
+
+      if (!fix) {
+        clearanceFixNotes = {
+          ...clearanceFixNotes,
+          [poseVariableId]: "No move of this pose clears everything using it",
+        };
+        return;
+      }
+
+      applyClearanceFix(fix);
+      clearanceFixNotes = { ...clearanceFixNotes, [poseVariableId]: describeApplied(fix) };
+      recordChange?.();
+    } finally {
+      fixingClearanceLineId = "";
+    }
+  }
+
+  /** Pose variables that something currently flagged depends on. */
+  $: flaggedPoseVariableIds = (() => {
+    const flagged = new Set<string>();
+
+    lines.forEach((line) => {
+      const poseId = line.endPoint?.poseVariableId;
+      if (!poseId) return;
+      const entry = clearanceReport.byLine.get(line.id || "");
+      if (entry?.spans.length) flagged.add(poseId);
+    });
+
+    // A path handed a bad pose by the path before it is the pose's problem too.
+    mainRoute.steps.forEach((step, index) => {
+      if (step.kind !== "path") return;
+      const entry = clearanceReport.byLine.get(step.lineId);
+      const worst = entry?.spans[0];
+      if (!worst || worst.startDistance > settings.rWidth / 2) return;
+
+      const order = mainRoute.steps.filter((item) => item.kind === "path");
+      const position = order.findIndex((item) => item.lineId === step.lineId);
+      const previousId = position > 0 ? order[position - 1].lineId : null;
+      const previous = previousId ? lines.find((item) => item.id === previousId) : null;
+      if (previous?.endPoint?.poseVariableId) flagged.add(previous.endPoint.poseVariableId);
+      void index;
+    });
+
+    if (startPoint.poseVariableId && startPoseClearance) {
+      flagged.add(startPoint.poseVariableId);
+    }
+
+    return flagged;
+  })();
+
+  /**
+   * Works through everything currently flagged, worst first, applying the best
+   * fix for each until nothing more can be improved.
+   *
+   * Targets are re-derived after every applied fix rather than planned up front:
+   * moving one waypoint moves the start of the path after it, so the list of
+   * what is still in trouble changes as it goes. A target that cannot be fixed
+   * is not retried — the geometry has not changed for it, and retrying would
+   * spin.
+   */
+  async function fixAllCollisions() {
+    if (fixingClearanceLineId) return;
+
+    fixingClearanceLineId = ALL_FIX_ID;
+    clearanceFixNotes = { ...clearanceFixNotes, [ALL_FIX_ID]: "Working…" };
+    await tick();
+
+    const options = { fieldSize: FIELD_SIZE, margin: settings.safetyMargin };
+    const before = checkClearance(clearanceInput(), options);
+    const applied: ClearanceFix[] = [];
+    const exhausted = new Set<string>();
+
+    try {
+      for (let round = 0; round < MAX_FIX_ALL_ROUNDS; round++) {
+        // Let the page breathe: each round runs a few hundred candidate
+        // measurements and would otherwise freeze the frame.
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        const input = clearanceInput();
+        const report = checkClearance(input, options);
+        const target = nextFixTarget(report, exhausted);
+        if (!target) break;
+
+        clearanceFixNotes = {
+          ...clearanceFixNotes,
+          [ALL_FIX_ID]: `Working… ${applied.length} fixed`,
+        };
+
+        const fix =
+          target.kind === "startPoint"
+            ? suggestStartPointFix(input, options)
+            : target.kind === "poseVariable"
+              ? suggestPoseVariableFix(input, options, target.id)
+              : suggestClearanceFix(input, options, target.id);
+
+        if (!fix) {
+          exhausted.add(target.key);
+          continue;
+        }
+
+        applyClearanceFix(fix);
+        applied.push(fix);
+        // The route and the timeline both move with it.
+        await tick();
+      }
+
+      const after = checkClearance(clearanceInput(), options);
+      clearanceFixNotes = {
+        ...clearanceFixNotes,
+        [ALL_FIX_ID]: summariseFixAll(applied, before, after),
+      };
+      if (applied.length) recordChange?.();
+    } finally {
+      fixingClearanceLineId = "";
+    }
+  }
+
+  const MAX_FIX_ALL_ROUNDS = 24;
+
+  type FixTarget = { kind: "path" | "startPoint" | "poseVariable"; id: string; key: string };
+
+  /**
+   * The worst thing still flagged. Poses come before the paths bound to them:
+   * a path whose endpoint the pose owns cannot be fixed on its own, so trying it
+   * first would only burn a round marking it unfixable.
+   */
+  function nextFixTarget(report: ClearanceReport, exhausted: Set<string>): FixTarget | null {
+    const candidates: Array<FixTarget & { severity: number }> = [];
+
+    flaggedPoseVariableIds.forEach((poseId) => {
+      candidates.push({
+        kind: "poseVariable",
+        id: poseId,
+        key: `pose:${poseId}`,
+        // Ahead of a path at the same clearance, never ahead of a worse one.
+        severity: report.minClearance - 1e-6,
+      });
+    });
+
+    report.byLine.forEach((entry) => {
+      if (!entry.spans.length) return;
+      candidates.push({
+        kind: "path",
+        id: entry.lineId,
+        key: `path:${entry.lineId}`,
+        severity: entry.minClearance,
+      });
+    });
+
+    const pose = report.startPose;
+    if (pose && pose.clearance < report.margin && !startPoint.locked && !startPoint.poseVariableId) {
+      candidates.push({
+        kind: "startPoint",
+        id: START_POINT_FIX_ID,
+        key: "start",
+        severity: pose.clearance,
+      });
+    }
+
+    return (
+      candidates
+        .filter((candidate) => !exhausted.has(candidate.key))
+        .sort((a, b) => a.severity - b.severity)[0] ?? null
+    );
+  }
+
+  function summariseFixAll(
+    applied: ClearanceFix[],
+    before: ClearanceReport,
+    after: ClearanceReport,
+  ): string {
+    if (!applied.length) {
+      return before.spans.length
+        ? "Nothing here could be moved to clear it — see each path for why"
+        : "Nothing to fix";
+    }
+
+    const moves = `${applied.length} ${applied.length === 1 ? "move" : "moves"}`;
+    if (after.hitCount === 0 && after.spans.length === 0) {
+      return `${moves} — everything clears by ${settings.safetyMargin}in`;
+    }
+    if (after.hitCount === 0) {
+      return `${moves} — no collisions left, ${after.spans.length} still inside the margin`;
+    }
+    return `${moves} — ${before.hitCount} collisions down to ${after.hitCount}`;
+  }
 
   function clearanceInput() {
     return {
@@ -387,6 +593,22 @@
 
     if (fix.handle === "startPoint") {
       startPoint = move(startPoint) as Point;
+      return;
+    }
+
+    // A pose is moved at the variable, not at the points: the points take their
+    // position from it, so writing them directly would be overwritten on the
+    // next resolve. Every point bound to it follows through the usual sync.
+    if (fix.handle === "poseVariable" && fix.poseVariableId) {
+      const variable = variables.find((item) => item.id === fix.poseVariableId);
+      if (!variable || variable.type !== "pose") return;
+      handleVariableChange({
+        ...variable,
+        x: Number(variable.x) + fix.dx,
+        y: Number(variable.y) + fix.dy,
+        xExpression: undefined,
+        yExpression: undefined,
+      });
       return;
     }
 
@@ -453,10 +675,17 @@
   }
 
   function describeApplied(fix: ClearanceFix): string {
+    const poseName =
+      fix.handle === "poseVariable"
+        ? variables.find((item) => item.id === fix.poseVariableId)?.name?.trim()
+        : "";
+
     const what =
       fix.handle === "controlPoint"
         ? `control point ${(fix.controlPointIndex ?? 0) + 1}`
-        : FIX_HANDLE_LABELS[fix.handle];
+        : fix.handle === "poseVariable"
+          ? `pose ${poseName || "variable"}`
+          : FIX_HANDLE_LABELS[fix.handle];
 
     return fix.meetsMargin
       ? `Moved ${what} ${fix.distance.toFixed(2)}in — now ${fix.after.toFixed(2)}in clear`
@@ -2091,6 +2320,36 @@
           If
         </button>
 
+        <!--
+          One pass over everything flagged. The per-path buttons each fix one
+          thing; this walks the whole route so a chain of hand-offs does not
+          have to be clicked through one at a time.
+        -->
+        {#if clearanceReport.spans.length || startPoseClearance}
+          <button
+            on:click={fixAllCollisions}
+            disabled={Boolean(fixingClearanceLineId)}
+            title="Move control points, endpoints, poses and the starting point until nothing on the route is closer than the safety margin"
+            class="px-2 py-1 text-xs font-semibold rounded disabled:opacity-60 {clearanceReport.hitCount >
+            0
+              ? 'bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-200'
+              : 'bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-200'}"
+          >
+            {fixingClearanceLineId === ALL_FIX_ID
+              ? "Fixing…"
+              : `Fix all collisions (${clearanceReport.hitCount || clearanceReport.spans.length})`}
+          </button>
+        {/if}
+
+        {#if clearanceFixNotes[ALL_FIX_ID]}
+          <span
+            class="px-2 py-1 text-[11px] font-semibold rounded bg-neutral-100 text-neutral-600 dark:bg-neutral-800 dark:text-neutral-300"
+            title={clearanceFixNotes[ALL_FIX_ID]}
+          >
+            {clearanceFixNotes[ALL_FIX_ID]}
+          </span>
+        {/if}
+
         <div class="ml-auto flex items-center gap-2">
           <button
             on:click={() => setAllLinesCollapsed(true)}
@@ -2540,6 +2799,10 @@
         onCommit={recordChange}
         onStoreChain={storeChainAsVariable}
         onInsertPath={insertPathVariable}
+        flaggedPoseIds={flaggedPoseVariableIds}
+        onFixPoseClearance={fixPoseVariableClearance}
+        fixingPoseId={fixingClearanceLineId}
+        {clearanceFixNotes}
       />
     {:else if activeTab === "field"}
       <ObstaclesSection
