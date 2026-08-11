@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Swerve drivetrain hardware configuration, shipped inside the APK.
+
+    The SDK discovers any res/xml file whose root is <Robot type="FirstInspires-FTC"> and offers it
+    as a read-only configuration, so this survives a wiped hub and is version controlled with the
+    code it belongs to. Activate it from the Swerve Bring-Up dashboard ("Use built-in config") or
+    pick it in the Driver Station config list if you have one.
+
+    Read-only is deliberate: this is the known-good baseline to fall back to. To experiment with
+    ports, use "Write & activate" on the dashboard, which creates an editable copy on the hub.
+
+    All twelve swerve devices live on the Control Hub (module 173):
+      sm0-sm3  drive motors        motor ports 0-3
+      ss0-ss3  turn servos         servo ports 0-3   (needs the servo power module)
+      se0-se3  Axon absolute enc.  analog ports 0-3  (spliced two per analog port)
+-->
+<Robot type="FirstInspires-FTC">
+    <LynxUsbDevice name="Control Hub Portal" serialNumber="(embedded)" parentModuleAddress="173">
+        <LynxModule name="Control Hub" port="173">
+            <Motor name="sm0" port="0" />
+            <Motor name="sm1" port="1" />
+            <Motor name="sm2" port="2" />
+            <Motor name="sm3" port="3" />
+            <ContinuousRotationServo name="ss0" port="0" />
+            <ContinuousRotationServo name="ss1" port="1" />
+            <ContinuousRotationServo name="ss2" port="2" />
+            <ContinuousRotationServo name="ss3" port="3" />
+            <AnalogInput name="se0" port="0" />
+            <AnalogInput name="se1" port="1" />
+            <AnalogInput name="se2" port="2" />
+            <AnalogInput name="se3" port="3" />
+            <goBILDAPinpoint name="pinpoint" port="0" bus="0" />
+        </LynxModule>
+    </LynxUsbDevice>
+</Robot>

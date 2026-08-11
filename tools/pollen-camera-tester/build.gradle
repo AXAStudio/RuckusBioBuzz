@@ -19,6 +19,14 @@ idea {
     }
 }
 
+// See the note in tools/pedro-visualizer/build.gradle: "Rebuild Project" requests `testClasses`
+// from every module, and `java-base` alone never creates it. This module is served by python, so
+// there are no JVM tests to run.
+tasks.register('testClasses') {
+    group = 'verification'
+    description = 'No-op: this module is a static page served by python and has no JVM tests.'
+}
+
 tasks.register('serve', Exec) {
     group = 'pollen camera tester'
     description = 'Start the pollen camera tester at http://localhost:8787/.'

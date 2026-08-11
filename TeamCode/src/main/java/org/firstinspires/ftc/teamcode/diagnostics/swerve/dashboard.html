@@ -1,0 +1,1166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Swerve Bring-Up</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #171c24;
+    --panel2: #1f2731;
+    --line: #2b3542;
+    --text: #e6edf3;
+    --muted: #8b98a8;
+    --accent: #4da3ff;
+    --good: #3fb950;
+    --warn: #d29922;
+    --bad: #f85149;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+    padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  h1 { font-size: 16px; margin: 0; letter-spacing: .3px; }
+  .stat { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+  .stat b { color: var(--text); font-weight: 600; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .dot.on { background: var(--good); box-shadow: 0 0 8px var(--good); }
+  .dot.off { background: var(--bad); }
+  .spacer { flex: 1; }
+  button {
+    font: inherit; color: var(--text); background: var(--panel2);
+    border: 1px solid var(--line); border-radius: 7px;
+    padding: 8px 12px; cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button:active { transform: translateY(1px); }
+  button.primary { background: #14395f; border-color: #1f5c99; }
+  button.stop { background: #5c1a1a; border-color: var(--bad); font-weight: 700; padding: 10px 20px; }
+  button.small { padding: 5px 9px; font-size: 12px; }
+  main { padding: 16px; max-width: 1500px; margin: 0 auto; }
+  section {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px; margin-bottom: 16px;
+  }
+  section > h2 {
+    font-size: 13px; text-transform: uppercase; letter-spacing: .7px;
+    color: var(--muted); margin: 0 0 10px;
+  }
+  .step { display: flex; gap: 14px; align-items: flex-start; padding: 10px 0; border-top: 1px solid var(--line); }
+  .step:first-of-type { border-top: none; }
+  .step .num {
+    flex: none; width: 26px; height: 26px; border-radius: 50%;
+    background: var(--panel2); border: 1px solid var(--line);
+    display: grid; place-items: center; font-size: 12px; font-weight: 700; color: var(--accent);
+  }
+  .step .body { flex: 1; min-width: 0; }
+  .step .title { font-weight: 600; margin-bottom: 2px; }
+  .step .desc { color: var(--muted); font-size: 13px; margin-bottom: 8px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(330px, 1fr)); gap: 14px; }
+  .pod {
+    background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px;
+  }
+  .pod.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+  .pod h3 { margin: 0 0 2px; font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .pod .names { color: var(--muted); font-size: 12px; font-family: ui-monospace, Consolas, monospace; }
+  .podmain { display: flex; gap: 12px; align-items: center; margin: 10px 0; }
+  .dial { flex: none; }
+  .readouts { flex: 1; min-width: 0; font-variant-numeric: tabular-nums; }
+  .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 1px 0; }
+  .kv span:first-child { color: var(--muted); }
+  .bar { height: 6px; background: #0c1015; border-radius: 3px; overflow: hidden; margin-top: 6px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+  .flags { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+  .flag {
+    font-size: 11px; padding: 3px 7px; border-radius: 5px; cursor: pointer;
+    border: 1px solid var(--line); background: #10151c; color: var(--muted);
+    font-family: ui-monospace, Consolas, monospace;
+  }
+  .flag.on { background: #123122; border-color: var(--good); color: #7ee095; }
+  .badge { font-size: 11px; padding: 2px 7px; border-radius: 5px; background: #10151c; border: 1px solid var(--line); color: var(--muted); }
+  .badge.bad { background: #3a1414; border-color: var(--bad); color: #ffb4ae; }
+  .badge.good { background: #123122; border-color: var(--good); color: #7ee095; }
+  input[type=number], input[type=text] {
+    font: inherit; background: #0c1015; color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; width: 92px;
+    font-family: ui-monospace, Consolas, monospace; font-size: 12px;
+  }
+  label.inline { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+  .msg { padding: 9px 12px; border-radius: 7px; background: var(--panel2); border-left: 3px solid var(--accent); }
+  .issue { padding: 7px 11px; border-radius: 7px; background: #2a1616; border-left: 3px solid var(--bad); margin-top: 6px; font-size: 13px; }
+  .note { padding: 7px 11px; border-radius: 7px; background: #2a2416; border-left: 3px solid var(--warn); margin-top: 6px; font-size: 13px; }
+  textarea {
+    width: 100%; min-height: 240px; background: #0c1015; color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; padding: 10px;
+    font-family: ui-monospace, Consolas, monospace; font-size: 12px; resize: vertical;
+  }
+  canvas { width: 100%; height: 200px; background: #0c1015; border-radius: 8px; border: 1px solid var(--line); }
+  .hint { color: var(--muted); font-size: 12px; }
+
+  /* Live view. Series colors are validated against this surface for CVD separation;
+     actual vs commanded is also encoded by fill style, never by hue alone. */
+  .vizwrap { display: flex; gap: 18px; flex-wrap: wrap; align-items: flex-start; }
+  #viz { width: 440px; height: 440px; max-width: 100%; flex: none; }
+  .vizside { flex: 1; min-width: 260px; }
+  .legend { display: flex; flex-direction: column; gap: 7px; margin-bottom: 14px; }
+  .legend div { display: flex; align-items: center; gap: 9px; font-size: 13px; color: var(--muted); }
+  .swatch { width: 26px; height: 11px; border-radius: 3px; flex: none; }
+  .swatch.actual { background: #3987e5; }
+  .swatch.target { border: 2px dashed #c98500; background: transparent; }
+  .swatch.wedge { background: repeating-linear-gradient(45deg, #47536420, #47536420 3px, #8b98a8 3px, #8b98a8 5px); }
+  table.pods { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
+  table.pods th {
+    text-align: right; font-weight: 600; color: var(--muted); font-size: 11px;
+    text-transform: uppercase; letter-spacing: .5px; padding: 4px 7px; border-bottom: 1px solid var(--line);
+  }
+  table.pods th:first-child, table.pods td:first-child { text-align: left; }
+  table.pods td { text-align: right; padding: 5px 7px; border-bottom: 1px solid #1b222b; }
+  table.pods tr.sel td { background: #14395f33; }
+  td.err { color: var(--bad); font-weight: 600; }
+  td.dim { color: var(--muted); }
+  .warnbox {
+    background: #2a2416; border: 1px solid var(--warn); border-radius: 8px;
+    padding: 10px 12px; margin-bottom: 14px; font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Swerve Bring-Up</h1>
+  <span class="stat"><span id="dot" class="dot off"></span><b id="conn">connecting</b></span>
+  <span class="stat">mode <b id="mode">-</b></span>
+  <span class="stat">battery <b id="volt">-</b> V</span>
+  <span class="stat">loop <b id="hz">-</b> Hz</span>
+  <span class="spacer"></span>
+  <button class="stop" onclick="cmd('stop')">STOP ALL</button>
+</header>
+
+<main>
+  <div class="warnbox">
+    <b>Before any scan:</b> put the robot on blocks so the wheels spin free, and keep the driver
+    station within reach. Every routine here can move the drivetrain.
+  </div>
+
+  <section>
+    <h2>Robot configuration &mdash; no Driver Station required</h2>
+    <div class="row" style="margin-bottom:10px">
+      <span class="stat">active config <b id="cfgActive">&hellip;</b></span>
+      <span class="spacer"></span>
+      <button onclick="cfgRestart()">Restart robot app</button>
+    </div>
+    <div class="hint" style="margin-bottom:10px">
+      This page is served by the Robot Controller itself at startup, so it works before any
+      configuration exists. Ports below follow the wiring diagram &mdash; edit them if the mech team
+      wired differently. Written as a new file, so an existing config is never overwritten.
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <label class="inline">name <input type="text" id="cfgName" value="SwerveBringUp" style="width:130px"></label>
+      <label class="inline">motors <input type="text" id="cfgMotors" value="sm0:0,sm1:1,sm2:2,sm3:3" style="width:190px"></label>
+      <label class="inline">turn servos <input type="text" id="cfgServos" value="ss0:0,ss1:1,ss2:2,ss3:3" style="width:190px"></label>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <label class="inline">encoders <input type="text" id="cfgAnalogs" value="se0:0,se1:1,se2:2,se3:3" style="width:190px"></label>
+      <label class="inline">pinpoint <input type="text" id="cfgPinpoint" value="pinpoint:0" style="width:120px"></label>
+      <label class="inline">expansion hub addr <input type="number" id="cfgExpansion" value="0" style="width:70px"></label>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <button onclick="cfgPreview()">Preview</button>
+      <button class="primary" onclick="cfgWrite()">Write &amp; activate</button>
+      <button onclick="cfgBuiltIn()">Use built-in config</button>
+      <button onclick="cfgCopy()">Copy XML</button>
+      <span class="hint">
+        name:port for each device. Leave pinpoint blank to omit it.
+        A new config only takes effect after a restart.
+      </span>
+    </div>
+    <div id="cfgMsg" class="msg">Loading configuration&hellip;</div>
+    <textarea id="cfgXml" spellcheck="false" style="min-height:150px; margin-top:10px"></textarea>
+  </section>
+
+  <section>
+    <h2>Status</h2>
+    <div class="msg" id="message">Waiting for the Swerve Bring-Up OpMode&hellip;</div>
+    <div id="issues"></div>
+  </section>
+
+  <section>
+    <h2>Gamepad</h2>
+    <div class="row" style="margin-bottom:10px">
+      <span class="stat"><span id="padDot" class="dot off"></span><b id="padName">no gamepad seen</b></span>
+      <span class="spacer"></span>
+      <button id="padBtn" class="primary" onclick="togglePadDrive()">Drive with gamepad</button>
+    </div>
+    <div class="hint" style="margin-bottom:10px">
+      Browsers hide a controller until it sends input, so <b>press a button on it with this tab
+      focused</b>. Keep this tab focused while driving &mdash; background tabs stop reporting, which
+      is exactly what makes FTC Dashboard's gamepad cut out. If the axes below move, the controller
+      is reaching the browser fine.
+    </div>
+    <table class="pods">
+      <thead><tr><th>Axis</th><th>Raw</th><th>Sent</th></tr></thead>
+      <tbody id="padRows"><tr><td colspan="3" class="dim">Waiting for a controller&hellip;</td></tr></tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>Live swerve view &mdash; top down, robot forward is up</h2>
+    <div class="vizwrap">
+      <canvas id="viz" width="440" height="440"></canvas>
+      <div class="vizside">
+        <div class="legend">
+          <div><span class="swatch actual"></span> Actual &mdash; measured from the encoder</div>
+          <div><span class="swatch target"></span> Commanded &mdash; what the kinematics ask for</div>
+          <div><span class="swatch wedge"></span> Tracking error, labelled in degrees</div>
+        </div>
+        <table class="pods">
+          <thead>
+            <tr><th>Pod</th><th>Actual</th><th>Target</th><th>Error</th><th>Power</th></tr>
+          </thead>
+          <tbody id="vizrows"></tbody>
+        </table>
+        <div class="hint" style="margin-top:10px">
+          Commanded angles only appear while a drive or step command is active. A pod whose solid
+          wheel does not line up with its dashed target is not tracking &mdash; check that pod's
+          zero, its encoder pairing, and its PIDF.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Guided bring-up</h2>
+
+    <div class="step">
+      <div class="num">1</div>
+      <div class="body">
+        <div class="title">Identify wiring &amp; pair encoders</div>
+        <div class="desc">
+          Turns each pod one at a time and watches all four analog channels. This resolves which
+          spliced encoder wire belongs to which pod, and sets each servo direction so that positive
+          power always increases the encoder reading (which the turn PID requires).
+          Takes about 4 seconds.
+        </div>
+        <div class="row">
+          <button class="primary" onclick="cmd('wireScan')">Run wiring scan</button>
+          <span class="hint">Watch the robot: pods should turn one after another, in index order.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="num">2</div>
+      <div class="body">
+        <div class="title">Measure encoder range</div>
+        <div class="desc">
+          Spins each pod continuously for 4 seconds and records the true minimum and maximum
+          voltage of the Axon absolute output. These become <code>analogMinVoltage</code> and
+          <code>analogMaxVoltage</code>.
+        </div>
+        <div class="row"><button class="primary" onclick="cmd('sweep')">Run encoder sweep</button></div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="num">3</div>
+      <div class="body">
+        <div class="title">Set rotation convention</div>
+        <div class="desc">
+          Only you can see which way the pod physically turned. Spin the selected pod, watch it from
+          <em>above</em>, and record whether a rising encoder reading means counter-clockwise. This
+          sets <code>encoderReversed</code>. Normally identical on all four pods.
+        </div>
+        <div class="row">
+          <button onclick="cmd('spinServo')">Spin selected pod</button>
+          <button onclick="cmd('setEncoderReversed', {value: true, scope: 'all'})">Rising = CCW (all pods)</button>
+          <button onclick="cmd('setEncoderReversed', {value: false, scope: 'all'})">Rising = CW (all pods)</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="num">4</div>
+      <div class="body">
+        <div class="title">Capture forward zero</div>
+        <div class="desc">
+          Servos are limp whenever no routine is running, so you can turn each pod by hand. Point
+          every wheel straight forward, all bevel gears facing the same way, then capture. This sets
+          <code>angleOffsetRad</code>. Use nudge if a pod is stiff.
+        </div>
+        <div class="row">
+          <button class="primary" onclick="cmd('zeroAll')">Capture zero &mdash; all pods</button>
+          <button onclick="cmd('zeroPod')">Capture selected pod only</button>
+          <button class="small" onclick="cmd('nudge', {dir: -1})">&#8630; nudge</button>
+          <button class="small" onclick="cmd('nudge', {dir: 1})">nudge &#8631;</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="num">5</div>
+      <div class="body">
+        <div class="title">Tune the turn PIDF</div>
+        <div class="desc">
+          Commands a step on the selected pod using the real <code>CoaxialPod</code> control path, so
+          whatever you tune here transfers directly to competition code. Raise <code>kF</code> until
+          the pod just overcomes stiction, then <code>kP</code> for speed, then <code>kD</code> to
+          damp overshoot.
+        </div>
+        <div class="row">
+          <label class="inline">kP <input type="number" id="kp" step="0.01"></label>
+          <label class="inline">kD <input type="number" id="kd" step="0.001"></label>
+          <label class="inline">kF <input type="number" id="kf" step="0.001"></label>
+          <button onclick="applyPidf(false)">Apply to pod</button>
+          <button onclick="applyPidf(true)">Apply to all</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="primary" onclick="cmd('pidStep', {deg: 0})">Step 0&deg;</button>
+          <button class="primary" onclick="cmd('pidStep', {deg: 90})">Step 90&deg;</button>
+          <button class="primary" onclick="cmd('pidStep', {deg: 180})">Step 180&deg;</button>
+          <button class="primary" onclick="cmd('pidStep', {deg: 270})">Step 270&deg;</button>
+          <button onclick="cmd('pidHold')">Release</button>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button class="primary" onclick="cmd('autoTune')">Auto-tune this pod</button>
+          <span class="hint">
+            Measures kF from stiction, then sweeps kP and kD against scored 90&deg; steps.
+            About 25 seconds; only the selected pod moves.
+          </span>
+        </div>
+        <div id="tuneBox" class="msg" style="margin-top:8px; display:none"></div>
+        <canvas id="trace" width="1200" height="200" style="margin-top:10px"></canvas>
+        <div class="row" style="margin-top:6px">
+          <span class="legend" style="flex-direction:row; gap:16px; margin:0">
+            <span style="display:flex;align-items:center;gap:8px"><span class="swatch target"></span> commanded heading</span>
+            <span style="display:flex;align-items:center;gap:8px"><span class="swatch actual"></span> actual encoder heading</span>
+          </span>
+        </div>
+        <div class="hint" style="margin-top:4px">
+          The solid line should reach the dashed one quickly and stay there. Slow to arrive means
+          kP or kF is too low; overshooting past it and ringing means kP is too high or kD too low.
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <div class="num">6</div>
+      <div class="body">
+        <div class="title">Verify kinematics</div>
+        <div class="desc">
+          Drives the whole drivetrain through a real Pedro <code>Swerve</code> object at low power.
+          Forward should point all wheels forward; rotate should form the classic X pattern.
+          Hold a button to drive, release to stop.
+        </div>
+        <div class="row" id="driveButtons"></div>
+        <div class="hint" style="margin-top:6px">
+          If a wheel drives backward while the others drive forward, flip that pod's
+          <code>drive</code> flag on its card below.
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Pods &mdash; click a card to select</h2>
+    <div class="grid" id="pods"></div>
+  </section>
+
+  <section>
+    <h2>Export</h2>
+    <div class="row" style="margin-bottom:10px">
+      <button class="primary" onclick="cmd('export')">Generate constants</button>
+      <button onclick="copyExport()">Copy</button>
+      <button onclick="cmd('save')">Save to hub</button>
+      <button onclick="cmd('reload')">Reload saved</button>
+      <span class="hint">Calibration auto-saves to <code>FIRST/swerve_bringup_cal.txt</code> and survives OpMode restarts.</span>
+    </div>
+    <textarea id="export" spellcheck="false" placeholder="Generate constants to paste into SwerveDrivetrainConstants.java"></textarea>
+  </section>
+</main>
+
+<script>
+'use strict';
+
+var state = null;
+var selected = 0;
+var pidfDirty = false;
+
+function cmd(action, args) {
+  args = args || {};
+  // A per-pod control must name its own pod. Card buttons call stopPropagation so the card's
+  // select() never runs, and without this the command would land on whichever pod happened to be
+  // selected - reversing the wrong motor with no visible clue.
+  var pod = (args.pod === undefined) ? selected : args.pod;
+  var q = '/swerve/cmd?action=' + encodeURIComponent(action) + '&pod=' + pod;
+  for (var k in args) {
+    if (Object.prototype.hasOwnProperty.call(args, k) && k !== 'pod') {
+      q += '&' + encodeURIComponent(k) + '=' + encodeURIComponent(args[k]);
+    }
+  }
+  fetch(q).catch(function () { /* transient WiFi drop; the poller reports connection state */ });
+}
+
+function drive(f, s, t) { cmd('drive', {f: f, s: s, t: t}); }
+
+// The robot runs a 400 ms drive watchdog, so a held button must keep re-sending. This also means
+// that if this page dies mid-drive, the robot stops on its own.
+var driveTimer = null;
+
+function driveStart(f, s, t) {
+  driveStop();
+  drive(f, s, t);
+  driveTimer = setInterval(function () { drive(f, s, t); }, 150);
+}
+
+function driveStop() {
+  // Guarded so an ordinary click elsewhere on the page does not push the robot into drive mode.
+  if (driveTimer === null) return;
+  clearInterval(driveTimer);
+  driveTimer = null;
+  drive(0, 0, 0);
+}
+
+(function buildDriveButtons() {
+  var defs = [
+    ['Forward', 0.3, 0, 0], ['Backward', -0.3, 0, 0],
+    ['Strafe left', 0, 0.3, 0], ['Strafe right', 0, -0.3, 0],
+    ['Rotate CCW', 0, 0, 0.3], ['Rotate CW', 0, 0, -0.3]
+  ];
+  var host = document.getElementById('driveButtons');
+  defs.forEach(function (d) {
+    var b = document.createElement('button');
+    b.textContent = d[0];
+    var go = function (ev) { ev.preventDefault(); driveStart(d[1], d[2], d[3]); };
+    b.addEventListener('mousedown', go);
+    b.addEventListener('touchstart', go, {passive: false});
+    ['mouseup', 'mouseleave', 'touchend', 'touchcancel'].forEach(function (evt) {
+      b.addEventListener(evt, driveStop);
+    });
+    host.appendChild(b);
+  });
+})();
+
+// Releasing the mouse outside a button, or leaving the page, must still stop the robot.
+window.addEventListener('mouseup', driveStop);
+window.addEventListener('blur', driveStop);
+
+function applyPidf(all) {
+  cmd('setPidf', {
+    kp: document.getElementById('kp').value,
+    kd: document.getElementById('kd').value,
+    kf: document.getElementById('kf').value,
+    scope: all ? 'all' : 'one'
+  });
+  pidfDirty = false;
+}
+
+function select(i) {
+  // Optimistic locally, then tell the robot so it stays the single source of truth - otherwise
+  // selecting a pod on the gamepad would never show up here, and vice versa.
+  selected = i;
+  pidfDirty = false;
+  cmd('select');
+  render();
+}
+
+function copyExport() {
+  var ta = document.getElementById('export');
+  ta.select();
+  ta.setSelectionRange(0, 999999);
+  // http://192.168.43.1 is not a secure origin, so navigator.clipboard is unavailable here.
+  try { document.execCommand('copy'); } catch (e) { /* user can copy manually */ }
+}
+
+// Mark the PIDF inputs dirty so live polling does not overwrite what is being typed.
+['kp', 'kd', 'kf'].forEach(function (id) {
+  document.getElementById(id).addEventListener('input', function () { pidfDirty = true; });
+});
+
+// ---------------------------------------------------------------- gamepad
+//
+// Reads the controller here and sends drive commands straight to the robot, bypassing FTC
+// Dashboard's gamepad path entirely. The robot's own 400 ms drive watchdog still applies, so if
+// this page stops sending - tab closed, laptop asleep - the robot stops on its own.
+
+var PAD_DEADBAND = 0.06;
+var PAD_SEND_MS = 60;
+
+var padDriving = false;
+var padLastSend = 0;
+
+function setPadDriving(on) {
+  padDriving = on;
+  var b = document.getElementById('padBtn');
+  b.textContent = on ? 'Stop gamepad driving' : 'Drive with gamepad';
+  b.className = on ? 'stop' : 'primary';
+  if (!on) drive(0, 0, 0);
+}
+
+function togglePadDrive() {
+  setPadDriving(!padDriving);
+}
+
+function firstPad() {
+  var pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (var i = 0; i < pads.length; i++) {
+    if (pads[i]) return pads[i];
+  }
+  return null;
+}
+
+function padAxis(v) {
+  return Math.abs(v) < PAD_DEADBAND ? 0 : v;
+}
+
+function pollPad() {
+  var p = firstPad();
+  var dot = document.getElementById('padDot');
+  var name = document.getElementById('padName');
+  var rows = document.getElementById('padRows');
+
+  if (!p) {
+    dot.className = 'dot off';
+    name.textContent = 'no gamepad seen';
+    rows.innerHTML = '<tr><td colspan="3" class="dim">Press a button on the controller, with this tab focused.</td></tr>';
+    // Controller vanished mid-drive: stop rather than let the last command latch.
+    if (padDriving) setPadDriving(false);
+    return;
+  }
+
+  dot.className = 'dot on';
+  name.textContent = p.id.length > 44 ? p.id.slice(0, 44) + '…' : p.id;
+
+  // Standard mapping: 0 = left X, 1 = left Y, 2 = right X.
+  var forward = padAxis(-(p.axes[1] || 0));
+  var strafe = padAxis(-(p.axes[0] || 0));
+  var turn = padAxis(-(p.axes[2] || 0));
+
+  rows.innerHTML =
+      padRow('left Y &rarr; forward', p.axes[1], forward)
+    + padRow('left X &rarr; strafe', p.axes[0], strafe)
+    + padRow('right X &rarr; turn', p.axes[2], turn);
+
+  if (!padDriving) return;
+
+  // Re-sent on a fixed interval even when the sticks are still, so the robot's watchdog stays fed.
+  var now = Date.now();
+  if (now - padLastSend >= PAD_SEND_MS) {
+    padLastSend = now;
+    drive(forward, strafe, turn);
+  }
+}
+
+function padRow(label, raw, sent) {
+  return '<tr><td>' + label + '</td><td class="dim">' + fmt(raw || 0, 3) + '</td><td>'
+    + fmt(sent, 3) + '</td></tr>';
+}
+
+setInterval(pollPad, 30);
+window.addEventListener('gamepadconnected', pollPad);
+window.addEventListener('gamepaddisconnected', pollPad);
+
+// ---------------------------------------------------------------- configuration
+
+function cfgQuery(write) {
+  var v = function (id) { return encodeURIComponent(document.getElementById(id).value); };
+  return '/swerve/config?name=' + v('cfgName')
+    + '&motors=' + v('cfgMotors')
+    + '&servos=' + v('cfgServos')
+    + '&analogs=' + v('cfgAnalogs')
+    + '&pinpoint=' + v('cfgPinpoint')
+    + '&expansion=' + v('cfgExpansion')
+    + (write ? '&write=1' : '');
+}
+
+function cfgApply(j) {
+  document.getElementById('cfgActive').textContent = j.active || '(none)';
+  document.getElementById('cfgXml').value = j.xml || '';
+  var box = document.getElementById('cfgMsg');
+  box.textContent = j.message || '';
+  box.style.borderLeftColor = j.ok ? 'var(--good)' : 'var(--bad)';
+}
+
+function cfgPreview() {
+  fetch(cfgQuery(false)).then(function (r) { return r.json(); }).then(cfgApply)
+    .catch(function () { document.getElementById('cfgMsg').textContent = 'Could not reach the Robot Controller.'; });
+}
+
+function cfgWrite() {
+  if (!confirm('Write this configuration and make it active?\n\nThe robot must then be restarted '
+      + 'from the Manage page for it to take effect.')) return;
+  fetch(cfgQuery(true)).then(function (r) { return r.json(); }).then(cfgApply)
+    .catch(function () { document.getElementById('cfgMsg').textContent = 'Write failed: no response.'; });
+}
+
+function cfgBuiltIn() {
+  if (!confirm('Switch to the read-only configuration shipped inside the app?\n\n'
+      + 'Use this to recover a known-good setup. Restart the robot afterwards to apply it.')) return;
+  fetch('/swerve/config?builtin=1').then(function (r) { return r.json(); }).then(cfgApply)
+    .catch(function () { document.getElementById('cfgMsg').textContent = 'Could not reach the Robot Controller.'; });
+}
+
+function cfgRestart() {
+  if (!confirm('Restart the Robot Controller app?\n\nThis applies the active configuration. '
+      + 'Any running OpMode stops, and this page reconnects on its own in about 15 seconds.')) return;
+  var box = document.getElementById('cfgMsg');
+  fetch('/swerve/restart')
+    .then(function (r) { return r.json(); })
+    .then(function (j) { box.textContent = j.message || 'Restarting…'; })
+    // The app exits mid-request, so a rejected fetch here is the expected outcome, not a failure.
+    .catch(function () { box.textContent = 'Restarting… this page reconnects shortly.'; });
+}
+
+function cfgCopy() {
+  var ta = document.getElementById('cfgXml');
+  ta.select();
+  ta.setSelectionRange(0, 999999);
+  try { document.execCommand('copy'); } catch (e) { /* user can copy manually */ }
+}
+
+cfgPreview();
+
+function fmt(v, d) {
+  if (v === null || v === undefined) return '--';
+  return Number(v).toFixed(d === undefined ? 2 : d);
+}
+
+function dial(deg, ok) {
+  var r = 30, cx = 34, cy = 34;
+  var a = (deg - 90) * Math.PI / 180;
+  var color = ok ? '#4da3ff' : '#f85149';
+  return '<svg class="dial" width="68" height="68" viewBox="0 0 68 68">'
+    + '<circle cx="' + cx + '" cy="' + cy + '" r="' + r + '" fill="#0c1015" stroke="#2b3542"/>'
+    + '<line x1="' + cx + '" y1="4" x2="' + cx + '" y2="10" stroke="#8b98a8" stroke-width="2"/>'
+    + '<line x1="' + cx + '" y1="' + cy + '" x2="' + (cx + r * 0.78 * Math.cos(a)) + '" y2="'
+    + (cy + r * 0.78 * Math.sin(a)) + '" stroke="' + color + '" stroke-width="3" stroke-linecap="round"/>'
+    + '<circle cx="' + cx + '" cy="' + cy + '" r="3" fill="' + color + '"/></svg>';
+}
+
+function podCard(p) {
+  var live = p.hasEnc && p.volts !== null;
+  var range = Math.max(0.001, p.maxV - p.minV);
+  var pct = live ? Math.max(0, Math.min(100, (p.volts - p.minV) / range * 100)) : 0;
+
+  var missing = '';
+  if (!p.hasMotor) missing += '<span class="badge bad">no motor</span> ';
+  if (!p.hasServo) missing += '<span class="badge bad">no servo</span> ';
+  if (!p.hasEnc) missing += '<span class="badge bad">no encoder</span> ';
+  if (!missing) missing = '<span class="badge good">all present</span>';
+
+  var disc = (p.discovered >= 0 && p.discovered !== p.i)
+    ? '<span class="badge bad">remapped &rarr; se' + p.discovered + '</span>' : '';
+
+  return '<div class="pod' + (p.i === selected ? ' sel' : '') + '" onclick="select(' + p.i + ')">'
+    + '<h3>pod ' + p.i + ' <span class="badge">' + p.label + '</span> ' + disc + '</h3>'
+    + '<div class="names">' + p.motor + ' &middot; ' + p.servo + ' &middot; ' + p.enc + '</div>'
+    + '<div class="podmain">' + dial(live ? p.zeroDeg : 0, live)
+    + '<div class="readouts">'
+    + '<div class="kv"><span>zeroed</span><b>' + fmt(p.zeroDeg, 1) + '&deg;</b></div>'
+    + '<div class="kv"><span>raw</span><b>' + fmt(p.rawDeg, 1) + '&deg;</b></div>'
+    + '<div class="kv"><span>volts</span><b>' + fmt(p.volts, 3) + ' V</b></div>'
+    + '<div class="kv"><span>offset</span><b>' + fmt(p.offsetDeg, 1) + '&deg;</b></div>'
+    + '<div class="kv"><span>range</span><b>' + fmt(p.minV, 3) + ' &ndash; ' + fmt(p.maxV, 3) + '</b></div>'
+    + '<div class="bar"><i style="width:' + pct + '%"></i></div>'
+    + '</div></div>'
+    + '<div class="flags">'
+    + flag('encoderReversed', p.encRev,
+        "cmd('setEncoderReversed',{value:" + !p.encRev + ",pod:" + p.i + "})")
+    + flag('drive REV', p.drvRev,
+        "cmd('setDriveReversed',{value:" + !p.drvRev + ",pod:" + p.i + "})")
+    + flag('servo REV', p.srvRev,
+        "cmd('setServoReversed',{value:" + !p.srvRev + ",pod:" + p.i + "})")
+    + '</div>'
+    + '<div class="row">' + missing + '</div>'
+    + '<div class="row" style="margin-top:8px">'
+    + '<button class="small" onclick="event.stopPropagation();cmd(\'pulseMotor\',{pod:' + p.i + '})">Pulse motor</button>'
+    + '<button class="small" onclick="event.stopPropagation();cmd(\'spinServo\',{pod:' + p.i + '})">Spin servo</button>'
+    + '<button class="small" onclick="event.stopPropagation();cmd(\'zeroPod\',{pod:' + p.i + '})">Zero here</button>'
+    + '</div>'
+    + '<div class="row" style="margin-top:6px">'
+    + '<button class="small' + (p.drvRev ? ' primary' : '') + '" onclick="event.stopPropagation();'
+    + 'cmd(\'setDriveReversed\',{value:' + !p.drvRev + ',pod:' + p.i + '})">'
+    + (p.drvRev ? '&#8635; motor reversed' : '&#8634; reverse motor') + '</button>'
+    + '<span class="hint">' + esc(p.motor) + ' spins '
+    + (p.drvRev ? 'reversed' : 'forward') + '</span>'
+    + '</div>'
+    + '<div class="row" style="margin-top:6px">'
+    + '<span class="hint">corner</span>'
+    + cornerBtn(p, 'LF') + cornerBtn(p, 'RF') + cornerBtn(p, 'LB') + cornerBtn(p, 'RB')
+    + '</div></div>';
+}
+
+// Which chassis corner a pod sits at. Only rotation uses this, so getting it wrong gives a
+// drivetrain that strafes correctly and spins backwards.
+function cornerBtn(p, corner) {
+  var on = (p.label || '').toUpperCase() === corner;
+  return '<button class="small' + (on ? ' primary' : '') + '" onclick="event.stopPropagation();'
+    + 'cmd(\'setLabel\',{value:\'' + corner + '\',pod:' + p.i + '})">' + corner + '</button>';
+}
+
+function flag(name, on, action) {
+  return '<span class="flag' + (on ? ' on' : '') + '" onclick="event.stopPropagation();' + action + '">'
+    + name + ' ' + (on ? 'ON' : 'off') + '</span>';
+}
+
+function render() {
+  if (!state) return;
+
+  var live = !!state.live;
+
+  // The OpMode owns the selection, so the gamepad and the dashboard can never disagree.
+  if (live && typeof state.selected === 'number') {
+    selected = state.selected;
+  }
+
+  document.getElementById('dot').className = 'dot ' + (live && state.started ? 'on' : 'off');
+  document.getElementById('conn').textContent = !live
+    ? 'no OpMode'
+    : (state.started ? 'running' : 'INIT — press START to allow motion');
+  document.getElementById('mode').textContent = state.mode || '-';
+  document.getElementById('volt').textContent = fmt(state.voltage, 2);
+  document.getElementById('hz').textContent = fmt(state.loopHz, 0);
+  document.getElementById('message').textContent = state.message || '';
+
+  var issues = '';
+  (state.errors || []).forEach(function (e) { issues += '<div class="issue">' + esc(e) + '</div>'; });
+  (state.notes || []).forEach(function (n) { issues += '<div class="note">' + esc(n) + '</div>'; });
+  document.getElementById('issues').innerHTML = issues;
+
+  var pods = state.pods || [];
+  document.getElementById('pods').innerHTML = pods.map(podCard).join('');
+
+  var cur = pods[selected];
+  if (cur && !pidfDirty) {
+    document.getElementById('kp').value = Number(cur.kp).toFixed(4);
+    document.getElementById('kd').value = Number(cur.kd).toFixed(4);
+    document.getElementById('kf').value = Number(cur.kf).toFixed(4);
+  }
+
+  if (state.export && document.getElementById('export').value !== state.export) {
+    document.getElementById('export').value = state.export;
+  }
+
+  renderTune(state.tune);
+  drawViz(state);
+  renderVizTable(state);
+  drawTrace(state.trace);
+}
+
+function renderTune(t) {
+  var box = document.getElementById('tuneBox');
+  if (!box) return;
+  if (!t || (!t.running && !(t.log || []).length)) {
+    box.style.display = 'none';
+    return;
+  }
+
+  box.style.display = '';
+  box.style.borderLeftColor = t.running ? 'var(--warn)' : 'var(--good)';
+
+  var html = '<b>' + (t.running ? 'Tuning pod ' + t.pod : 'Tuning finished') + '</b> &mdash; '
+    + esc(t.status || '');
+  var lines = t.log || [];
+  if (lines.length) {
+    html += '<div style="margin-top:8px; font-family:ui-monospace,Consolas,monospace; font-size:12px; line-height:1.55">';
+    for (var i = 0; i < lines.length; i++) {
+      html += esc(lines[i]) + '<br>';
+    }
+    html += '</div>';
+  }
+  box.innerHTML = html;
+}
+
+function esc(s) {
+  return String(s).replace(/[&<>]/g, function (c) {
+    return {'&': '&amp;', '<': '&lt;', '>': '&gt;'}[c];
+  });
+}
+
+// ---------------------------------------------------------------- live swerve view
+
+// Series colors validated for CVD separation against this surface (blue/yellow, ΔE 27+).
+var VIZ = {
+  actual: '#3987e5',
+  target: '#c98500',
+  ink: '#e6edf3',
+  muted: '#8b98a8',
+  line: '#2b3542',
+  bad: '#f85149',
+  surface: '#0c1015'
+};
+
+var WHEEL_L = 34;
+var WHEEL_W = 12;
+
+/** Shortest signed difference a-b, in degrees, wrapped to [-180, 180]. */
+function angleDelta(a, b) {
+  var d = (a - b) % 360;
+  if (d > 180) d -= 360;
+  if (d < -180) d += 360;
+  return d;
+}
+
+/** Robot frame -> screen. Pod X is forward (up), pod Y is left. */
+function podToScreen(p, cx, cy, scale) {
+  return [cx - p.podY * scale, cy - p.podX * scale];
+}
+
+/** Wheel theta is CCW from robot-right, so screen direction negates the y component. */
+function dirFor(deg) {
+  var a = deg * Math.PI / 180;
+  return [Math.cos(a), -Math.sin(a)];
+}
+
+function roundRectPath(g, x, y, w, h, r) {
+  g.beginPath();
+  g.moveTo(x + r, y);
+  g.arcTo(x + w, y, x + w, y + h, r);
+  g.arcTo(x + w, y + h, x, y + h, r);
+  g.arcTo(x, y + h, x, y, r);
+  g.arcTo(x, y, x + w, y, r);
+  g.closePath();
+}
+
+function drawWheel(g, x, y, deg, style) {
+  g.save();
+  g.translate(x, y);
+  g.rotate(-deg * Math.PI / 180);
+  roundRectPath(g, -WHEEL_L / 2, -WHEEL_W / 2, WHEEL_L, WHEEL_W, 4);
+  if (style.dashed) {
+    g.setLineDash([5, 4]);
+    g.strokeStyle = style.color;
+    g.lineWidth = 2;
+    g.stroke();
+    g.setLineDash([]);
+  } else {
+    // 2px surface ring so the solid mark stays separable where it overlaps the target outline.
+    g.strokeStyle = VIZ.surface;
+    g.lineWidth = 2;
+    g.stroke();
+    g.fillStyle = style.color;
+    g.fill();
+  }
+  g.restore();
+}
+
+/** Arrow along the wheel axis showing signed drive power. */
+function drawPowerArrow(g, x, y, deg, power, color) {
+  if (Math.abs(power) < 0.02) return;
+  var d = dirFor(deg);
+  var sign = power < 0 ? -1 : 1;
+  var len = WHEEL_L / 2 + 6 + Math.min(1, Math.abs(power)) * 26;
+  var ex = x + d[0] * len * sign;
+  var ey = y + d[1] * len * sign;
+
+  g.strokeStyle = color;
+  g.lineWidth = 2;
+  g.lineCap = 'round';
+  g.beginPath();
+  g.moveTo(x + d[0] * (WHEEL_L / 2 + 4) * sign, y + d[1] * (WHEEL_L / 2 + 4) * sign);
+  g.lineTo(ex, ey);
+  g.stroke();
+
+  var a = Math.atan2(ey - y, ex - x);
+  g.beginPath();
+  g.moveTo(ex, ey);
+  g.lineTo(ex - 7 * Math.cos(a - 0.4), ey - 7 * Math.sin(a - 0.4));
+  g.lineTo(ex - 7 * Math.cos(a + 0.4), ey - 7 * Math.sin(a + 0.4));
+  g.closePath();
+  g.fillStyle = color;
+  g.fill();
+}
+
+/** Neutral hatched wedge spanning actual -> target, so error is never color-alone. */
+function drawErrorWedge(g, x, y, actualDeg, targetDeg) {
+  var delta = angleDelta(targetDeg, actualDeg);
+  if (Math.abs(delta) < 1.5) return;
+  var r = WHEEL_L / 2 + 3;
+  var sA = -actualDeg * Math.PI / 180;
+  var eA = -targetDeg * Math.PI / 180;
+
+  g.save();
+  g.beginPath();
+  g.moveTo(x, y);
+  g.arc(x, y, r, sA, eA, eA < sA);
+  g.closePath();
+  g.fillStyle = 'rgba(139,152,168,0.30)';
+  g.fill();
+  g.strokeStyle = VIZ.muted;
+  g.lineWidth = 1;
+  g.stroke();
+  g.restore();
+}
+
+function drawViz(st) {
+  var c = document.getElementById('viz');
+  if (!c) return;
+  var g = c.getContext('2d');
+
+  // Match the backing store to the device pixel ratio so text and thin marks stay crisp.
+  var dpr = window.devicePixelRatio || 1;
+  var cssW = 440, cssH = 440;
+  if (c.width !== cssW * dpr) {
+    c.width = cssW * dpr;
+    c.height = cssH * dpr;
+  }
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, cssW, cssH);
+
+  var cx = cssW / 2, cy = cssH / 2;
+  var pods = (st && st.pods) || [];
+
+  if (!pods.length) {
+    g.fillStyle = VIZ.muted;
+    g.font = '13px sans-serif';
+    g.fillText('Waiting for pod data…', 16, cy);
+    return;
+  }
+
+  var extent = 0;
+  pods.forEach(function (p) {
+    extent = Math.max(extent, Math.abs(p.podX || 0), Math.abs(p.podY || 0));
+  });
+  // Margin leaves room for the chassis outline, the FWD marker and the direct labels.
+  var scale = extent > 0 ? (Math.min(cx, cy) - 92) / extent : 1;
+
+  // Chassis outline, drawn from the pod footprint.
+  var halfX = 0, halfY = 0;
+  pods.forEach(function (p) {
+    halfX = Math.max(halfX, Math.abs(p.podX || 0) * scale);
+    halfY = Math.max(halfY, Math.abs(p.podY || 0) * scale);
+  });
+  g.strokeStyle = VIZ.line;
+  g.lineWidth = 2;
+  roundRectPath(g, cx - halfY - 20, cy - halfX - 20, (halfY + 20) * 2, (halfX + 20) * 2, 14);
+  g.stroke();
+
+  // Forward marker: arrow sits clear above its own label.
+  var topY = cy - halfX - 20;
+  g.fillStyle = VIZ.muted;
+  g.font = '600 11px sans-serif';
+  g.textAlign = 'center';
+  g.fillText('FWD', cx, topY - 10);
+  g.beginPath();
+  g.moveTo(cx, topY - 34);
+  g.lineTo(cx - 6, topY - 24);
+  g.lineTo(cx + 6, topY - 24);
+  g.closePath();
+  g.fill();
+
+  // Chassis rotation hint, in recessive ink so it never competes with the pod marks.
+  var cmd = (st && st.cmd) || {f: 0, s: 0, t: 0};
+  if (Math.abs(cmd.t) > 0.05) {
+    var rr = Math.min(halfX, halfY) * 0.42;
+    var ccw = cmd.t > 0;
+    g.strokeStyle = VIZ.muted;
+    g.lineWidth = 2;
+    g.setLineDash([4, 4]);
+    g.beginPath();
+    g.arc(cx, cy, rr, -0.5, Math.PI + 0.5, !ccw);
+    g.stroke();
+    g.setLineDash([]);
+
+    // Arrowhead, so the turn direction is unambiguous rather than implied.
+    var headA = ccw ? Math.PI + 0.5 : -0.5;
+    var hx = cx + rr * Math.cos(headA);
+    var hy = cy + rr * Math.sin(headA);
+    var tangent = headA + (ccw ? -Math.PI / 2 : Math.PI / 2);
+    g.beginPath();
+    g.moveTo(hx + 8 * Math.cos(tangent), hy + 8 * Math.sin(tangent));
+    g.lineTo(hx + 6 * Math.cos(tangent + 2.4), hy + 6 * Math.sin(tangent + 2.4));
+    g.lineTo(hx + 6 * Math.cos(tangent - 2.4), hy + 6 * Math.sin(tangent - 2.4));
+    g.closePath();
+    g.fillStyle = VIZ.muted;
+    g.fill();
+  }
+
+  // Chassis translation vector.
+  if (Math.hypot(cmd.f, cmd.s) > 0.05) {
+    var tx = cx - cmd.s * 70;
+    var ty = cy - cmd.f * 70;
+    g.strokeStyle = VIZ.muted;
+    g.lineWidth = 2;
+    g.beginPath();
+    g.moveTo(cx, cy);
+    g.lineTo(tx, ty);
+    g.stroke();
+    var ta = Math.atan2(ty - cy, tx - cx);
+    g.beginPath();
+    g.moveTo(tx, ty);
+    g.lineTo(tx - 8 * Math.cos(ta - 0.4), ty - 8 * Math.sin(ta - 0.4));
+    g.lineTo(tx - 8 * Math.cos(ta + 0.4), ty - 8 * Math.sin(ta + 0.4));
+    g.closePath();
+    g.fillStyle = VIZ.muted;
+    g.fill();
+  }
+
+  pods.forEach(function (p) {
+    var xy = podToScreen(p, cx, cy, scale);
+    var x = xy[0], y = xy[1];
+    var hasAngle = p.wheelDeg !== null && p.wheelDeg !== undefined;
+    var hasTarget = p.tgtDeg !== null && p.tgtDeg !== undefined;
+
+    if (p.i === selected) {
+      g.beginPath();
+      g.arc(x, y, WHEEL_L / 2 + 13, 0, Math.PI * 2);
+      g.strokeStyle = VIZ.line;
+      g.lineWidth = 2;
+      g.stroke();
+    }
+
+    if (!hasAngle) {
+      g.save();
+      g.setLineDash([3, 3]);
+      g.strokeStyle = VIZ.muted;
+      g.lineWidth = 2;
+      roundRectPath(g, x - WHEEL_L / 2, y - WHEEL_W / 2, WHEEL_L, WHEEL_W, 4);
+      g.stroke();
+      g.restore();
+      var nx = cx - x, ny = cy - y;
+      var nm = Math.hypot(nx, ny) || 1;
+      g.fillStyle = VIZ.bad;
+      g.font = '600 10px sans-serif';
+      g.textAlign = 'center';
+      g.fillText(p.label + ' no encoder', x + nx / nm * 40, y + ny / nm * 40 + 4);
+      return;
+    }
+
+    if (hasTarget) {
+      drawErrorWedge(g, x, y, p.wheelDeg, p.tgtDeg);
+      drawWheel(g, x, y, p.tgtDeg, {color: VIZ.target, dashed: true});
+    }
+    drawWheel(g, x, y, p.wheelDeg, {color: VIZ.actual, dashed: false});
+    drawPowerArrow(g, x, y, p.wheelDeg, p.drivePower, VIZ.actual);
+
+    // Direct label: identity plus the error number, so neither depends on color. Placed toward
+    // the robot centre, where there is open space clear of the chassis outline and the wheels.
+    var toX = cx - x, toY = cy - y;
+    var m = Math.hypot(toX, toY) || 1;
+    var lx = x + toX / m * 40;
+    var ly = y + toY / m * 40;
+
+    g.textAlign = 'center';
+    g.font = '600 12px sans-serif';
+    g.fillStyle = VIZ.ink;
+    g.fillText(p.label + ' · ' + Math.round(p.wheelDeg) + '°', lx, ly + 4);
+
+    if (hasTarget) {
+      var d = angleDelta(p.tgtDeg, p.wheelDeg);
+      g.font = '11px sans-serif';
+      g.fillStyle = Math.abs(d) > 10 ? VIZ.bad : VIZ.muted;
+      g.fillText((d > 0 ? '+' : '') + d.toFixed(0) + '° err', lx, ly + 18);
+    }
+  });
+
+  g.textAlign = 'left';
+}
+
+function renderVizTable(st) {
+  var host = document.getElementById('vizrows');
+  if (!host) return;
+  var pods = (st && st.pods) || [];
+  host.innerHTML = pods.map(function (p) {
+    var hasAngle = p.wheelDeg !== null && p.wheelDeg !== undefined;
+    var hasTarget = p.tgtDeg !== null && p.tgtDeg !== undefined;
+    var d = hasAngle && hasTarget ? angleDelta(p.tgtDeg, p.wheelDeg) : null;
+    return '<tr' + (p.i === selected ? ' class="sel"' : '') + '>'
+      + '<td>' + esc(p.label) + ' <span class="hint">' + esc(p.enc) + '</span></td>'
+      + '<td' + (hasAngle ? '' : ' class="dim"') + '>'
+      + (hasAngle ? fmt(p.wheelDeg, 1) + '&deg;' : '--') + '</td>'
+      + '<td' + (hasTarget ? '' : ' class="dim"') + '>'
+      + (hasTarget ? fmt(p.tgtDeg, 1) + '&deg;' : '--') + '</td>'
+      + '<td' + (d !== null && Math.abs(d) > 10 ? ' class="err"' : ' class="dim"') + '>'
+      + (d !== null ? (d > 0 ? '+' : '') + d.toFixed(1) + '&deg;' : '--') + '</td>'
+      + '<td class="dim">' + fmt(p.drivePower, 2) + '</td>'
+      + '</tr>';
+  }).join('');
+}
+
+// Commanded vs measured pod heading. Same two series colours as the live view, so "dashed/amber
+// is where it should be, solid/blue is where it is" reads the same way in both places.
+function drawTrace(tr) {
+  var c = document.getElementById('trace');
+  var g = c.getContext('2d');
+  var w = c.width, h = c.height;
+  g.clearRect(0, 0, w, h);
+
+  if (!tr || !tr.act || tr.act.length < 2) {
+    g.fillStyle = VIZ.muted;
+    g.font = '13px sans-serif';
+    g.fillText('Run a step, a drive test or an auto-tune to record headings', 12, h / 2 - 10);
+    return;
+  }
+
+  var lo = Infinity, hi = -Infinity, i;
+  for (i = 0; i < tr.act.length; i++) {
+    lo = Math.min(lo, tr.act[i], tr.tgt[i]);
+    hi = Math.max(hi, tr.act[i], tr.tgt[i]);
+  }
+  if (hi - lo < 10) { var mid = (hi + lo) / 2; lo = mid - 5; hi = mid + 5; }
+  var pad = (hi - lo) * 0.12;
+  lo -= pad; hi += pad;
+
+  var t0 = tr.t[0];
+  var tSpan = Math.max(0.001, tr.t[tr.t.length - 1] - t0);
+  var xOf = function (t) { return (t - t0) / tSpan * (w - 46) + 42; };
+  var yOf = function (v) { return h - 18 - (v - lo) / (hi - lo) * (h - 32); };
+
+  // Recessive gridlines with degree labels, so the reader can judge magnitude not just shape.
+  g.strokeStyle = VIZ.line;
+  g.fillStyle = VIZ.muted;
+  g.font = '10px sans-serif';
+  g.lineWidth = 1;
+  for (i = 0; i <= 4; i++) {
+    var v = lo + (hi - lo) * i / 4;
+    var y = yOf(v);
+    g.beginPath(); g.moveTo(42, y); g.lineTo(w - 4, y); g.stroke();
+    g.fillText(v.toFixed(0) + '°', 4, y + 3);
+  }
+
+  var line = function (series, color, dashed) {
+    g.strokeStyle = color;
+    g.lineWidth = 2;
+    g.setLineDash(dashed ? [5, 4] : []);
+    g.beginPath();
+    for (var j = 0; j < series.length; j++) {
+      var x = xOf(tr.t[j]), y = yOf(series[j]);
+      if (j === 0) g.moveTo(x, y); else g.lineTo(x, y);
+    }
+    g.stroke();
+    g.setLineDash([]);
+  };
+
+  line(tr.tgt, VIZ.target, true);
+  line(tr.act, VIZ.actual, false);
+
+  var err = tr.act[tr.act.length - 1] - tr.tgt[tr.tgt.length - 1];
+  g.fillStyle = VIZ.muted;
+  g.font = '12px sans-serif';
+  g.fillText('pod ' + tr.pod + '   ' + tSpan.toFixed(1) + ' s   error '
+    + err.toFixed(1) + '°', 46, 14);
+}
+
+function poll() {
+  fetch('/swerve/state', {cache: 'no-store'})
+    .then(function (r) { return r.json(); })
+    .then(function (j) { state = j; render(); })
+    .catch(function () {
+      document.getElementById('dot').className = 'dot off';
+      document.getElementById('conn').textContent = 'disconnected';
+    });
+}
+
+setInterval(poll, 100);
+poll();
+</script>
+</body>
+</html>

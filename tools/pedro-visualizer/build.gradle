@@ -63,3 +63,12 @@ tasks.register('visualizer', Exec) {
 tasks.named('assemble') {
     dependsOn 'npmBuild'
 }
+
+// Android Studio's "Rebuild Project" asks every module for `testClasses`. This module applies only
+// `java-base` and declares a `main` source set, so no `test` source set - and therefore no
+// `testClasses` task - is ever created, and the whole rebuild fails before it starts. There are no
+// JVM tests here (this builds through npm), so a no-op lifecycle task is enough to satisfy the IDE.
+tasks.register('testClasses') {
+    group = 'verification'
+    description = 'No-op: this module builds through npm and has no JVM tests.'
+}

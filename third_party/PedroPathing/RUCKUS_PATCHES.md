@@ -21,7 +21,37 @@ The vendored Gradle metadata currently reports PedroPathing version `2.1.2`.
 
 ## Local Patches
 
-As of 2026-05-17, there are no intentional local source patches inside `third_party/PedroPathing`.
+### 2026-08-09 — Remove Dokka from `:core` so its classes reach the APK
+
+- **Files changed:** `core/build.gradle.kts`
+- **Reason:** With Dokka applied, `:core` exposes consumable configurations whose attributes are
+  `DGP~`-prefixed strings rather than Gradle's typed attributes. When the Android app consumed
+  `:core` transitively (via `ftc`'s `api(project(":core"))`) across the composite build, Gradle
+  selected the variant `dokkaHtmlPublicationPluginApiOnlyConsumable~internal` instead of
+  `runtimeElements`. That variant carries the Dokka documentation-plugin classpath, not the code
+  jar, so **no `com.pedropathing` core class was packaged into the APK** — verified with `dexdump`:
+  `follower`, `geometry`, `control`, `math` were all absent while `com.pedropathing.ftc.*` was
+  present.
+
+  The symptom was a Robot Controller crash loop: Panels' Configurables plugin scans `@Configurable`
+  classes at startup, and `getDeclaredFields()` on `Tuning` threw
+  `NoClassDefFoundError: Lcom/pedropathing/follower/Follower;`, taking down the whole app process
+  every ~40 seconds. That killed FTC Dashboard connections and made every Pedro OpMode unusable.
+
+  Removed the `org.jetbrains.dokka` plugin, its `dokkaPlugin` dependency, the `dokkaJar` task and
+  the `docs(dokkaJar)` deployer entry. Generated documentation has no value for a vendored copy.
+
+- **Upstream issue:** none filed; this is a Dokka Gradle Plugin v2 variant-selection interaction
+  with composite builds, not a PedroPathing source bug.
+- **How to remove:** once DGP no longer publishes those configurations for `java-library` consumers
+  (or if Pedro is consumed from Maven instead of `includeBuild`), restore the four removed pieces
+  from upstream `core/build.gradle.kts`. After any change here, confirm with:
+
+  ```bash
+  ./gradlew :TeamCode:dependencyInsight --configuration debugRuntimeClasspath --dependency core
+  ```
+
+  The selected variant must be `runtimeElements`, not a `dokka*` one.
 
 When local Pedro changes are added, list them here with:
 

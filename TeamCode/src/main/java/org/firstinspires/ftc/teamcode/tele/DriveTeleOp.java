@@ -1,5 +1,7 @@
 package org.firstinspires.ftc.teamcode.tele;
 
+import com.acmerobotics.dashboard.FtcDashboard;
+import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.geometry.Pose;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
@@ -18,6 +20,7 @@ public class DriveTeleOp extends OpMode {
     @Override
     public void init() {
         follower = Constants.createFollower(hardwareMap);
+        telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
     }
 
     @Override
@@ -39,6 +42,15 @@ public class DriveTeleOp extends OpMode {
 
         Pose pose = follower.getPose(); // if using custom paths in teleop
         telemetry.addData("Drive Mode", gamepad1.left_bumper ? "Slow" : "Normal");
+        telemetry.addData("forward", forward);
+        telemetry.addData("strafe", strafe);
+        telemetry.addData("turn", turn);
+        telemetry.addData("x", pose.getX());
+        telemetry.addData("y", pose.getY());
+        telemetry.addData("heading (deg)", Math.toDegrees(pose.getHeading()));
+        telemetry.addData("pods", follower.getDrivetrain().debugString());
+        telemetry.addData("joyx", gamepad1.left_stick_x);
+        telemetry.addData("joyy", gamepad1.left_stick_y);
         telemetry.update();
     }
 

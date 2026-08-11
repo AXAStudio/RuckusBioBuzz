@@ -1,23 +1,18 @@
 plugins {
     id("java-library")
     id("io.deepmedia.tools.deployer")
-    id("org.jetbrains.dokka")
+    // RUCKUS PATCH: Dokka removed - see RUCKUS_PATCHES.md. Its consumable configurations were
+    // being selected instead of runtimeElements when this java-library is consumed from the
+    // Android app across the composite build, so core's classes never reached the APK.
 }
 
 dependencies {
     compileOnly(libs.annotations)
-    dokkaPlugin(libs.dokka.java.plugin)
 }
 
 java {
     sourceCompatibility = JavaVersion.VERSION_1_8
     targetCompatibility = JavaVersion.VERSION_1_8
-}
-
-val dokkaJar = tasks.register<Jar>("dokkaJar") {
-    dependsOn(tasks.named("dokkaGenerate"))
-    from(dokka.basePublicationsDirectory.dir("html"))
-    archiveClassifier = "html-docs"
 }
 
 deployer {
@@ -38,7 +33,7 @@ deployer {
         component {
             fromJava()
             javaSources()
-            docs(dokkaJar)
+            // RUCKUS PATCH: docs(dokkaJar) removed along with the Dokka plugin.
         }
     }
 

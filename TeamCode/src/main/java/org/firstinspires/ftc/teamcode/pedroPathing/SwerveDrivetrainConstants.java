@@ -59,52 +59,62 @@ public class SwerveDrivetrainConstants {
 
     public static SwerveConstants swerveConstants = new SwerveConstants()
             .velocity(73.9)
-            .zeroPowerBehavior(SwerveConstants.ZeroPowerBehavior.X_LOCK)
+            // BRING-UP SETTING: pods hold their heading when the sticks are neutral. Switch back to
+            // X_LOCK for competition, where snapping to an X to resist being pushed is what you
+            // want. During bring-up it hides what the pods are actually doing, because every
+            // momentary drop to zero input yanks all four back to the X.
+            .zeroPowerBehavior(SwerveConstants.ZeroPowerBehavior.IGNORE_ANGLE_CHANGES)
             .useBrakeModeInTeleOp(true);
 
-    private static double kP = 0.0055 * 180 / Math.PI;
-    private static double kD = 0.00015 * 180 / Math.PI;
+    // Zero offsets, analog ranges, encoder pairings and drive directions below come from a
+    // Swerve Bring-Up session on 2026-08-10, verified driving. kF is NOT yet tuned - the bring-up
+    // used one value for every pod, so the back pods may still want more than the front.
+    private static double kP = 0.315100;
+    private static double kD = 0.008600;
     private static double kFFront = 0.0130;
-    private static double kFBack = 0.0190;
+    private static double kFBack = 0.0130;
 
     private static double dtLength = 146.420; //distance from robot center to front/back pod center
     private static double dtWidth = 154.240; // distance from robot center to left/right pod center
 
+    // The encoder names do NOT follow the sm#/ss#/se# numbering. The Axon feedback wires are
+    // spliced two per analog port, and the wiring scan found every pod landing on a different
+    // channel than its own number. Do not "tidy" these to match.
     private static CoaxialPod leftFront(HardwareMap hardwareMap) {
-        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm2", "ss2", "se2",
-                new PIDFCoefficients(kP, 0, kD, kFFront), DcMotorSimple.Direction.REVERSE,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(353.1), new Pose(dtLength, dtWidth),
-                0.025, 3.290, false);
+        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm2", "ss2", "se3",
+                new PIDFCoefficients(kP, 0, kD, kFFront), DcMotorSimple.Direction.FORWARD,
+                DcMotorSimple.Direction.REVERSE, Math.toRadians(338.2), new Pose(dtLength, dtWidth),
+                0.136, 3.336, false);
         pod.setMotorCachingThreshold(0.05);
         pod.setServoCachingThreshold(0.05);
         return pod;
     }
 
     private static CoaxialPod rightFront(HardwareMap hardwareMap) {
-        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm1", "ss1", "se1",
+        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm1", "ss1", "se0",
                 new PIDFCoefficients(kP, 0, kD, kFFront), DcMotorSimple.Direction.FORWARD,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(348.2), new Pose(dtLength, -dtWidth),
-                0.018, 3.288, false);
+                DcMotorSimple.Direction.REVERSE, Math.toRadians(323.3), new Pose(dtLength, -dtWidth),
+                0.145, 3.350, false);
         pod.setMotorCachingThreshold(0.05);
         pod.setServoCachingThreshold(0.05);
         return pod;
     }
 
     private static CoaxialPod leftBack(HardwareMap hardwareMap) {
-        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm3", "ss3", "se3",
+        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm3", "ss3", "se2",
                 new PIDFCoefficients(kP, 0, kD, kFBack), DcMotorSimple.Direction.REVERSE,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(179.3), new Pose(-dtLength, dtWidth),
-                0.029, 3.307, false);
+                DcMotorSimple.Direction.REVERSE, Math.toRadians(62.2), new Pose(-dtLength, dtWidth),
+                0.266, 3.467, false);
         pod.setMotorCachingThreshold(0.05);
         pod.setServoCachingThreshold(0.05);
         return pod;
     }
 
     private static CoaxialPod rightBack(HardwareMap hardwareMap) {
-        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm0", "ss0", "se0",
-                new PIDFCoefficients(kP, 0, kD, kFBack), DcMotorSimple.Direction.FORWARD,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(289.5), new Pose(-dtLength, -dtWidth),
-                0.014, 3.301, false);
+        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm0", "ss0", "se1",
+                new PIDFCoefficients(kP, 0, kD, kFBack), DcMotorSimple.Direction.REVERSE,
+                DcMotorSimple.Direction.REVERSE, Math.toRadians(32.0), new Pose(-dtLength, -dtWidth),
+                0.075, 3.247, false);
         pod.setMotorCachingThreshold(0.05);
         pod.setServoCachingThreshold(0.05);
         return pod;
