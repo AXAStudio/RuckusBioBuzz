@@ -24,18 +24,18 @@ public class SwerveDrivetrainConstants {
     public static FollowerConstants followerConstants = new FollowerConstants()
             .forwardZeroPowerAcceleration(-197.1)
             .lateralZeroPowerAcceleration(-197.1)
-            .useSecondaryDrivePIDF(true).useSecondaryHeadingPIDF(true)
-            .useSecondaryTranslationalPIDF(true)
+            .useSecondaryDrivePIDF(false).useSecondaryHeadingPIDF(false)
+            .useSecondaryTranslationalPIDF(false)
 
             .translationalPIDFCoefficients(new PIDFCoefficients(0.125, 0, 0.008, 0))
-            .secondaryTranslationalPIDFCoefficients(new PIDFCoefficients(0.0825, 0, 0.008, 0))
+            //.secondaryTranslationalPIDFCoefficients(new PIDFCoefficients(0.0825, 0, 0.008, 0))
 
             .headingPIDFCoefficients(new PIDFCoefficients(1.75, 0, 0.003, 0))
-            .secondaryHeadingPIDFCoefficients(new PIDFCoefficients(0.8, 0, 0.015, 0))
+            //.secondaryHeadingPIDFCoefficients(new PIDFCoefficients(0.8, 0, 0.015, 0))
 
             .drivePIDFCoefficients(new FilteredPIDFCoefficients(0.005, 0, 0.00003, 0.6, 0.13))
-            .secondaryDrivePIDFCoefficients(
-                    new FilteredPIDFCoefficients(0.004, 0, 0.000002, 0.6, 0.13))
+            //.secondaryDrivePIDFCoefficients(
+            //        new FilteredPIDFCoefficients(0.004, 0, 0.000002, 0.6, 0.13))
 
 
             // .drivePIDFCoefficients(new FilteredPIDFCoefficients(0,0,0,0,0))
@@ -67,12 +67,21 @@ public class SwerveDrivetrainConstants {
             .useBrakeModeInTeleOp(true);
 
     // Zero offsets, analog ranges, encoder pairings and drive directions below come from a
-    // Swerve Bring-Up session on 2026-08-10, verified driving. kF is NOT yet tuned - the bring-up
-    // used one value for every pod, so the back pods may still want more than the front.
-    private static double kP = 0.315100;
-    private static double kD = 0.008600;
-    private static double kFFront = 0.0130;
-    private static double kFBack = 0.0130;
+    // Swerve Bring-Up session on 2026-08-10, verified driving.
+    //
+    // Gains from an OFF-GROUND baseline (2026-08-11), then verified on carpet.
+    //
+    // kF is a bang-bang relay, not a smooth feed-forward: CoaxialPod applies the full magnitude
+    // outside a 2 degree band and only varies its SIGN. Every extra bit of it buys limit cycling.
+    // Measured off the ground on ss2, rings per step: kF 0.005 -> 2.7, 0.011 -> 4.3, 0.022 -> 7.7,
+    // 0.035 -> 13.7. kP does the same above ~0.35, and kD ADDS ringing above ~0.010 because it
+    // differentiates analog encoder noise. Ground friction hides all of this - on carpet the old
+    // gains looked fine at 0-3 rings while ringing 14-18 off the ground.
+    //
+    // Net: keep kF at the minimum that still breaks stiction, kP <= 0.35, kD <= 0.010. Expect
+    // 3-6 degrees of residual heading error; that is the price of a kF low enough to stay stable.
+    //
+    // I stays 0 - swept on ss3 and every non-zero value produced 30-45 degrees of hunting.
 
     private static double dtLength = 146.420; //distance from robot center to front/back pod center
     private static double dtWidth = 154.240; // distance from robot center to left/right pod center
@@ -82,7 +91,7 @@ public class SwerveDrivetrainConstants {
     // channel than its own number. Do not "tidy" these to match.
     private static CoaxialPod leftFront(HardwareMap hardwareMap) {
         CoaxialPod pod = new CoaxialPod(hardwareMap, "sm2", "ss2", "se3",
-                new PIDFCoefficients(kP, 0, kD, kFFront), DcMotorSimple.Direction.FORWARD,
+                new PIDFCoefficients(0.300000, 0, 0.010000, 0.005000), DcMotorSimple.Direction.FORWARD,
                 DcMotorSimple.Direction.REVERSE, Math.toRadians(338.2), new Pose(dtLength, dtWidth),
                 0.136, 3.336, false);
         pod.setMotorCachingThreshold(0.05);
@@ -92,7 +101,7 @@ public class SwerveDrivetrainConstants {
 
     private static CoaxialPod rightFront(HardwareMap hardwareMap) {
         CoaxialPod pod = new CoaxialPod(hardwareMap, "sm1", "ss1", "se0",
-                new PIDFCoefficients(kP, 0, kD, kFFront), DcMotorSimple.Direction.FORWARD,
+                new PIDFCoefficients(0.300000, 0, 0.010000, 0.005000), DcMotorSimple.Direction.FORWARD,
                 DcMotorSimple.Direction.REVERSE, Math.toRadians(323.3), new Pose(dtLength, -dtWidth),
                 0.145, 3.350, false);
         pod.setMotorCachingThreshold(0.05);
@@ -102,7 +111,7 @@ public class SwerveDrivetrainConstants {
 
     private static CoaxialPod leftBack(HardwareMap hardwareMap) {
         CoaxialPod pod = new CoaxialPod(hardwareMap, "sm3", "ss3", "se2",
-                new PIDFCoefficients(kP, 0, kD, kFBack), DcMotorSimple.Direction.REVERSE,
+                new PIDFCoefficients(0.300000, 0, 0.010000, 0.005000), DcMotorSimple.Direction.REVERSE,
                 DcMotorSimple.Direction.REVERSE, Math.toRadians(62.2), new Pose(-dtLength, dtWidth),
                 0.266, 3.467, false);
         pod.setMotorCachingThreshold(0.05);
@@ -112,7 +121,7 @@ public class SwerveDrivetrainConstants {
 
     private static CoaxialPod rightBack(HardwareMap hardwareMap) {
         CoaxialPod pod = new CoaxialPod(hardwareMap, "sm0", "ss0", "se1",
-                new PIDFCoefficients(kP, 0, kD, kFBack), DcMotorSimple.Direction.REVERSE,
+                new PIDFCoefficients(0.300000, 0, 0.010000, 0.005000), DcMotorSimple.Direction.REVERSE,
                 DcMotorSimple.Direction.REVERSE, Math.toRadians(32.0), new Pose(-dtLength, -dtWidth),
                 0.075, 3.247, false);
         pod.setMotorCachingThreshold(0.05);

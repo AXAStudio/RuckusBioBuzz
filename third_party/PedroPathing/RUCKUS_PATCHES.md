@@ -21,6 +21,30 @@ The vendored Gradle metadata currently reports PedroPathing version `2.1.2`.
 
 ## Local Patches
 
+### 2026-08-11 — Make the integral term safe to use in `PIDFController`
+
+- **Files changed:** `core/src/main/java/com/pedropathing/control/PIDFController.java`
+- **Reason:** The swerve pods park 2–4° short of target on carpet and stop dead. `CoaxialPod.move()`
+  zeroes the feed-forward inside 2°, and P alone there is far below breakaway, so nothing remains to
+  close the gap. Raising kF makes it worse — the pod breaks free, overshoots and stops on the far
+  side. An integral term is the correct fix, but stock `PIDFController` could not carry one safely:
+  `errorIntegral` accumulates without bound, is never clamped, and nothing calls `reset()` during
+  normal operation, so any non-zero I eventually saturates the servo.
+
+  Two changes, both no-ops while I is 0 — which is every stock Pedro config:
+
+  1. `run()` clamps the integral **contribution** to `integralLimit` (default 0.25 of normalised
+     output). Clamping the contribution rather than the raw sum keeps the bound meaningful for any I.
+  2. `updateError()` and `updatePosition()` zero `errorIntegral` when the error changes sign.
+     Accumulation from the approach is stale once the target is crossed, and carrying it through a
+     swerve pod's 180° flip would drive hard the wrong way.
+
+- **Upstream issue:** none filed. Arguably worth proposing upstream — unbounded integral with no
+  reset path is a latent trap for anyone who sets I.
+- **How to remove:** if upstream adds its own anti-windup, drop both patches and use theirs. Search
+  the file for `RUCKUS PATCH`. Verify afterwards that a pod with I set does not creep or saturate
+  when held off-target.
+
 ### 2026-08-09 — Remove Dokka from `:core` so its classes reach the APK
 
 - **Files changed:** `core/build.gradle.kts`

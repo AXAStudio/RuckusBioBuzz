@@ -317,6 +317,7 @@
         </div>
         <div class="row">
           <label class="inline">kP <input type="number" id="kp" step="0.01"></label>
+          <label class="inline">kI <input type="number" id="ki" step="0.005"></label>
           <label class="inline">kD <input type="number" id="kd" step="0.001"></label>
           <label class="inline">kF <input type="number" id="kf" step="0.001"></label>
           <button onclick="applyPidf(false)">Apply to pod</button>
@@ -456,6 +457,7 @@ window.addEventListener('blur', driveStop);
 function applyPidf(all) {
   cmd('setPidf', {
     kp: document.getElementById('kp').value,
+    ki: document.getElementById('ki').value,
     kd: document.getElementById('kd').value,
     kf: document.getElementById('kf').value,
     scope: all ? 'all' : 'one'
@@ -463,12 +465,17 @@ function applyPidf(all) {
   pidfDirty = false;
 }
 
+var selectHoldUntil = 0;
+
 function select(i) {
   // Optimistic locally, then tell the robot so it stays the single source of truth - otherwise
-  // selecting a pod on the gamepad would never show up here, and vice versa.
+  // selecting a pod on the gamepad would never show up here, and vice versa. The hold window stops
+  // the next poll, which still carries the robot's previous choice, from snapping the highlight
+  // back before the command has been processed.
   selected = i;
+  selectHoldUntil = Date.now() + 500;
   pidfDirty = false;
-  cmd('select');
+  cmd('select', {pod: i});
   render();
 }
 
@@ -481,7 +488,7 @@ function copyExport() {
 }
 
 // Mark the PIDF inputs dirty so live polling does not overwrite what is being typed.
-['kp', 'kd', 'kf'].forEach(function (id) {
+['kp', 'ki', 'kd', 'kf'].forEach(function (id) {
   document.getElementById(id).addEventListener('input', function () { pidfDirty = true; });
 });
 
@@ -645,70 +652,180 @@ function dial(deg, ok) {
     + '<circle cx="' + cx + '" cy="' + cy + '" r="3" fill="' + color + '"/></svg>';
 }
 
-function podCard(p) {
+// The cards are built ONCE and then updated in place.
+//
+// Rebuilding innerHTML on every poll destroyed and recreated these nodes ten times a second, so a
+// click whose mousedown and mouseup straddled a refresh never landed - which is why selecting a pod
+// took several tries. Nothing below may recreate a node that the operator clicks or types into.
+
+var podCardsKey = '';
+var podFieldDirty = {};
+
+function podFieldId(i, name) { return 'pod' + i + '-' + name; }
+function el(id) { return document.getElementById(id); }
+
+function setText(id, value) {
+  var e = el(id);
+  if (e && e.textContent !== value) e.textContent = value;
+}
+
+function setClass(id, value) {
+  var e = el(id);
+  if (e && e.className !== value) e.className = value;
+}
+
+function podCardHtml(p) {
+  var i = p.i;
+  var f = function (n) { return podFieldId(i, n); };
+  var stop = 'event.stopPropagation();';
+
+  var kv = function (label, id) {
+    return '<div class="kv"><span>' + label + '</span><b id="' + f(id) + '">--</b></div>';
+  };
+
+  var gain = function (name) {
+    return '<label class="inline">' + name
+      + ' <input type="number" step="0.001" style="width:78px" id="' + f(name) + '"'
+      + ' oninput="podFieldDirty[\'' + f(name) + '\']=true" onclick="' + stop + '"></label>';
+  };
+
+  var corner = function (c) {
+    return '<button class="small" id="' + f('corner' + c) + '" onclick="' + stop
+      + 'cmd(\'setLabel\',{value:\'' + c + '\',pod:' + i + '})">' + c + '</button>';
+  };
+
+  // Toggles send no value, so the robot flips whatever it currently holds. Baking in the opposite
+  // of a live value would go stale the moment the card stopped being rebuilt.
+  var flagSpan = function (id, label, action) {
+    return '<span class="flag" id="' + f(id) + '" onclick="' + stop
+      + 'cmd(\'' + action + '\',{pod:' + i + '})">' + label + '</span>';
+  };
+
+  return '<div class="pod" id="' + f('root') + '" onclick="select(' + i + ')">'
+    + '<h3>pod ' + i + ' <span class="badge" id="' + f('label') + '"></span> '
+    + '<span id="' + f('disc') + '"></span></h3>'
+    + '<div class="names">' + esc(p.motor) + ' &middot; ' + esc(p.servo)
+    + ' &middot; <span id="' + f('enc') + '"></span></div>'
+    + '<div class="podmain"><span id="' + f('dial') + '"></span>'
+    + '<div class="readouts">'
+    + kv('zeroed', 'zeroed') + kv('raw', 'raw') + kv('volts', 'volts')
+    + kv('offset', 'offset') + kv('range', 'range')
+    + '<div class="bar"><i id="' + f('bar') + '" style="width:0%"></i></div>'
+    + '</div></div>'
+    + '<div class="flags">'
+    + flagSpan('encRev', 'encoderReversed', 'setEncoderReversed')
+    + flagSpan('srvRev', 'servo REV', 'setServoReversed')
+    + '</div>'
+    + '<div class="row" id="' + f('missing') + '"></div>'
+    + '<div class="row" style="margin-top:8px">'
+    + '<button class="small" onclick="' + stop + 'cmd(\'pulseMotor\',{pod:' + i + '})">Pulse motor</button>'
+    + '<button class="small" onclick="' + stop + 'cmd(\'spinServo\',{pod:' + i + '})">Spin servo</button>'
+    + '<button class="small" onclick="' + stop + 'cmd(\'zeroPod\',{pod:' + i + '})">Zero here</button>'
+    + '</div>'
+    + '<div class="row" style="margin-top:6px">'
+    + '<button class="small" id="' + f('revBtn') + '" onclick="' + stop
+    + 'cmd(\'setDriveReversed\',{pod:' + i + '})"></button>'
+    + '<span class="hint" id="' + f('revHint') + '"></span>'
+    + '</div>'
+    + '<div class="row" style="margin-top:6px"><span class="hint">corner</span>'
+    + corner('LF') + corner('RF') + corner('LB') + corner('RB')
+    + '</div>'
+    + '<div class="row" style="margin-top:8px">'
+    + gain('kp') + gain('ki') + gain('kd') + gain('kf')
+    + '</div>'
+    + '<div class="row" style="margin-top:6px">'
+    + '<button class="small primary" onclick="' + stop + 'applyPodPidf(' + i + ')">Apply PIDF</button>'
+    + '<button class="small" onclick="' + stop + 'cmd(\'autoTune\',{pod:' + i + '})">Auto-tune</button>'
+    + '<button class="small" onclick="' + stop + 'cmd(\'pidStep\',{deg:90,pod:' + i + '})">Step 90&deg;</button>'
+    + '<button class="small" onclick="' + stop + 'cmd(\'pidHold\',{pod:' + i + '})">Release</button>'
+    + '</div></div>';
+}
+
+function updatePodCard(p) {
+  var i = p.i;
+  var f = function (n) { return podFieldId(i, n); };
   var live = p.hasEnc && p.volts !== null;
   var range = Math.max(0.001, p.maxV - p.minV);
   var pct = live ? Math.max(0, Math.min(100, (p.volts - p.minV) / range * 100)) : 0;
+
+  setClass(f('root'), 'pod' + (i === selected ? ' sel' : ''));
+  setText(f('label'), p.label);
+  setText(f('enc'), p.enc);
+
+  var discEl = el(f('disc'));
+  var discHtml = (p.discovered >= 0 && p.discovered !== i)
+    ? '<span class="badge bad">remapped &rarr; se' + p.discovered + '</span>' : '';
+  if (discEl && discEl.innerHTML !== discHtml) discEl.innerHTML = discHtml;
+
+  setText(f('zeroed'), fmt(p.zeroDeg, 1) + '°');
+  setText(f('raw'), fmt(p.rawDeg, 1) + '°');
+  setText(f('volts'), fmt(p.volts, 3) + ' V');
+  setText(f('offset'), fmt(p.offsetDeg, 1) + '°');
+  setText(f('range'), fmt(p.minV, 3) + ' – ' + fmt(p.maxV, 3));
+
+  var bar = el(f('bar'));
+  if (bar) bar.style.width = pct + '%';
+
+  var dialEl = el(f('dial'));
+  if (dialEl) dialEl.innerHTML = dial(live ? p.zeroDeg : 0, live);
+
+  setClass(f('encRev'), 'flag' + (p.encRev ? ' on' : ''));
+  setText(f('encRev'), 'encoderReversed ' + (p.encRev ? 'ON' : 'off'));
+  setClass(f('srvRev'), 'flag' + (p.srvRev ? ' on' : ''));
+  setText(f('srvRev'), 'servo REV ' + (p.srvRev ? 'ON' : 'off'));
 
   var missing = '';
   if (!p.hasMotor) missing += '<span class="badge bad">no motor</span> ';
   if (!p.hasServo) missing += '<span class="badge bad">no servo</span> ';
   if (!p.hasEnc) missing += '<span class="badge bad">no encoder</span> ';
   if (!missing) missing = '<span class="badge good">all present</span>';
+  var missEl = el(f('missing'));
+  if (missEl && missEl.innerHTML !== missing) missEl.innerHTML = missing;
 
-  var disc = (p.discovered >= 0 && p.discovered !== p.i)
-    ? '<span class="badge bad">remapped &rarr; se' + p.discovered + '</span>' : '';
+  setClass(f('revBtn'), 'small' + (p.drvRev ? ' primary' : ''));
+  setText(f('revBtn'), p.drvRev ? '↻ motor reversed' : '↺ reverse motor');
+  setText(f('revHint'), p.motor + ' spins ' + (p.drvRev ? 'reversed' : 'forward'));
 
-  return '<div class="pod' + (p.i === selected ? ' sel' : '') + '" onclick="select(' + p.i + ')">'
-    + '<h3>pod ' + p.i + ' <span class="badge">' + p.label + '</span> ' + disc + '</h3>'
-    + '<div class="names">' + p.motor + ' &middot; ' + p.servo + ' &middot; ' + p.enc + '</div>'
-    + '<div class="podmain">' + dial(live ? p.zeroDeg : 0, live)
-    + '<div class="readouts">'
-    + '<div class="kv"><span>zeroed</span><b>' + fmt(p.zeroDeg, 1) + '&deg;</b></div>'
-    + '<div class="kv"><span>raw</span><b>' + fmt(p.rawDeg, 1) + '&deg;</b></div>'
-    + '<div class="kv"><span>volts</span><b>' + fmt(p.volts, 3) + ' V</b></div>'
-    + '<div class="kv"><span>offset</span><b>' + fmt(p.offsetDeg, 1) + '&deg;</b></div>'
-    + '<div class="kv"><span>range</span><b>' + fmt(p.minV, 3) + ' &ndash; ' + fmt(p.maxV, 3) + '</b></div>'
-    + '<div class="bar"><i style="width:' + pct + '%"></i></div>'
-    + '</div></div>'
-    + '<div class="flags">'
-    + flag('encoderReversed', p.encRev,
-        "cmd('setEncoderReversed',{value:" + !p.encRev + ",pod:" + p.i + "})")
-    + flag('drive REV', p.drvRev,
-        "cmd('setDriveReversed',{value:" + !p.drvRev + ",pod:" + p.i + "})")
-    + flag('servo REV', p.srvRev,
-        "cmd('setServoReversed',{value:" + !p.srvRev + ",pod:" + p.i + "})")
-    + '</div>'
-    + '<div class="row">' + missing + '</div>'
-    + '<div class="row" style="margin-top:8px">'
-    + '<button class="small" onclick="event.stopPropagation();cmd(\'pulseMotor\',{pod:' + p.i + '})">Pulse motor</button>'
-    + '<button class="small" onclick="event.stopPropagation();cmd(\'spinServo\',{pod:' + p.i + '})">Spin servo</button>'
-    + '<button class="small" onclick="event.stopPropagation();cmd(\'zeroPod\',{pod:' + p.i + '})">Zero here</button>'
-    + '</div>'
-    + '<div class="row" style="margin-top:6px">'
-    + '<button class="small' + (p.drvRev ? ' primary' : '') + '" onclick="event.stopPropagation();'
-    + 'cmd(\'setDriveReversed\',{value:' + !p.drvRev + ',pod:' + p.i + '})">'
-    + (p.drvRev ? '&#8635; motor reversed' : '&#8634; reverse motor') + '</button>'
-    + '<span class="hint">' + esc(p.motor) + ' spins '
-    + (p.drvRev ? 'reversed' : 'forward') + '</span>'
-    + '</div>'
-    + '<div class="row" style="margin-top:6px">'
-    + '<span class="hint">corner</span>'
-    + cornerBtn(p, 'LF') + cornerBtn(p, 'RF') + cornerBtn(p, 'LB') + cornerBtn(p, 'RB')
-    + '</div></div>';
+  ['LF', 'RF', 'LB', 'RB'].forEach(function (c) {
+    var on = (p.label || '').toUpperCase() === c;
+    setClass(f('corner' + c), 'small' + (on ? ' primary' : ''));
+  });
+
+  // Never overwrite a box being typed in.
+  setGain(f('kp'), p.kp);
+  setGain(f('ki'), p.ki);
+  setGain(f('kd'), p.kd);
+  setGain(f('kf'), p.kf);
 }
 
-// Which chassis corner a pod sits at. Only rotation uses this, so getting it wrong gives a
-// drivetrain that strafes correctly and spins backwards.
-function cornerBtn(p, corner) {
-  var on = (p.label || '').toUpperCase() === corner;
-  return '<button class="small' + (on ? ' primary' : '') + '" onclick="event.stopPropagation();'
-    + 'cmd(\'setLabel\',{value:\'' + corner + '\',pod:' + p.i + '})">' + corner + '</button>';
+function setGain(id, value) {
+  if (podFieldDirty[id]) return;
+  var e = el(id);
+  if (!e) return;
+  var text = Number(value).toFixed(4);
+  if (document.activeElement !== e && e.value !== text) e.value = text;
 }
 
-function flag(name, on, action) {
-  return '<span class="flag' + (on ? ' on' : '') + '" onclick="event.stopPropagation();' + action + '">'
-    + name + ' ' + (on ? 'ON' : 'off') + '</span>';
+function applyPodPidf(i) {
+  var read = function (n) {
+    var e = el(podFieldId(i, n));
+    return e ? e.value : '';
+  };
+  cmd('setPidf', {pod: i, kp: read('kp'), ki: read('ki'), kd: read('kd'), kf: read('kf')});
+  ['kp', 'ki', 'kd', 'kf'].forEach(function (n) { podFieldDirty[podFieldId(i, n)] = false; });
+}
+
+function renderPods(pods) {
+  var host = document.getElementById('pods');
+  var key = pods.map(function (p) { return p.i + ':' + p.motor + ':' + p.servo; }).join(',');
+
+  if (key !== podCardsKey) {
+    host.innerHTML = pods.map(podCardHtml).join('');
+    podCardsKey = key;
+    podFieldDirty = {};
+  }
+
+  pods.forEach(updatePodCard);
 }
 
 function render() {
@@ -716,8 +833,9 @@ function render() {
 
   var live = !!state.live;
 
-  // The OpMode owns the selection, so the gamepad and the dashboard can never disagree.
-  if (live && typeof state.selected === 'number') {
+  // The OpMode owns the selection, so the gamepad and the dashboard can never disagree - except
+  // briefly after a local click, while the command is still in flight.
+  if (live && typeof state.selected === 'number' && Date.now() > selectHoldUntil) {
     selected = state.selected;
   }
 
@@ -736,11 +854,12 @@ function render() {
   document.getElementById('issues').innerHTML = issues;
 
   var pods = state.pods || [];
-  document.getElementById('pods').innerHTML = pods.map(podCard).join('');
+  renderPods(pods);
 
   var cur = pods[selected];
   if (cur && !pidfDirty) {
     document.getElementById('kp').value = Number(cur.kp).toFixed(4);
+    document.getElementById('ki').value = Number(cur.ki).toFixed(4);
     document.getElementById('kd').value = Number(cur.kd).toFixed(4);
     document.getElementById('kf').value = Number(cur.kf).toFixed(4);
   }

@@ -6,4 +6,23 @@ include ':PollenCameraTester'
 project(':PedroVisualizer').projectDir = file('tools/pedro-visualizer')
 project(':PollenCameraTester').projectDir = file('tools/pollen-camera-tester')
 
+// The included Pedro build needs its own local.properties to find the Android SDK, and that file is
+// gitignored. On a fresh clone the build otherwise fails with "SDK location not found" pointing at
+// third_party/PedroPathing, which looks like a broken checkout rather than a missing local file.
+// Seed it from the root one, which Android Studio writes automatically.
+def rootLocalProperties = file('local.properties')
+def pedroLocalProperties = file('third_party/PedroPathing/local.properties')
+if (rootLocalProperties.exists() && !pedroLocalProperties.exists()) {
+    def rootProps = new Properties()
+    rootLocalProperties.withInputStream { rootProps.load(it) }
+    def sdkDir = rootProps.getProperty('sdk.dir')
+    if (sdkDir) {
+        def pedroProps = new Properties()
+        pedroProps.setProperty('sdk.dir', sdkDir)
+        pedroLocalProperties.withOutputStream {
+            pedroProps.store(it, 'Generated from the root local.properties. Do not commit.')
+        }
+    }
+}
+
 includeBuild 'third_party/PedroPathing'

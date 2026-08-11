@@ -3,6 +3,29 @@
 A driver-station tool for wiring, diagnosing and calibrating the coaxial swerve drivetrain,
 served from the Control Hub the same way FTC Dashboard is.
 
+## Using it from another computer
+
+The dashboard is served by the Robot Controller, not by your laptop, so **there is nothing to
+install to use it**. Anyone can:
+
+1. Join the Control Hub's WiFi (SSID usually `FTC-####`)
+2. Open `http://192.168.43.1:8080/swerve`
+
+That works from any laptop, phone or tablet with a browser, with no Android Studio, no SDK and no
+checkout. Several people can have it open at once.
+
+Only someone **deploying new code** needs the toolchain:
+
+1. Clone the repo and open it in Android Studio (which writes the root `local.properties` itself).
+   The included Pedro build needs one too; `settings.gradle` generates it automatically from the
+   root, so a fresh clone builds without hand-editing anything.
+2. Connect to the hub: `adb connect 192.168.43.1:5555`
+3. `./gradlew :TeamCode:installDebug` — or Android Studio's **Run** button.
+
+Use **Run**, not **Rebuild Project**: rebuild asks every module for `testClasses`, which drags an
+npm install and a Svelte build through `tools/pedro-visualizer` for a change that only touches
+TeamCode.
+
 ## Running without a Driver Station
 
 A DS is normally required twice: to author the hardware configuration, and to start OpModes.

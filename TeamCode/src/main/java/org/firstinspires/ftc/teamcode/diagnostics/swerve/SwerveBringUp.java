@@ -130,6 +130,7 @@ public class SwerveBringUp extends OpMode {
                 || "spinServo".equals(action)
                 || "nudge".equals(action)
                 || "pidStep".equals(action)
+                || "pidStepAll".equals(action)
                 || "autoTune".equals(action)
                 || "drive".equals(action);
     }
@@ -200,6 +201,15 @@ public class SwerveBringUp extends OpMode {
     private int tracePod = -1;
     private double pidTargetRad;
     private boolean pidHolding;
+
+    /**
+     * Step every pod together rather than one at a time.
+     *
+     * <p>On the ground a single pod turning alone has to scrub its tire while the other three pin
+     * the chassis - a far harsher and more variable load than real driving, where all four rotate
+     * together. Stepping them together is the representative test.
+     */
+    private boolean pidAllPods;
 
     // drive test
     private double driveForward;
@@ -765,15 +775,13 @@ public class SwerveBringUp extends OpMode {
             return;
         }
 
-        // Only the pod under test is driven; the rest stay limp.
         for (int i = 0; i < POD_COUNT; i++) {
-            if (i != selected) {
-                if (servos[i] != null) {
-                    servos[i].setPower(0);
-                }
-                if (motors[i] != null) {
-                    motors[i].setPower(0);
-                }
+            if (motors[i] != null) {
+                motors[i].setPower(0);
+            }
+            // Pods not under test stay limp, unless every pod is being stepped together.
+            if (!pidAllPods && i != selected && servos[i] != null) {
+                servos[i].setPower(0);
             }
         }
 
@@ -781,7 +789,14 @@ public class SwerveBringUp extends OpMode {
             return;
         }
 
-        pods[selected].move(pidTargetRad, 0.0, false);
+        if (pidAllPods) {
+            for (int i = 0; i < POD_COUNT; i++) {
+                pods[i].move(pidTargetRad, 0.0, false);
+            }
+        } else {
+            pods[selected].move(pidTargetRad, 0.0, false);
+        }
+
         recordTrace(selected, pidTargetRad);
     }
 
@@ -807,6 +822,17 @@ public class SwerveBringUp extends OpMode {
             targetDeg -= 360;
         } else if (delta < -180) {
             targetDeg += 360;
+        }
+
+        // A pod treats target+180 as the same demand - move() flips it and drives in reverse when
+        // that is the shorter rotation. Near a flip boundary the raw target snaps back and forth by
+        // 180 degrees on input noise alone, while the pod sensibly does nothing. Plotting the
+        // nearer equivalent shows what is actually being asked of the pod instead of that artefact.
+        delta = targetDeg - actualDeg;
+        if (delta > 90) {
+            targetDeg -= 180;
+        } else if (delta < -90) {
+            targetDeg += 180;
         }
 
         if (pod != tracePod) {
@@ -922,6 +948,11 @@ public class SwerveBringUp extends OpMode {
         mode = Mode.AUTOTUNE;
         routineActive = true;
         message = "Auto-tuning pod " + selected + ".";
+    }
+
+    private void startPidStep(double targetDeg, boolean allPods) {
+        pidAllPods = allPods;
+        startPidStep(targetDeg);
     }
 
     private void startPidStep(double targetDeg) {
@@ -1048,7 +1079,11 @@ public class SwerveBringUp extends OpMode {
                 captureZeros(true);
                 break;
             case "setEncoderReversed": {
-                boolean value = Boolean.parseBoolean(cmd.get("value"));
+                // No "value" means toggle. The dashboard builds its controls once and reuses them,
+                // so a handler cannot bake in the opposite of a state that keeps changing.
+                boolean value = cmd.get("value") == null
+                        ? !cals[selected].encoderReversed
+                        : Boolean.parseBoolean(cmd.get("value"));
                 if ("all".equals(cmd.get("scope"))) {
                     for (PodCal c : cals) {
                         c.encoderReversed = value;
@@ -1063,7 +1098,9 @@ public class SwerveBringUp extends OpMode {
                 break;
             }
             case "setDriveReversed":
-                cals[selected].setDriveReversed(Boolean.parseBoolean(cmd.get("value")));
+                cals[selected].setDriveReversed(cmd.get("value") == null
+                        ? !cals[selected].driveReversed()
+                        : Boolean.parseBoolean(cmd.get("value")));
                 if (motors[selected] != null) {
                     motors[selected].setDirection(cals[selected].driveDirection);
                 }
@@ -1073,7 +1110,9 @@ public class SwerveBringUp extends OpMode {
                         + cals[selected].driveDirection.name();
                 break;
             case "setServoReversed":
-                cals[selected].setServoReversed(Boolean.parseBoolean(cmd.get("value")));
+                cals[selected].setServoReversed(cmd.get("value") == null
+                        ? !cals[selected].servoReversed()
+                        : Boolean.parseBoolean(cmd.get("value")));
                 if (servos[selected] != null) {
                     servos[selected].setDirection(cals[selected].servoDirection);
                 }
@@ -1114,13 +1153,16 @@ public class SwerveBringUp extends OpMode {
                 if ("all".equals(cmd.get("scope"))) {
                     for (PodCal each : cals) {
                         each.kP = doubleArg(cmd, "kp", each.kP);
+                        each.kI = doubleArg(cmd, "ki", each.kI);
                         each.kD = doubleArg(cmd, "kd", each.kD);
                         each.kF = doubleArg(cmd, "kf", each.kF);
                     }
                 } else {
                     c.kP = doubleArg(cmd, "kp", c.kP);
+                    c.kI = doubleArg(cmd, "ki", c.kI);
                     c.kD = doubleArg(cmd, "kd", c.kD);
                     c.kF = doubleArg(cmd, "kf", c.kF);
+                    c.servoCaching = doubleArg(cmd, "cache", c.servoCaching);
                 }
                 podsDirty = true;
                 saveCalibration();
@@ -1134,7 +1176,10 @@ public class SwerveBringUp extends OpMode {
                 saveCalibration();
                 break;
             case "pidStep":
-                startPidStep(doubleArg(cmd, "deg", 90));
+                startPidStep(doubleArg(cmd, "deg", 90), false);
+                break;
+            case "pidStepAll":
+                startPidStep(doubleArg(cmd, "deg", 90), true);
                 break;
             case "autoTune":
                 startAutoTune();
@@ -1493,8 +1538,10 @@ public class SwerveBringUp extends OpMode {
         sb.append(",\"drvRev\":").append(c.driveReversed());
         sb.append(",\"srvRev\":").append(c.servoReversed());
         sb.append(",\"kp\":").append(fmt(c.kP));
+        sb.append(",\"ki\":").append(fmt(c.kI));
         sb.append(",\"kd\":").append(fmt(c.kD));
         sb.append(",\"kf\":").append(fmt(c.kF));
+        sb.append(",\"cache\":").append(fmt(c.servoCaching));
         sb.append(",\"discovered\":").append(c.discoveredEncoderIndex);
         sb.append(",\"servoPower\":")
                 .append(servos[i] != null ? fmt(servos[i].getPower()) : "0");

@@ -21,6 +21,9 @@ public class PIDFController {
     private double position;
     private double targetPosition;
     private double errorIntegral;
+
+    /** RUCKUS PATCH: see {@link #setIntegralLimit}. */
+    private double integralLimit = 0.25;
     private double errorDerivative;
     private double feedForwardInput;
 
@@ -45,7 +48,33 @@ public class PIDFController {
      */
     public double run() {
         coefficients = coefficientSupplier.get(error);
-        return error * P() + errorDerivative * D() + errorIntegral * I() + feedForwardInput * F();
+
+        // RUCKUS PATCH: bound the integral contribution. errorIntegral accumulates without limit
+        // and nothing ever resets it during normal operation, so any non-zero I eventually
+        // saturates the output. Clamping the contribution rather than the raw sum keeps the bound
+        // meaningful whatever I is set to. A no-op wherever I is 0, which is every stock config.
+        double integralContribution = errorIntegral * I();
+        if (integralContribution > integralLimit) {
+            integralContribution = integralLimit;
+        } else if (integralContribution < -integralLimit) {
+            integralContribution = -integralLimit;
+        }
+
+        return error * P() + errorDerivative * D() + integralContribution + feedForwardInput * F();
+    }
+
+    /**
+     * Largest absolute contribution the integral term may make to the output.
+     *
+     * <p>Defaults to a quarter of a normalised output. Enough to grind out a stiction-limited
+     * steady-state error, far too little to run away.
+     */
+    public void setIntegralLimit(double limit) {
+        this.integralLimit = Math.abs(limit);
+    }
+
+    public double getIntegralLimit() {
+        return integralLimit;
     }
 
     /**
@@ -62,6 +91,13 @@ public class PIDFController {
 
         deltaTimeNano = System.nanoTime() - previousUpdateTimeNano;
         previousUpdateTimeNano = System.nanoTime();
+
+        // RUCKUS PATCH: drop the accumulated integral when the error changes sign. Whatever it
+        // built up approaching the target is stale once the target is crossed, and carrying it
+        // across a swerve pod's 180 degree flip would push hard in the wrong direction.
+        if (error * previousError < 0) {
+            errorIntegral = 0;
+        }
 
         errorIntegral += error * (deltaTimeNano / Math.pow(10.0, 9));
         errorDerivative = (error - previousError) / (deltaTimeNano / Math.pow(10.0, 9));
@@ -80,6 +116,13 @@ public class PIDFController {
 
         deltaTimeNano = nanoTime - previousUpdateTimeNano;
         previousUpdateTimeNano = nanoTime;
+
+        // RUCKUS PATCH: drop the accumulated integral when the error changes sign. Whatever it
+        // built up approaching the target is stale once the target is crossed, and carrying it
+        // across a swerve pod's 180 degree flip would push hard in the wrong direction.
+        if (error * previousError < 0) {
+            errorIntegral = 0;
+        }
 
         errorIntegral += error * (deltaTimeNano / Math.pow(10.0, 9));
         errorDerivative = (error - previousError) / (deltaTimeNano / Math.pow(10.0, 9));

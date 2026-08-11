@@ -52,6 +52,23 @@ public class PodCal {
     public double kD = 0.00015 * 180 / Math.PI;
     public double kF = 0.013;
 
+    /**
+     * Integral gain. Starts at zero because it is only needed to grind out the last couple of
+     * degrees that carpet stiction holds: outside 2 degrees CoaxialPod applies feed-forward, and
+     * inside it P alone is too weak to break free. Raise it slowly - the integral is bounded and
+     * resets on a sign change, but it is still the term that turns a steady offset into a hunt.
+     */
+    public double kI = 0.0;
+
+    /**
+     * Minimum change in servo power before CoaxialPod actually writes it.
+     *
+     * <p>This is a deadband on the control OUTPUT: below it the servo keeps whatever power it had,
+     * so the loop cannot make fine corrections and instead holds a stale power, overshoots, then
+     * slams to a large correction. Too high and the pod limit-cycles while driving.
+     */
+    public double servoCaching = 0.05;
+
     /** Pod position relative to robot center, matching the odometry coordinate system. */
     public double podX;
     public double podY;
@@ -128,7 +145,7 @@ public class PodCal {
                 motorName,
                 servoName,
                 encoderName,
-                new PIDFCoefficients(kP, 0, kD, kF),
+                new PIDFCoefficients(kP, kI, kD, kF),
                 driveDirection,
                 servoDirection,
                 angleOffsetRad,
@@ -137,7 +154,7 @@ public class PodCal {
                 analogMax,
                 encoderReversed);
         pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(0.05);
+        pod.setServoCachingThreshold(servoCaching);
         return pod;
     }
 
@@ -208,7 +225,9 @@ public class PodCal {
                 + "|" + kD
                 + "|" + kF
                 + "|" + podX
-                + "|" + podY;
+                + "|" + podY
+                + "|" + kI
+                + "|" + servoCaching;
     }
 
     /** Applies a line previously produced by {@link #serialize()}. Returns false if unusable. */
@@ -233,6 +252,9 @@ public class PodCal {
             kF = Double.parseDouble(p[13]);
             podX = Double.parseDouble(p[14]);
             podY = Double.parseDouble(p[15]);
+            // kI was added after the first calibration files were written, so it is optional.
+            kI = p.length > 16 ? Double.parseDouble(p[16]) : 0.0;
+            servoCaching = p.length > 17 ? Double.parseDouble(p[17]) : 0.05;
             return true;
         } catch (NumberFormatException e) {
             return false;
