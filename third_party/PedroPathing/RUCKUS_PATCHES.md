@@ -21,6 +21,69 @@ The vendored Gradle metadata currently reports PedroPathing version `2.1.2`.
 
 ## Local Patches
 
+### 2026-08-12 — Continuous static-friction term and instrumentation on `CoaxialPod`
+
+- **Files changed:** `ftc/src/main/java/com/pedropathing/ftc/drivetrains/CoaxialPod.java`
+- **Reason:** `kF` is not a feed-forward on a swerve pod. `move()` feeds
+  `turnPID.updateFeedForwardInput(getTurnDirection(...))`, which is exactly ±1, so the F term is
+  `±kF` — a relay, constant in magnitude and switching sign at the target, zeroed inside 2°.
+
+  Measured on this drivetrain (robot on blocks, 12.9–13.3 V, `pidStepAll` 90°, n≥12 pod-runs each):
+
+  - Open-loop breakaway power is **0.025–0.050** depending on pod and direction (measured by
+    applying each power from rest on a staircase; see `tools/swervetune/phase2_plant.py`).
+  - Shipped `kF = 0.005` is therefore **5–10× below breakaway** — the relay does nothing at all,
+    and the pod parks where `kP·e` falls under breakaway, i.e. `0.035/0.300 = 0.117 rad ≈ 6.7°`.
+    Measured residual was 3–6°, matching.
+  - Raising `kF` to 0.035 (≈ breakaway) *does* fix the residual — |steady-state| fell 3.52° → 1.25°
+    — but produced a mean of **15.8 error sign changes per step** and a **42.5° post-settle
+    peak-to-peak**. That is the relay limit-cycling, and it is why the previous session's table
+    records rings rising monotonically with kF (0.005→2.7, 0.011→4.3, 0.022→7.7, 0.035→13.7).
+
+  So the fix is not more kF, it is a term with the same authority away from the target and no
+  switching discontinuity at it. `setStaticFriction(power, bandRadians)` adds
+  `power · tanh(error / band)` to the controller output. With `kS = 0.035`, `band = 2°`,
+  `kP = 0.20`, `kD = 0.020`, `kF = 0`: |steady-state| **0.51° mean**, post-settle peak-to-peak
+  0.34°, resting servo power RMS 0.0115 — below breakaway, so the pod is genuinely at rest.
+
+  Also added, instrumentation only with no control effect: `getLastTurnPower()`,
+  `getLastErrorRad()` and `wasLastMoveFlipped()`. Scoring a step needs the error the PID actually
+  acted on — after the ±180° flip is resolved — and the power actually *written*, which output
+  caching makes different from the controller's output. Reconstructing either outside the pod means
+  duplicating `move()`'s wrap and flip logic and watching it drift.
+
+  A no-op at `staticFrictionPower = 0`, which is the default and every stock configuration.
+
+- **Upstream issue:** none filed. Worth proposing: the sign-only feed-forward is a genuine design
+  problem for any friction-dominated servo axis, not just this robot.
+- **How to remove:** if upstream adds a real static-friction term, drop `setStaticFriction` and use
+  theirs. Search the file for `RUCKUS PATCH`. After removing, re-measure breakaway and confirm the
+  replacement is continuous through zero error — a relay will limit-cycle here.
+
+### 2026-08-12 — Make the integral term actually usable in `PIDFController`
+
+- **Files changed:** `core/src/main/java/com/pedropathing/control/PIDFController.java`
+- **Reason:** the 2026-08-11 patch below clears `errorIntegral` on any error sign change. Near the
+  target the error sign flips on sensor noise every few loops, so the accumulator was being cleared
+  continuously in exactly the situation it was added for. The measured encoder noise floor here is
+  **σ = 0.042–0.054°** against a 0.1125° read granularity, so zero crossings at rest are constant.
+
+  Two additions, both no-ops at their defaults:
+
+  1. `setIntegralResetThreshold(t)` — a sign change only clears the accumulator if the error was
+     larger than `t` on one side of the crossing. Default 0 reproduces the previous behaviour.
+  2. `setIntegralBand(b)` — only accumulate while `|error| < b`, holding the accumulator at zero
+     outside. Conditional integration: an integral meant to break stiction at the target should not
+     wind up across a 90° slew where the proportional term already saturates the output. Default
+     infinity reproduces the previous behaviour.
+
+  Both are reachable on a pod through `CoaxialPod.setTurnIntegralSettings(...)`, added for this,
+  since the controller is constructed inside that class.
+
+- **Upstream issue:** none filed.
+- **How to remove:** search for `RUCKUS PATCH`; the shared `accumulateIntegral()` helper contains
+  all of the changed behaviour and reverts to the stock two lines at default settings.
+
 ### 2026-08-11 — Make the integral term safe to use in `PIDFController`
 
 - **Files changed:** `core/src/main/java/com/pedropathing/control/PIDFController.java`

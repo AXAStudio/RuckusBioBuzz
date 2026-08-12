@@ -61,6 +61,32 @@ public class PodCal {
     public double kI = 0.0;
 
     /**
+     * Continuous static-friction feed-forward, replacing the sign-only kF relay.
+     *
+     * <p>Set to the pod's measured breakaway power - the smallest open-loop power that moves it
+     * from rest. Applied as {@code kS * tanh(error / kSBand)}, so it has full authority where the
+     * pod is stuck and tapers to nothing at the target instead of switching sign there.
+     *
+     * <p>Measured breakaway on this drivetrain is 0.025-0.050 depending on pod and direction.
+     */
+    public double kS = 0.0;
+
+    /** Error at which {@link #kS} reaches 76% of its peak, in degrees. */
+    public double kSBandDeg = 2.0;
+
+    /**
+     * Bounds on the integral term. Only matter once {@link #kI} is non-zero.
+     *
+     * <p>{@code kILimit} caps its contribution to the output; anything much above the measured
+     * breakaway power just slams the pod. {@code kIBandDeg} keeps it out of the slew, where the
+     * proportional term is already saturated and accumulating only buys an overshoot.
+     * {@code kIResetDeg} stops the sign-change reset firing on encoder noise at the target.
+     */
+    public double kILimit = 0.08;
+    public double kIBandDeg = 6.0;
+    public double kIResetDeg = 2.0;
+
+    /**
      * Minimum change in servo power before CoaxialPod actually writes it.
      *
      * <p>This is a deadband on the control OUTPUT: below it the servo keeps whatever power it had,
@@ -155,6 +181,8 @@ public class PodCal {
                 encoderReversed);
         pod.setMotorCachingThreshold(0.05);
         pod.setServoCachingThreshold(servoCaching);
+        pod.setStaticFriction(kS, Math.toRadians(kSBandDeg));
+        pod.setTurnIntegralSettings(kILimit, Math.toRadians(kIBandDeg), Math.toRadians(kIResetDeg));
         return pod;
     }
 
@@ -227,7 +255,9 @@ public class PodCal {
                 + "|" + podX
                 + "|" + podY
                 + "|" + kI
-                + "|" + servoCaching;
+                + "|" + servoCaching
+                + "|" + kS
+                + "|" + kSBandDeg;
     }
 
     /** Applies a line previously produced by {@link #serialize()}. Returns false if unusable. */
@@ -252,9 +282,12 @@ public class PodCal {
             kF = Double.parseDouble(p[13]);
             podX = Double.parseDouble(p[14]);
             podY = Double.parseDouble(p[15]);
-            // kI was added after the first calibration files were written, so it is optional.
+            // Fields appended after the first calibration files were written are all optional, so
+            // an older file still loads.
             kI = p.length > 16 ? Double.parseDouble(p[16]) : 0.0;
             servoCaching = p.length > 17 ? Double.parseDouble(p[17]) : 0.05;
+            kS = p.length > 18 ? Double.parseDouble(p[18]) : 0.0;
+            kSBandDeg = p.length > 19 ? Double.parseDouble(p[19]) : 2.0;
             return true;
         } catch (NumberFormatException e) {
             return false;

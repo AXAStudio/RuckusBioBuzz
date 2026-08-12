@@ -39,6 +39,14 @@ public class CoaxialPod implements SwervePod {
     private double lastDrivePower = 0;
     private double lastTurnPower = 0;
 
+    /** RUCKUS PATCH: instrumentation only. See {@link #getLastErrorRad}. */
+    private double lastErrorRad = 0;
+    private boolean lastMoveFlipped = false;
+
+    /** RUCKUS PATCH: continuous static-friction term. See {@link #setStaticFriction}. */
+    private double staticFrictionPower = 0.0;
+    private double staticFrictionBandRad = Math.toRadians(2.0);
+
     /**
      * @param motorName drive motor name
      * @param servoName turn servo name
@@ -202,6 +210,7 @@ public class CoaxialPod implements SwervePod {
         double errorRad = signedRad;
 
         // Minimize rotation: flip + invert drive if > 90°
+        lastMoveFlipped = Math.abs(errorRad) > (Math.PI / 2.0);
         if (Math.abs(errorRad) > (Math.PI / 2.0)) {
             // add 180 degrees (pi radians)
             desiredRad = MathFunctions.normalizeAngle(desiredRad + Math.PI);
@@ -224,7 +233,18 @@ public class CoaxialPod implements SwervePod {
         }
 
         turnPID.updateError(setpointRad - actualRad);
-        double turnPower = MathFunctions.clamp(turnPID.run(), -1.0, 1.0);
+        double raw = turnPID.run();
+
+        // RUCKUS PATCH: continuous static-friction feed-forward. A no-op while
+        // staticFrictionPower is 0, which is every stock configuration.
+        if (staticFrictionPower != 0.0 && staticFrictionBandRad > 0.0) {
+            raw += staticFrictionPower * Math.tanh(errorRad / staticFrictionBandRad);
+        }
+
+        double turnPower = MathFunctions.clamp(raw, -1.0, 1.0);
+
+        // RUCKUS PATCH: instrumentation only, no control effect.
+        lastErrorRad = errorRad;
 
         // please don't change the next 5 lines took like 5 hours to figure ts out
         if (ignoreAngleChanges) {
@@ -273,6 +293,95 @@ public class CoaxialPod implements SwervePod {
     public double getOffsetAngleRad() {
         double rad = getRawAngleRad() - angleOffsetRad;
         return MathFunctions.normalizeAngle(rad);
+    }
+
+    /**
+     * RUCKUS PATCH: a continuous replacement for the sign-only {@code kF} relay.
+     *
+     * <p>{@code kF} enters {@link PIDFController} as {@code F * feedForwardInput}, and this class
+     * feeds it {@code getTurnDirection(...)}, which is exactly +1 or -1. That makes kF a relay, not
+     * a feed-forward: constant magnitude, switching sign at the target. Measured on this
+     * drivetrain, a kF large enough to break stiction (0.035, matching the measured breakaway of
+     * 0.025-0.050) produced a mean of 15.8 error sign changes per step and a 42.5 degree
+     * post-settle peak-to-peak, while a kF small enough to be stable (0.005) was 5-10x below
+     * breakaway and left the pod parked 3-6 degrees short.
+     *
+     * <p>This term is {@code power * tanh(error / band)}: the same authority far from the target,
+     * tapering smoothly through zero so there is no switching discontinuity to limit-cycle on.
+     * Set {@code power} to the measured breakaway and {@code band} to roughly the settling
+     * tolerance you want.
+     *
+     * <p>A no-op at {@code power = 0}, which is the default and every stock configuration.
+     *
+     * @param power peak static-friction output, in the same units as the PIDF output
+     * @param bandRadians error at which the term reaches tanh(1) = 76% of {@code power}
+     */
+    public void setStaticFriction(double power, double bandRadians) {
+        this.staticFrictionPower = power;
+        this.staticFrictionBandRad = bandRadians;
+    }
+
+    /**
+     * RUCKUS PATCH: configures the turn PID's integral behaviour.
+     *
+     * <p>Exposed because the controller is created inside this class, so a caller otherwise has no
+     * way to reach it. See {@link PIDFController#setIntegralLimit},
+     * {@link PIDFController#setIntegralBand} and
+     * {@link PIDFController#setIntegralResetThreshold}. All three are no-ops while I is 0.
+     *
+     * @param limit largest absolute contribution the integral may make to the output
+     * @param bandRadians only accumulate while |error| is inside this band
+     * @param resetThresholdRadians error a sign change must exceed to clear the accumulator
+     */
+    public void setTurnIntegralSettings(double limit, double bandRadians,
+            double resetThresholdRadians) {
+        turnPID.setIntegralLimit(limit);
+        turnPID.setIntegralBand(bandRadians);
+        turnPID.setIntegralResetThreshold(resetThresholdRadians);
+    }
+
+    public double getStaticFrictionPower() {
+        return staticFrictionPower;
+    }
+
+    public double getStaticFrictionBandRad() {
+        return staticFrictionBandRad;
+    }
+
+    /**
+     * RUCKUS PATCH: the turn power most recently <em>written</em> to the servo.
+     *
+     * <p>Not the same as the controller's output: {@link #setServoCachingThreshold} suppresses
+     * writes smaller than its threshold, so this is what the hardware is actually holding. Reading
+     * it from the {@code CRServo} object instead would go through that object's own direction flag,
+     * which a diagnostic tool may have set differently.
+     *
+     * @return last written turn servo power, in [-1, 1]
+     */
+    public double getLastTurnPower() {
+        return lastTurnPower;
+    }
+
+    /**
+     * RUCKUS PATCH: signed pod heading error from the last {@link #move} call, in radians.
+     *
+     * <p>Measured after the 180 degree flip is resolved, so it is the error the PID actually acted
+     * on, already wrapped to [-pi/2, pi/2]. Scoring a step response against this avoids having to
+     * reproduce the wrap and flip logic outside the pod.
+     *
+     * @return signed error in radians
+     */
+    public double getLastErrorRad() {
+        return lastErrorRad;
+    }
+
+    /**
+     * RUCKUS PATCH: whether the last {@link #move} call took the 180 degree flip.
+     *
+     * @return true if the target was inverted and drive power negated
+     */
+    public boolean wasLastMoveFlipped() {
+        return lastMoveFlipped;
     }
 
     /**

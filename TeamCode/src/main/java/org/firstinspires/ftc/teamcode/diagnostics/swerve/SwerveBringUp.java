@@ -137,6 +137,7 @@ public class SwerveBringUp extends OpMode {
                 || "nudge".equals(action)
                 || "pidStep".equals(action)
                 || "pidStepAll".equals(action)
+                || "rawServo".equals(action)
                 || "autoTune".equals(action)
                 || "headingStep".equals(action)
                 || "headingGoto".equals(action)
@@ -150,6 +151,34 @@ public class SwerveBringUp extends OpMode {
     private final CRServo[] servos = new CRServo[POD_COUNT];
     private final AnalogInput[] encoders = new AnalogInput[POD_COUNT];
     private final double[] volts = new double[POD_COUNT];
+
+    /**
+     * Turn-servo power actually commanded this loop, per pod.
+     *
+     * <p>Tracked here rather than read back from the {@code CRServo}, because during closed-loop
+     * modes the pod writes through its own device object and {@code CoaxialPod}'s output caching
+     * means the controller's output and the servo's held power are different numbers. The recorder
+     * wants the held one.
+     */
+    private final double[] servoCmd = new double[POD_COUNT];
+
+    /** Loop-rate recording of every pod, pulled as CSV from {@code /swerve/rec.csv}. */
+    private final PodRecorder recorder = new PodRecorder();
+
+    // Scratch rows reused each loop so recording allocates nothing in the control path.
+    private final double[] recWheel = new double[POD_COUNT];
+    private final double[] recTarget = new double[POD_COUNT];
+    private final double[] recError = new double[POD_COUNT];
+    private final boolean[] recFlipped = new boolean[POD_COUNT];
+
+    /**
+     * Which pods went through {@code CoaxialPod.move()} this loop.
+     *
+     * <p>Only those pods have a meaningful error and turn power to read back; for the rest the
+     * pod's cached values are left over from whenever it was last driven, and recording them would
+     * put stale numbers in the trace that look like real measurements.
+     */
+    private final boolean[] podMoved = new boolean[POD_COUNT];
 
     /**
      * The four analog channels addressed by their fixed config names, independent of which pod each
@@ -178,6 +207,45 @@ public class SwerveBringUp extends OpMode {
     private final ElapsedTime loopTimer = new ElapsedTime();
     private final ElapsedTime phaseTimer = new ElapsedTime();
     private double loopHz;
+
+    /**
+     * Smoothed per-stage loop cost in milliseconds.
+     *
+     * <p>The pod turn loop runs at the OpMode's loop rate, so the loop rate is a control parameter,
+     * not a diagnostic curiosity: at 30 Hz the derivative is differencing over 33 ms and the servo
+     * is being told something new less often than its own 20 ms PWM frame. Knowing which stage
+     * costs what is the difference between fixing that and guessing at it.
+     */
+    private double msEncoders;
+    private double msHeading;
+    private double msMode;
+    private double msPublish;
+
+    private static double smooth(double previous, long nanos) {
+        return 0.9 * previous + 0.1 * (nanos / 1.0e6);
+    }
+
+    /**
+     * How often state is serialised and telemetry pushed.
+     *
+     * <p>Both were running every loop and together cost 8-13 ms of a 20-27 ms loop, which is to say
+     * the dashboard was consuming half the control bandwidth. 20 Hz is far faster than anyone reads
+     * a web page, well inside {@code SwerveBench}'s 1500 ms liveness window, and irrelevant to the
+     * recorder, which samples every loop regardless.
+     */
+    private static final double PUBLISH_INTERVAL_S = 0.05;
+
+    /**
+     * How often the Pinpoint and the raw analog channels are read when nothing needs them.
+     *
+     * <p>The Pinpoint costs 5.5 ms of I2C per read and pod rotation does not use heading at all;
+     * the four {@code channels[]} reads exist only for the wiring scan. Both still refresh slowly
+     * so the dashboard shows live numbers instead of frozen ones.
+     */
+    private static final double IDLE_SENSOR_INTERVAL_S = 0.2;
+
+    private final ElapsedTime publishTimer = new ElapsedTime();
+    private final ElapsedTime idleSensorTimer = new ElapsedTime();
 
     // routine bookkeeping
     private int routinePod;
@@ -350,6 +418,8 @@ public class SwerveBringUp extends OpMode {
         }
 
         SwerveBench.INSTANCE.clearCommands();
+        SwerveBench.INSTANCE.setRecorder(recorder);
+        computeTargets();
         publish();
         pushTelemetry();
     }
@@ -387,12 +457,70 @@ public class SwerveBringUp extends OpMode {
         }
 
         drainCommands();
-        readEncoders();
-        readHeading();
+
+        boolean refreshIdleSensors = idleSensorTimer.seconds() >= IDLE_SENSOR_INTERVAL_S;
+        if (refreshIdleSensors) {
+            idleSensorTimer.reset();
+        }
+
+        long mark = System.nanoTime();
+        readEncoders(refreshIdleSensors);
+        msEncoders = smooth(msEncoders, System.nanoTime() - mark);
+
+        mark = System.nanoTime();
+        readHeading(refreshIdleSensors);
+        msHeading = smooth(msHeading, System.nanoTime() - mark);
+
         handleGamepad();
+
+        mark = System.nanoTime();
         runMode();
-        publish();
-        pushTelemetry();
+        msMode = smooth(msMode, System.nanoTime() - mark);
+        // Before record() so the trace carries this loop's commanded angles, not the previous
+        // loop's; publish() then reuses what was computed here.
+        computeTargets();
+        record(dt);
+
+        if (publishTimer.seconds() >= PUBLISH_INTERVAL_S) {
+            publishTimer.reset();
+            mark = System.nanoTime();
+            publish();
+            pushTelemetry();
+            msPublish = smooth(msPublish, System.nanoTime() - mark);
+        }
+    }
+
+    /**
+     * Appends one loop's worth of every pod's state to {@link #recorder}.
+     *
+     * <p>Runs after {@link #runMode()} so it captures the outputs this loop actually produced.
+     */
+    private void record(double dt) {
+        if (!recorder.recording()) {
+            return;
+        }
+
+        for (int i = 0; i < POD_COUNT; i++) {
+            PodCal c = cals[i];
+            recWheel[i] = Double.isNaN(volts[i])
+                    ? Double.NaN
+                    : Math.toDegrees(c.wheelThetaFromEncoder(c.zeroedAngleRad(volts[i])));
+            recTarget[i] = Double.isNaN(targetTheta[i])
+                    ? Double.NaN
+                    : Math.toDegrees(normalizeTwoPi(targetTheta[i]));
+
+            if (podMoved[i] && pods != null) {
+                recError[i] = Math.toDegrees(pods[i].getLastErrorRad());
+                recFlipped[i] = pods[i].wasLastMoveFlipped();
+                servoCmd[i] = pods[i].getLastTurnPower();
+            } else {
+                recError[i] = Double.NaN;
+                recFlipped[i] = false;
+            }
+        }
+
+        recorder.add(dt, batteryVolts(), loopHz, mode.ordinal(),
+                volts, recWheel, recTarget, recError, servoCmd, recFlipped);
     }
 
     // ---------------------------------------------------------------- hardware
@@ -412,7 +540,7 @@ public class SwerveBringUp extends OpMode {
             try {
                 servos[i] = hardwareMap.get(CRServo.class, c.servoName);
                 servos[i].setDirection(c.servoDirection);
-                servos[i].setPower(0);
+                setServo(i, 0);
             } catch (RuntimeException e) {
                 servos[i] = null;
                 hwErrors.add("Missing turn servo \"" + c.servoName + "\" (pod " + i + ").");
@@ -434,10 +562,18 @@ public class SwerveBringUp extends OpMode {
         }
     }
 
+    /** True while heading is actually part of the control law rather than just a readout. */
+    private boolean headingInUse() {
+        return mode == Mode.HEADING || (mode == Mode.DRIVE && headingHold);
+    }
+
     /** Heading comes off the Pinpoint's IMU, so it is valid with no odometry pods attached. */
-    private void readHeading() {
+    private void readHeading(boolean refreshIdleSensors) {
         if (pinpoint == null) {
             headingOk = false;
+            return;
+        }
+        if (!headingInUse() && !refreshIdleSensors) {
             return;
         }
         try {
@@ -452,10 +588,22 @@ public class SwerveBringUp extends OpMode {
         }
     }
 
-    private void readEncoders() {
+    /**
+     * Reads the four pod encoders every loop, and the four raw channels only when something wants
+     * them.
+     *
+     * <p>{@code channels[]} duplicates {@code encoders[]} through fixed names so a wiring scan
+     * stays meaningful after a remap. Outside a scan nothing reads it, and it was costing half of
+     * this method's 4.6 ms every loop.
+     */
+    private void readEncoders(boolean refreshIdleSensors) {
         for (int i = 0; i < POD_COUNT; i++) {
             volts[i] = readVoltage(encoders[i]);
-            channelVolts[i] = readVoltage(channels[i]);
+        }
+        if (mode == Mode.WIRE_SCAN || refreshIdleSensors) {
+            for (int i = 0; i < POD_COUNT; i++) {
+                channelVolts[i] = readVoltage(channels[i]);
+            }
         }
     }
 
@@ -512,10 +660,31 @@ public class SwerveBringUp extends OpMode {
         }
     }
 
+    /**
+     * Applies turn-servo power and records what was applied.
+     *
+     * <p>Every open-loop servo write in this class goes through here, so {@link #servoCmd} is a
+     * faithful log of what the hardware was told rather than a reconstruction.
+     */
+    /** Drives the bench drivetrain and notes that every pod went through {@code move()}. */
+    private void arcade(double forward, double strafe, double rotation) {
+        swerve.arcadeDrive(forward, strafe, rotation);
+        for (int i = 0; i < POD_COUNT; i++) {
+            podMoved[i] = true;
+        }
+    }
+
+    private void setServo(int i, double power) {
+        servoCmd[i] = power;
+        if (servos[i] != null) {
+            servos[i].setPower(power);
+        }
+    }
+
     private void allStop() {
         for (int i = 0; i < POD_COUNT; i++) {
             if (servos[i] != null) {
-                servos[i].setPower(0);
+                setServo(i, 0);
             }
             if (motors[i] != null) {
                 motors[i].setPower(0);
@@ -529,6 +698,11 @@ public class SwerveBringUp extends OpMode {
     // ---------------------------------------------------------------- mode runner
 
     private void runMode() {
+        // Re-established each loop by whichever branch actually drives pods through move().
+        for (int i = 0; i < POD_COUNT; i++) {
+            podMoved[i] = false;
+        }
+
         // Nothing moves until the driver station START button is pressed. The dashboard stays
         // fully live during INIT so wiring can be inspected safely.
         if (!started && mode != Mode.IDLE) {
@@ -566,7 +740,7 @@ public class SwerveBringUp extends OpMode {
                 // Servos limp so pods can be turned by hand for zeroing.
                 for (int i = 0; i < POD_COUNT; i++) {
                     if (servos[i] != null) {
-                        servos[i].setPower(0);
+                        setServo(i, 0);
                     }
                     if (motors[i] != null) {
                         motors[i].setPower(0);
@@ -628,7 +802,7 @@ public class SwerveBringUp extends OpMode {
             for (int i = 0; i < POD_COUNT; i++) {
                 if (servos[i] != null) {
                     servos[i].setDirection(DcMotorSimple.Direction.FORWARD);
-                    servos[i].setPower(0);
+                    setServo(i, 0);
                 }
             }
             System.arraycopy(channelVolts, 0, lastVolts, 0, POD_COUNT);
@@ -643,7 +817,7 @@ public class SwerveBringUp extends OpMode {
         if (routinePhase == 0) {
             // settle
             if (servos[routinePod] != null) {
-                servos[routinePod].setPower(0);
+                setServo(routinePod, 0);
             }
             if (phaseTimer.seconds() >= SCAN_SETTLE_S) {
                 System.arraycopy(channelVolts, 0, lastVolts, 0, POD_COUNT);
@@ -655,13 +829,13 @@ public class SwerveBringUp extends OpMode {
 
         // moving phase
         if (servos[routinePod] != null) {
-            servos[routinePod].setPower(SCAN_SERVO_POWER);
+            setServo(routinePod, SCAN_SERVO_POWER);
         }
         accumulateScanDeltas(routinePod);
 
         if (phaseTimer.seconds() >= SCAN_MOVE_S) {
             if (servos[routinePod] != null) {
-                servos[routinePod].setPower(0);
+                setServo(routinePod, 0);
             }
             routinePod++;
             routinePhase = 0;
@@ -807,7 +981,7 @@ public class SwerveBringUp extends OpMode {
 
         int p = routinePod;
         if (servos[p] != null) {
-            servos[p].setPower(SCAN_SERVO_POWER);
+            setServo(p, SCAN_SERVO_POWER);
         }
         if (!Double.isNaN(volts[p])) {
             sweepMin[p] = Math.min(sweepMin[p], volts[p]);
@@ -816,7 +990,7 @@ public class SwerveBringUp extends OpMode {
 
         if (phaseTimer.seconds() >= SWEEP_SECONDS) {
             if (servos[p] != null) {
-                servos[p].setPower(0);
+                setServo(p, 0);
             }
             routinePod++;
             phaseTimer.reset();
@@ -868,7 +1042,7 @@ public class SwerveBringUp extends OpMode {
         }
         allStop();
         servos[selected].setDirection(cals[selected].servoDirection);
-        servos[selected].setPower(power);
+        setServo(selected, power);
         jogSeconds = seconds;
         mode = Mode.JOG;
         routineActive = true;
@@ -892,7 +1066,7 @@ public class SwerveBringUp extends OpMode {
             }
             // Pods not under test stay limp, unless every pod is being stepped together.
             if (!pidAllPods && i != selected && servos[i] != null) {
-                servos[i].setPower(0);
+                setServo(i, 0);
             }
         }
 
@@ -903,9 +1077,11 @@ public class SwerveBringUp extends OpMode {
         if (pidAllPods) {
             for (int i = 0; i < POD_COUNT; i++) {
                 pods[i].move(pidTargetRad, 0.0, false);
+                podMoved[i] = true;
             }
         } else {
             pods[selected].move(pidTargetRad, 0.0, false);
+            podMoved[selected] = true;
         }
 
         recordTrace(selected, pidTargetRad);
@@ -988,7 +1164,7 @@ public class SwerveBringUp extends OpMode {
         for (int i = 0; i < POD_COUNT; i++) {
             if (i != pod) {
                 if (servos[i] != null) {
-                    servos[i].setPower(0);
+                    setServo(i, 0);
                 }
             }
             if (motors[i] != null) {
@@ -1018,11 +1194,12 @@ public class SwerveBringUp extends OpMode {
             case RAW_SERVO:
                 if (servos[pod] != null) {
                     servos[pod].setDirection(c.servoDirection);
-                    servos[pod].setPower(tuner.rawServoPower);
+                    setServo(pod, tuner.rawServoPower);
                 }
                 break;
             case PID_HOLD:
                 pods[pod].move(tuner.targetWheelRad, 0.0, false);
+                podMoved[pod] = true;
                 recordTrace(pod, tuner.targetWheelRad);
                 break;
             case FINISHED:
@@ -1104,7 +1281,7 @@ public class SwerveBringUp extends OpMode {
         if (!headingClosedLoop) {
             // Open loop: spin away from the target so the closed-loop phase starts displaced.
             if (phaseTimer.seconds() < HEADING_OPEN_LOOP_S) {
-                swerve.arcadeDrive(0, 0, headingOpenLoopPower);
+                arcade(0, 0, headingOpenLoopPower);
                 message = String.format(Locale.US, "Displacing open-loop (%.0f deg so far)",
                         Math.toDegrees(Math.abs(error)));
                 return;
@@ -1116,12 +1293,12 @@ public class SwerveBringUp extends OpMode {
             phaseTimer.reset();
         }
 
-        swerve.arcadeDrive(0, 0, headingCorrection());
+        arcade(0, 0, headingCorrection());
 
         recordHeadingTrace();
 
         if (phaseTimer.seconds() > 3.0) {
-            swerve.arcadeDrive(0, 0, 0);
+            arcade(0, 0, 0);
             message = String.format(Locale.US,
                     "Heading step done. Final error %.1f deg.", Math.toDegrees(error));
             setMode(Mode.IDLE);
@@ -1262,7 +1439,7 @@ public class SwerveBringUp extends OpMode {
                     headingStuckSeconds = 0;
                     message = "Heading has not changed while turning - sensor looks dead. "
                             + "Heading hold disabled; recalibrate the Pinpoint.";
-                    swerve.arcadeDrive(0, 0, 0);
+                    arcade(0, 0, 0);
                     return;
                 }
             } else {
@@ -1271,7 +1448,7 @@ public class SwerveBringUp extends OpMode {
             headingLastSeen = headingRad;
         }
 
-        swerve.arcadeDrive(driveForward, driveStrafe, turn);
+        arcade(driveForward, driveStrafe, turn);
 
         if (headingHold && headingOk) {
             // Heading is the interesting signal while holding, and it is what the circle test and
@@ -1442,6 +1619,15 @@ public class SwerveBringUp extends OpMode {
                         each.kI = doubleArg(cmd, "ki", each.kI);
                         each.kD = doubleArg(cmd, "kd", each.kD);
                         each.kF = doubleArg(cmd, "kf", each.kF);
+                        // Propagated with the rest: the output caching threshold is a control
+                        // parameter, not a display preference, and leaving it out of scope=all
+                        // meant a swept value silently applied to one pod out of four.
+                        each.servoCaching = doubleArg(cmd, "cache", each.servoCaching);
+                        each.kS = doubleArg(cmd, "ks", each.kS);
+                        each.kSBandDeg = doubleArg(cmd, "ksband", each.kSBandDeg);
+                        each.kILimit = doubleArg(cmd, "kilimit", each.kILimit);
+                        each.kIBandDeg = doubleArg(cmd, "kiband", each.kIBandDeg);
+                        each.kIResetDeg = doubleArg(cmd, "kireset", each.kIResetDeg);
                     }
                 } else {
                     c.kP = doubleArg(cmd, "kp", c.kP);
@@ -1449,6 +1635,11 @@ public class SwerveBringUp extends OpMode {
                     c.kD = doubleArg(cmd, "kd", c.kD);
                     c.kF = doubleArg(cmd, "kf", c.kF);
                     c.servoCaching = doubleArg(cmd, "cache", c.servoCaching);
+                    c.kS = doubleArg(cmd, "ks", c.kS);
+                    c.kSBandDeg = doubleArg(cmd, "ksband", c.kSBandDeg);
+                    c.kILimit = doubleArg(cmd, "kilimit", c.kILimit);
+                    c.kIBandDeg = doubleArg(cmd, "kiband", c.kIBandDeg);
+                    c.kIResetDeg = doubleArg(cmd, "kireset", c.kIResetDeg);
                 }
                 podsDirty = true;
                 saveCalibration();
@@ -1461,6 +1652,24 @@ public class SwerveBringUp extends OpMode {
                 podsDirty = true;
                 saveCalibration();
                 break;
+            case "recStart":
+                recorder.start(cmd.get("label"));
+                message = "Recording run " + recorder.runId() + ".";
+                break;
+            case "recStop":
+                recorder.stop();
+                message = "Recording stopped: " + recorder.count() + " samples"
+                        + (recorder.overflowed() ? " (BUFFER FULL - run truncated)." : ".");
+                break;
+            case "rawServo": {
+                // Open-loop drive at a known power, which is how breakaway, deadband and max slew
+                // rate get measured. Reuses the jog path so the same timeout protects it.
+                double pow = MathFunctions.clamp(doubleArg(cmd, "pow", 0), -1.0, 1.0);
+                double sec = MathFunctions.clamp(doubleArg(cmd, "sec", 0.5), 0.0, 5.0);
+                beginJog(pow, sec, String.format(Locale.US,
+                        "Pod %d open loop at %.3f for %.2fs.", selected, pow, sec));
+                break;
+            }
             case "pidStep":
                 startPidStep(doubleArg(cmd, "deg", 90), false);
                 break;
@@ -1760,7 +1969,13 @@ public class SwerveBringUp extends OpMode {
         }
 
         if (mode == Mode.PID && pidHolding) {
-            targetTheta[selected] = pidTargetRad;
+            if (pidAllPods) {
+                for (int i = 0; i < POD_COUNT; i++) {
+                    targetTheta[i] = pidTargetRad;
+                }
+            } else {
+                targetTheta[selected] = pidTargetRad;
+            }
             return;
         }
         if (mode != Mode.DRIVE) {
@@ -1814,7 +2029,6 @@ public class SwerveBringUp extends OpMode {
     // ---------------------------------------------------------------- state publishing
 
     private void publish() {
-        computeTargets();
         StringBuilder sb = new StringBuilder(2048);
         sb.append("{");
         sb.append("\"live\":true");
@@ -1836,6 +2050,17 @@ public class SwerveBringUp extends OpMode {
                 .append('}');
         sb.append(",\"message\":\"").append(esc(message)).append('"');
         sb.append(",\"phase\":").append(fmt(phaseTimer.seconds()));
+        sb.append(",\"timing\":{\"encoders\":").append(fmt(msEncoders))
+                .append(",\"heading\":").append(fmt(msHeading))
+                .append(",\"mode\":").append(fmt(msMode))
+                .append(",\"publish\":").append(fmt(msPublish))
+                .append('}');
+        sb.append(",\"rec\":{\"recording\":").append(recorder.recording())
+                .append(",\"runId\":").append(recorder.runId())
+                .append(",\"samples\":").append(recorder.count())
+                .append(",\"overflowed\":").append(recorder.overflowed())
+                .append(",\"label\":\"").append(esc(recorder.label()))
+                .append("\"}");
 
         sb.append(",\"pods\":[");
         for (int i = 0; i < POD_COUNT; i++) {
@@ -1935,6 +2160,11 @@ public class SwerveBringUp extends OpMode {
         sb.append(",\"kd\":").append(fmt(c.kD));
         sb.append(",\"kf\":").append(fmt(c.kF));
         sb.append(",\"cache\":").append(fmt(c.servoCaching));
+        sb.append(",\"ks\":").append(fmt(c.kS));
+        sb.append(",\"ksband\":").append(fmt(c.kSBandDeg));
+        sb.append(",\"kilimit\":").append(fmt(c.kILimit));
+        sb.append(",\"kiband\":").append(fmt(c.kIBandDeg));
+        sb.append(",\"kireset\":").append(fmt(c.kIResetDeg));
         sb.append(",\"discovered\":").append(c.discoveredEncoderIndex);
         sb.append(",\"servoPower\":")
                 .append(servos[i] != null ? fmt(servos[i].getPower()) : "0");
