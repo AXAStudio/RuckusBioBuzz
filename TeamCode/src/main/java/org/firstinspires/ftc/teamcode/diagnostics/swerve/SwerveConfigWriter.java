@@ -1,6 +1,11 @@
 package org.firstinspires.ftc.teamcode.diagnostics.swerve;
 
 import android.content.Context;
+import android.content.res.XmlResourceParser;
+import org.xmlpull.v1.XmlPullParser;
+import org.xmlpull.v1.XmlPullParserException;
+
+import java.io.IOException;
 
 import com.qualcomm.ftccommon.configuration.RobotConfigFile;
 import com.qualcomm.ftccommon.configuration.RobotConfigFileManager;
@@ -178,9 +183,19 @@ public final class SwerveConfigWriter {
             RobotConfigFile file = new RobotConfigFile(resourceName, resourceId);
             manager.setActiveConfig(file);
 
+            // Read the activation back. Reporting success without checking is how a request for one
+            // configuration can be answered with a cheerful description of a different one.
+            String nowActive = activeConfigName();
+            if (!resourceName.equals(nowActive)) {
+                return new Result(false,
+                        "Asked to activate \"" + resourceName + "\" but the active configuration "
+                                + "reads back as \"" + nowActive + "\". Nothing has been applied.",
+                        "");
+            }
+
             return new Result(true,
                     "Activated built-in configuration \"" + resourceName
-                            + "\". Restart the robot to apply it.", "");
+                            + "\". Restart the robot to apply it.", describeBuiltIn(resourceId));
         } catch (Exception e) {
             return new Result(false,
                     "Could not activate the built-in configuration: "
@@ -265,5 +280,44 @@ public final class SwerveConfigWriter {
 
     private static String escape(String s) {
         return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
+    }
+
+    /**
+     * Lists the devices a compiled {@code res/xml} configuration actually declares.
+     *
+     * <p>Android stores these as compiled binary XML, so the original text is not recoverable; this
+     * walks the parsed document instead. That is the useful thing anyway - what matters is which
+     * device type each port was declared as, which is exactly what distinguishes a positional servo
+     * from a continuous rotation one, and exactly what a caller asking for a specific built-in
+     * configuration needs to see confirmed rather than assumed.
+     */
+    public static String describeBuiltIn(int resourceId) {
+        StringBuilder sb = new StringBuilder();
+        XmlResourceParser parser = null;
+        try {
+            parser = AppUtil.getInstance().getApplication().getResources().getXml(resourceId);
+            int event = parser.getEventType();
+            while (event != XmlPullParser.END_DOCUMENT) {
+                if (event == XmlPullParser.START_TAG) {
+                    String name = parser.getAttributeValue(null, "name");
+                    if (name != null) {
+                        String port = parser.getAttributeValue(null, "port");
+                        sb.append(parser.getName()).append(' ').append(name);
+                        if (port != null) {
+                            sb.append(" port=").append(port);
+                        }
+                        sb.append('\n');
+                    }
+                }
+                event = parser.next();
+            }
+        } catch (XmlPullParserException | IOException | RuntimeException e) {
+            return "could not read the activated resource: " + e.getMessage();
+        } finally {
+            if (parser != null) {
+                parser.close();
+            }
+        }
+        return sb.toString();
     }
 }

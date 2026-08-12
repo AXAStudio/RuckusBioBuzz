@@ -200,12 +200,17 @@ public class SwerveWebApp {
         if (p.get("builtin") != null) {
             // "1" keeps the original meaning; any other value names a res/xml file,
             // so the positional A/B config is reachable without a Driver Station.
-            String which = p.get("builtin");
-            SwerveConfigWriter.Result result = "1".equals(which)
-                    ? SwerveConfigWriter.activateBuiltIn()
-                    : SwerveConfigWriter.activateBuiltIn(which);
+            String which = "1".equals(p.get("builtin"))
+                    ? SwerveConfigWriter.BUILT_IN_RESOURCE
+                    : p.get("builtin");
+            SwerveConfigWriter.Result result = SwerveConfigWriter.activateBuiltIn(which);
             ok = result.ok;
             message = result.message;
+            // Report what was activated, not the write path's generated preview. Handing back a
+            // freshly generated CR configuration in response to a request for a positional one is
+            // worse than an error: it looks like confirmation.
+            name = which;
+            xml = result.xml;
         } else if (write) {
             SwerveConfigWriter.Result result = SwerveConfigWriter.writeAndActivate(name, xml);
             ok = result.ok;
