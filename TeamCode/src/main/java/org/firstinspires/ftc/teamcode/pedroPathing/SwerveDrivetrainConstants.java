@@ -82,19 +82,65 @@ public class SwerveDrivetrainConstants {
     // Zero offsets, analog ranges, encoder pairings and drive directions below come from a
     // Swerve Bring-Up session on 2026-08-10, verified driving.
     //
-    // Gains from an OFF-GROUND baseline (2026-08-11), then verified on carpet.
+    // ---------------------------------------------------------------------------------------
+    // TURN GAINS: INTERIM, NOT FINAL. Updated 2026-08-12. Off the ground only - NOT yet
+    // validated on carpet, at competition weight, or on a drained battery.
+    // ---------------------------------------------------------------------------------------
     //
-    // kF is a bang-bang relay, not a smooth feed-forward: CoaxialPod applies the full magnitude
-    // outside a 2 degree band and only varies its SIGN. Every extra bit of it buys limit cycling.
-    // Measured off the ground on ss2, rings per step: kF 0.005 -> 2.7, 0.011 -> 4.3, 0.022 -> 7.7,
-    // 0.035 -> 13.7. kP does the same above ~0.35, and kD ADDS ringing above ~0.010 because it
-    // differentiates analog encoder noise. Ground friction hides all of this - on carpet the old
-    // gains looked fine at 0-3 rings while ringing 14-18 off the ground.
+    // Committed because they are a large, measured improvement on what shipped, not because they
+    // are finished. Measured on a randomised interleaved A/B against the previous gains, same
+    // battery, 40 pod-runs each, 90 degree steps on blocks at 13.1 V:
     //
-    // Net: keep kF at the minimum that still breaks stiction, kP <= 0.35, kD <= 0.010. Expect
-    // 3-6 degrees of residual heading error; that is the price of a kF low enough to stay stable.
+    //     steady-state error   3.23 -> 0.96 deg mean,  7.24 -> 2.52 deg max
+    //     error sign changes   2.35 -> 0.85 per step
+    //     post-settle p-p      0.53 -> 0.21 deg mean, 0.45 max  (first time this criterion passed)
     //
-    // I stays 0 - swept on ss3 and every non-zero value produced 30-45 degrees of hunting.
+    // What was actually wrong, in order of size:
+    //
+    // 1. Loop rate. The turn PID runs at the OpMode loop rate, which was 33 Hz under a four-pod
+    //    hold - slower than the servos' own 20 ms PWM frame. Raising it to ~100 Hz cut error sign
+    //    changes from 1-4 to 0-1 with the gains untouched. DriveTeleOp was 30.7 Hz and is now
+    //    75.8 Hz; see that file. This was the single biggest lever and it is not a gain.
+    //
+    // 2. kF is a relay, not a feed-forward. CoaxialPod feeds the PIDF a sign, so the F term is
+    //    +/-kF. Measured breakaway is 0.025-0.050, so the shipped kF of 0.005 was 5-10x too small
+    //    to do anything, and the pod parked where kP*e fell under breakaway: 0.035/0.300 = 6.7 deg.
+    //    Setting kF to breakaway does fix the residual (3.52 -> 1.25 deg) and limit-cycles at
+    //    42.5 deg peak-to-peak. Replaced by kS, a continuous tanh static-friction term with the
+    //    same authority away from the target and no switching discontinuity at it. kF is now 0.
+    //
+    // 3. servoCachingThreshold 0.05 was wider than the entire breakaway range, so a settled pod's
+    //    written power was frozen across a ~19 degree error window. Now 0.01; below that the extra
+    //    bus traffic costs loop rate (96 -> 77 Hz) for no measurable gain.
+    //
+    // Negative results, all measured, so nobody repeats them:
+    //
+    //   - Encoder noise is NOT why kD misbehaves. Noise floor is sigma 0.042-0.054 deg against a
+    //     0.1125 deg read granularity, which pushes 0.0006 of output through kD 0.010. The old
+    //     "kD above 0.010 adds ringing" note was a loop-rate artefact.
+    //   - Derivative-on-measurement does not permit more damping. Implemented and available
+    //     (default off); kD 0.040 rings 16x, 0.070 and 0.110 are unusable.
+    //   - Widening the servo PWM pulse range 600-2400 -> 500-2500 us does nothing. The servo
+    //     already reaches ~90% of top speed at 0.3 power, so the extra range is never used.
+    //   - No measurable backlash. Approaching one heading from both sides 8 times each, the
+    //     directional gap is 0.01-0.60 deg and no pod's gap exceeds twice its standard error.
+    //   - No mechanical outlier pod. Loose-mode rate is 12.8/17.4/18.2/20.7 percent across the
+    //     four, statistically one band.
+    //   - kI is still 0, but the old "30-45 degrees of hunting" result is not why. That predates
+    //     both the caching fix and PIDFController's integral band and reset threshold. Re-testable.
+    //
+    // Known not met, off the ground: 90 degree settle to +/-2.0 deg is ~0.5 s against a 350 ms
+    // target; residual at t=3 s is 0.54-1.0 deg mean but up to 2.5 deg worst case; pod-to-pod
+    // spread is 24-84% against 15%. Roughly 17% of step responses land in a wide mode with 25 deg
+    // of peak-to-peak rather than the usual 0.23 deg - that bimodality is gain-controllable and
+    // is the open problem. Full trial log and traces in tools/swervetune.
+
+    private static double turnKP = 0.200;
+    private static double turnKD = 0.014;
+
+    /** Static-friction feed-forward, set to the measured breakaway. Replaces the kF relay. */
+    private static double turnKS = 0.035;
+    private static double turnKSBandDeg = 2.0;
 
     private static double dtLength = 146.420; //distance from robot center to front/back pod center
     private static double dtWidth = 154.240; // distance from robot center to left/right pod center
@@ -104,41 +150,45 @@ public class SwerveDrivetrainConstants {
     // channel than its own number. Do not "tidy" these to match.
     private static CoaxialPod leftFront(HardwareMap hardwareMap) {
         CoaxialPod pod = new CoaxialPod(hardwareMap, "sm2", "ss2", "se3",
-                new PIDFCoefficients(0.300000, 0, 0.010000, 0.005000), DcMotorSimple.Direction.FORWARD,
+                new PIDFCoefficients(turnKP, 0, turnKD, 0), DcMotorSimple.Direction.FORWARD,
                 DcMotorSimple.Direction.REVERSE, Math.toRadians(338.2), new Pose(dtLength, dtWidth),
                 0.136, 3.336, false);
         pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(0.05);
+        pod.setServoCachingThreshold(0.01);
+        pod.setStaticFriction(turnKS, Math.toRadians(turnKSBandDeg));
         return pod;
     }
 
     private static CoaxialPod rightFront(HardwareMap hardwareMap) {
         CoaxialPod pod = new CoaxialPod(hardwareMap, "sm1", "ss1", "se0",
-                new PIDFCoefficients(0.300000, 0, 0.010000, 0.005000), DcMotorSimple.Direction.FORWARD,
+                new PIDFCoefficients(turnKP, 0, turnKD, 0), DcMotorSimple.Direction.FORWARD,
                 DcMotorSimple.Direction.REVERSE, Math.toRadians(323.3), new Pose(dtLength, -dtWidth),
                 0.145, 3.350, false);
         pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(0.05);
+        pod.setServoCachingThreshold(0.01);
+        pod.setStaticFriction(turnKS, Math.toRadians(turnKSBandDeg));
         return pod;
     }
 
     private static CoaxialPod leftBack(HardwareMap hardwareMap) {
         CoaxialPod pod = new CoaxialPod(hardwareMap, "sm3", "ss3", "se2",
-                new PIDFCoefficients(0.300000, 0, 0.010000, 0.005000), DcMotorSimple.Direction.REVERSE,
+                new PIDFCoefficients(turnKP, 0, turnKD, 0), DcMotorSimple.Direction.REVERSE,
                 DcMotorSimple.Direction.REVERSE, Math.toRadians(62.2), new Pose(-dtLength, dtWidth),
                 0.266, 3.467, false);
         pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(0.05);
+        pod.setServoCachingThreshold(0.01);
+        pod.setStaticFriction(turnKS, Math.toRadians(turnKSBandDeg));
         return pod;
     }
 
     private static CoaxialPod rightBack(HardwareMap hardwareMap) {
         CoaxialPod pod = new CoaxialPod(hardwareMap, "sm0", "ss0", "se1",
-                new PIDFCoefficients(0.300000, 0, 0.010000, 0.005000), DcMotorSimple.Direction.REVERSE,
+                new PIDFCoefficients(turnKP, 0, turnKD, 0), DcMotorSimple.Direction.REVERSE,
                 DcMotorSimple.Direction.REVERSE, Math.toRadians(32.0), new Pose(-dtLength, -dtWidth),
                 0.075, 3.247, false);
         pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(0.05);
+        pod.setServoCachingThreshold(0.01);
+        pod.setStaticFriction(turnKS, Math.toRadians(turnKSBandDeg));
         return pod;
     }
 

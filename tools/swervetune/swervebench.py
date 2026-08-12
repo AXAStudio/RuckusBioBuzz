@@ -259,7 +259,7 @@ def parse_csv(text: str) -> dict[str, list[float]]:
 def score_step(
     trace: dict[str, list[float]],
     expected_step_deg: float | None = None,
-    settle_bands: tuple[float, ...] = (0.5, 1.0, 1.5),
+    settle_bands: tuple[float, ...] = (0.5, 1.0, 1.5, 2.0),
     ring_threshold_deg: float = 0.30,
     post_settle_window_s: float = 3.0,
 ) -> dict:
@@ -365,6 +365,13 @@ def score_step(
         tail = [x for k, x in enumerate(e) if rel[k] >= end_t - 0.5]
         pod["steady_state_deg"] = _mean(tail)
         pod["steady_state_abs_deg"] = abs(_mean(tail))
+
+        # Residual sampled at a fixed 3 s after the step, rather than averaged over whatever the
+        # tail of the record happens to be. Fixing the instant decouples it from the settle-time
+        # metric: averaging the tail meant a pod hovering either side of a threshold moved both
+        # numbers at once, and neither reproduced.
+        at3 = [k for k in range(len(rel)) if rel[k] >= 3.0]
+        pod["err_at_3s"] = e[at3[0]] if at3 else float("nan")
 
         # A flip on the first samples of a 90 degree step is expected and harmless: the two
         # directions reach the same physical heading. Only a flip once the pod is already moving
