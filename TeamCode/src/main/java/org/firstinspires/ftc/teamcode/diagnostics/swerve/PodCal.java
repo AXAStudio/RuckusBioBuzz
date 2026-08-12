@@ -9,6 +9,10 @@ import com.qualcomm.robotcore.hardware.CRServo;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
 
 /**
@@ -334,7 +338,8 @@ public class PodCal {
                 + "|" + rawDegAtPos0
                 + "|" + rawDegAtPos1
                 + "|" + clampMarginDeg
-                + "|" + posCalibrated;
+                + "|" + posCalibrated
+                + "|" + discoveredEncoderIndex;
     }
 
     /** Applies a line previously produced by {@link #serialize()}. Returns false if unusable. */
@@ -387,9 +392,88 @@ public class PodCal {
             rawDegAtPos1 = p.length > 33 ? Double.parseDouble(p[33]) : 190.0;
             clampMarginDeg = p.length > 34 ? Double.parseDouble(p[34]) : 3.0;
             posCalibrated = p.length > 35 && Boolean.parseBoolean(p[35]);
+            discoveredEncoderIndex = p.length > 36 ? Integer.parseInt(p[36]) : -1;
             return true;
         } catch (NumberFormatException e) {
             return false;
         }
+    }
+
+    /**
+     * Checks that every mutable field survives {@link #serialize} and {@link #applySerialized}.
+     *
+     * <p>A guard rather than a review. This class has been extended repeatedly - static friction,
+     * integral bounds, derivative source, pulse parameters, the positional block - and the
+     * serialiser fell behind silently every time, because nothing fails when a field is simply not
+     * written. It was caught once by reading the file on the hub; that catches today's gap, not
+     * the next one.
+     *
+     * <p>Works by reflection so it cannot fall behind: any field added later is covered
+     * automatically, and the check fails the moment one is not round-tripping. Called from the
+     * OpMode's init so it runs every session rather than only when someone thinks to look.
+     *
+     * @return names of fields that did not survive the round trip; empty when all is well
+     */
+    public static List<String> roundTripGaps() {
+        List<String> gaps = new ArrayList<>();
+        try {
+            PodCal source = new PodCal(0, "LF", 111.0, 222.0);
+            PodCal defaults = new PodCal(0, "LF", 111.0, 222.0);
+
+            // Give every field a value distinct from its default, so a field that is not persisted
+            // shows up as a mismatch rather than accidentally matching.
+            int seed = 0;
+            for (Field f : PodCal.class.getFields()) {
+                if (Modifier.isStatic(f.getModifiers()) || Modifier.isFinal(f.getModifiers())) {
+                    continue;
+                }
+                seed++;
+                Class<?> t = f.getType();
+                if (t == double.class) {
+                    f.setDouble(source, 100.0 + seed * 0.125);
+                } else if (t == int.class) {
+                    f.setInt(source, 1000 + seed);
+                } else if (t == boolean.class) {
+                    f.setBoolean(source, !f.getBoolean(defaults));
+                } else if (t == String.class) {
+                    f.set(source, "rt" + seed);
+                } else if (t.isEnum()) {
+                    Object[] all = t.getEnumConstants();
+                    Object current = f.get(defaults);
+                    for (Object candidate : all) {
+                        if (candidate != current) {
+                            f.set(source, candidate);
+                            break;
+                        }
+                    }
+                } else {
+                    gaps.add(f.getName() + " (unhandled type " + t.getSimpleName()
+                            + "; extend roundTripGaps)");
+                }
+            }
+
+            PodCal restored = new PodCal(0, "zz", 0, 0);
+            if (!restored.applySerialized(source.serialize())) {
+                gaps.add("applySerialized rejected its own serialize() output");
+                return gaps;
+            }
+
+            for (Field f : PodCal.class.getFields()) {
+                if (Modifier.isStatic(f.getModifiers()) || Modifier.isFinal(f.getModifiers())) {
+                    continue;
+                }
+                Object a = f.get(source);
+                Object b = f.get(restored);
+                boolean same = (a instanceof Double)
+                        ? Math.abs((Double) a - (Double) b) < 1e-9
+                        : (a == null ? b == null : a.equals(b));
+                if (!same) {
+                    gaps.add(f.getName() + " (" + a + " -> " + b + ")");
+                }
+            }
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            gaps.add("round-trip check itself failed: " + e);
+        }
+        return gaps;
     }
 }

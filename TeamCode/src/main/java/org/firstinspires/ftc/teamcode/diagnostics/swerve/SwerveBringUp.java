@@ -375,8 +375,15 @@ public class SwerveBringUp extends OpMode {
     private boolean headingOk;
 
     /** Heading PIDF under test. Units match FollowerConstants.headingPIDFCoefficients (radians). */
-    private double headingKp = 1.75;
-    private double headingKd = 0.003;
+    // Seeded from what actually ships, so a heading session starts where the robot is rather than
+    // where it used to be. These had been left at 1.75/0.003, the pre-tuning values, while
+    // SwerveDrivetrainConstants moved to 1.20/0.030 - so the tool opened on gains the robot had
+    // not used since 2026-08-11, and anything measured from that start would have been compared
+    // against the wrong baseline. Not persisted, deliberately: the source of truth is
+    // FollowerConstants.headingPIDFCoefficients, and a copy that outlived a session would just be
+    // a second place to disagree.
+    private double headingKp = 1.20;
+    private double headingKd = 0.030;
     private double headingKf = 0.0;
 
     private double headingTargetRad;
@@ -463,6 +470,13 @@ public class SwerveBringUp extends OpMode {
         cals[1] = new PodCal(1, "RF", dtLength, -dtWidth);
         cals[2] = new PodCal(2, "LF", dtLength, dtWidth);
         cals[3] = new PodCal(3, "LB", -dtLength, dtWidth);
+
+        // Guard, not a review: PodCal's serialiser has fallen behind its fields more than once,
+        // and nothing fails when a field is simply never written. Reflection means a field added
+        // later is covered without anyone remembering to cover it.
+        for (String gap : PodCal.roundTripGaps()) {
+            hwErrors.add("PodCal does not persist: " + gap);
+        }
 
         loadCalibration();
 
