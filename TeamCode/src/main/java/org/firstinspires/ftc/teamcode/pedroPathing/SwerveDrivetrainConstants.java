@@ -43,6 +43,12 @@ public class SwerveDrivetrainConstants {
             // produced 23-26 oscillations per step.
             //
             // Verified holding heading to +/-3 degrees while translating through two full circles.
+            //
+            // If you change these, change SwerveBringUp's headingKp/headingKd to match. The
+            // bring-up tool keeps its own copy for live experimentation and does not read this
+            // file; it sat at the pre-tuning 1.75/0.003 for a week after this line moved to
+            // 1.20/0.030, so anyone opening the heading routine was measuring against a
+            // baseline the robot had stopped using.
             .headingPIDFCoefficients(new PIDFCoefficients(1.20, 0, 0.030, 0))
             //.secondaryHeadingPIDFCoefficients(new PIDFCoefficients(0.8, 0, 0.015, 0))
 
