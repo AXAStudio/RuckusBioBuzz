@@ -821,7 +821,8 @@ public class SwerveBringUp extends OpMode {
             for (int i = 0; i < POD_COUNT; i++) {
                 built[i] = cals[i].toSwervePod(hardwareMap);
             }
-            for (SwervePod pod : built) {
+            for (int pi = 0; pi < built.length; pi++) {
+                SwervePod pod = built[pi];
                 if (pod instanceof PositionalPod) {
                     // Coverage is proved against the real calibration before anything is commanded.
                     // A band narrower than 180 degrees leaves headings unreachable, and the pod
@@ -834,8 +835,15 @@ public class SwerveBringUp extends OpMode {
                                 + "needs 180. Re-check the endpoint calibration.");
                     }
                     // Before anything commands it: a position-mode servo drives to whatever it is
-                    // told the instant it has power.
-                    ((PositionalPod) pod).initFromEncoder();
+                    // told the instant it has power. A refusal here means the boot read could not
+                    // be trusted, and the pod stays uncommanded rather than being sent somewhere
+                    // on the strength of a bad number.
+                    if (!((PositionalPod) pod).initFromEncoder()
+                            && ((PositionalPod) pod).hasInitReadFault()) {
+                        hwErrors.add("Pod " + pi + ": boot encoder reads disagreed by more than "
+                                + "2 deg, so nothing was commanded. Check the pod is not being "
+                                + "moved, and that the encoder wrap is outside the travel band.");
+                    }
                 }
             }
             pods = built;

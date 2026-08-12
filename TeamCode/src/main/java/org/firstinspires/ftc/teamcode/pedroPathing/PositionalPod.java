@@ -34,17 +34,26 @@ import java.util.Locale;
  *
  * <p>{@code move()} treats a heading and that heading plus 180 degrees as the same demand, inverting
  * drive power for the second, so the pod only ever needs 180 degrees of travel. The servo is
- * programmed for 190, and the extra 10 is deliberate: in that overlap arc both representations of a
- * heading are reachable, which turns the changeover into a hysteresis band the controller can
- * schedule rather than an instant it is forced through.
+ * programmed for 270. The extra 90 is hysteresis: in that overlap both representations of a
+ * heading are reachable, so demand wobbling near a seam cannot force repeated flips.
  *
- * <p>A forced 180 degree traverse still happens when the demand crosses that arc, costing roughly
- * 240 ms plus settling, so the arc is placed away from the headings the pods dwell at - forward 90,
- * strafe 0/180, and the X-lock diagonals at 46.49 and 133.51, the last from
- * {@code atan2(146.42, +/-154.24)}. The gaps are unequal: forward-to-X-lock is 43.51 degrees and
- * strafe-to-X-lock is 46.49, so the arc goes in a strafe-to-X-lock gap, centred. The whole arc must
- * clear the dwell set, not just one end - which is why 190 degrees of travel beats 200: it halves
- * the arc and raises achievable clearance from 13.24 degrees to 18.25.
+ * <p>Width does <em>not</em> reduce how often a traverse happens. Position tracks demand one for
+ * one, each traverse removes exactly 180 degrees of accumulated position, and position is
+ * bounded, so over a sweep of D degrees the count is D/180 for any width - a jump lands 180
+ * degrees from the edge it left, not at the far end of the window. Width buys hysteresis only.
+ *
+ * <p>What caps the width is the encoder, not the control law. The band occupies that much of the
+ * encoder's 360 degrees, and whatever is left has to be big enough to hide the Axon's
+ * non-monotonic wrap region in. At 355 degrees only 5 would remain, and a boot-time read landing
+ * in the wrap drives the pod a long way under power. 270 leaves 90 degrees of cover.
+ *
+ * <p>Each traverse costs roughly 260 ms with the wheel pointed the wrong way, so they are kept
+ * away from the headings the pods dwell at: forward 90, strafe 0/180, and the X-lock diagonals at
+ * 46.49 and 133.51 from {@code atan2(146.42, +/-154.24)}. Because the selection rule is greedy -
+ * nearest representation - the pod only jumps when cornered, so traverses land at the two ends of
+ * the clamped band, at headings separated by the clamped width mod 180. At 264 degrees clamped
+ * that separation is 84, which puts the two of them in different dwell gaps and reaches about 20
+ * degrees of clearance. See {@code tools/swervetune/seam.py}.
  *
  * <p>Three degrees at each end are then held back in software ({@link #setClampMarginDeg}), because
  * in position mode the travel ends are hard stops and driving into one stalls the servo into its
@@ -101,6 +110,18 @@ public class PositionalPod implements SwervePod {
     /** Set when no representation of the demanded heading fell inside the clamped band. */
     private boolean noCandidateFault = false;
 
+    /** Set when the boot-time encoder reads disagreed too much to be trusted. */
+    private boolean initReadFault = false;
+
+    /**
+     * Boot read sampling. Five reads about 4 ms apart, so bulk caching cannot serve the same
+     * cached value five times, and a 2 degree spread limit - twenty times the 0.05 degree noise
+     * floor, so only a genuinely bad read trips it.
+     */
+    private static final int INIT_SAMPLES = 5;
+    private static final double INIT_SAMPLE_GAP_S = 0.004;
+    private static final double INIT_MAX_SPREAD_DEG = 2.0;
+
     /**
      * Whether the two endpoints have actually been measured on this servo.
      *
@@ -150,14 +171,46 @@ public class PositionalPod implements SwervePod {
      * the kinematics happen to ask for, at full torque. Soft Start limits how violently that
      * happens; it does not stop it happening, so both are wanted, not either.
      */
-    public void initFromEncoder() {
+    public boolean initFromEncoder() {
         if (!calibrated) {
-            return;
+            return false;
         }
-        double raw = Math.toDegrees(getRawAngleRad());
-        commandedRawDeg = clampToWindow(raw);
+
+        // Median of several spaced reads, not one. This single number decides where the pod is
+        // driven the instant it has power, and the Axon's analog output is non-monotonic across
+        // its wrap - a reading taken there is not merely noisy, it is wrong, and would send the
+        // pod a long way under torque. Keeping the wrap outside the reachable band makes that
+        // unlikely; it does not make it impossible, and the cost of checking is 20 ms once.
+        double[] samples = new double[INIT_SAMPLES];
+        for (int i = 0; i < INIT_SAMPLES; i++) {
+            if (i > 0) {
+                long until = System.nanoTime() + (long) (INIT_SAMPLE_GAP_S * 1.0e9);
+                while (System.nanoTime() < until) {
+                    Thread.yield();
+                }
+            }
+            samples[i] = Math.toDegrees(getRawAngleRad());
+        }
+        java.util.Arrays.sort(samples);
+        double median = samples[INIT_SAMPLES / 2];
+        double spread = samples[INIT_SAMPLES - 1] - samples[0];
+
+        if (spread > INIT_MAX_SPREAD_DEG) {
+            // Disagreement this large is not sensor noise - the floor is 0.05 deg. Either the pod
+            // is being moved, or the reading is in the wrap. Command nothing and say so.
+            initReadFault = true;
+            return false;
+        }
+
+        initReadFault = false;
+        commandedRawDeg = clampToWindow(median);
         lastMoveNano = System.nanoTime();
         turnServo.setPosition(positionFor(commandedRawDeg));
+        return true;
+    }
+
+    public boolean hasInitReadFault() {
+        return initReadFault;
     }
 
     @Override
@@ -169,8 +222,9 @@ public class PositionalPod implements SwervePod {
         if (!calibrated) {
             return;
         }
-        if (Double.isNaN(commandedRawDeg)) {
-            initFromEncoder();
+        if (Double.isNaN(commandedRawDeg) && !initFromEncoder()) {
+            // No trustworthy starting position, so there is nothing safe to command.
+            return;
         }
 
         if (!ignoreAngleChanges) {

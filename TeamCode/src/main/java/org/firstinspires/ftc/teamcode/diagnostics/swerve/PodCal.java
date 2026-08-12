@@ -126,7 +126,7 @@ public class PodCal {
 
     /** Raw encoder angle, degrees, at servo position 0.0 and 1.0. The whole positional calibration. */
     public double rawDegAtPos0 = 0.0;
-    public double rawDegAtPos1 = 190.0;
+    public double rawDegAtPos1 = 270.0;
 
     /** Degrees held back from each programmed endpoint, so a command cannot reach a stop. */
     public double clampMarginDeg = 3.0;
@@ -389,7 +389,7 @@ public class PodCal {
             // OpMode restart would mean doing it again.
             positional = p.length > 31 && Boolean.parseBoolean(p[31]);
             rawDegAtPos0 = p.length > 32 ? Double.parseDouble(p[32]) : 0.0;
-            rawDegAtPos1 = p.length > 33 ? Double.parseDouble(p[33]) : 190.0;
+            rawDegAtPos1 = p.length > 33 ? Double.parseDouble(p[33]) : 270.0;
             clampMarginDeg = p.length > 34 ? Double.parseDouble(p[34]) : 3.0;
             posCalibrated = p.length > 35 && Boolean.parseBoolean(p[35]);
             discoveredEncoderIndex = p.length > 36 ? Integer.parseInt(p[36]) : -1;

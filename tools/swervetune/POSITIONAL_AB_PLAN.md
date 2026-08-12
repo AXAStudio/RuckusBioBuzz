@@ -17,7 +17,7 @@ performed once rather than attempting a new one.
 | setting | value | why |
 |---|---|---|
 | Mode | Servo (load the Servo Mode firmware file) | this is a firmware download, not a parameter |
-| Servo Angle | **190°** | 180° is all the flip logic needs. Narrower wins twice: 190° gives 0.106°/step against 0.197° at 355°, and because the *whole* overlap arc must clear the dwell set, halving the arc from 20° to 10° raises achievable seam clearance from 13.24° to 18.25° |
+| Servo Angle | **194** (= 270°) | The programmer scale is 0–255 mapping to 0–355°, so 194 = 270°. Width buys hysteresis (90° here) and nothing else — traverse frequency is one per 180° of demand sweep at any width. The cap is the encoder: the band occupies that much of its 360°, and the remainder must hide the non-monotonic wrap. 270° leaves 90° of cover; 355° would leave 5°. Resolution 0.15°/step, 7x finer than the 1.0° target |
 | Sensitivity (deadband) | **start mid-range, sweep** | do NOT max it. 1 µs deadband into a stiction-heavy 1:1 pod is how the internal loop hunts forever |
 | Soft Start | **on** | limits how hard the pod snaps on enable. Not a substitute for `initFromEncoder()` — both |
 | Inversion | as needed | match the existing pod direction convention |
