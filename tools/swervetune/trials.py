@@ -48,6 +48,9 @@ def summarise(results: list[dict], step_deg: float) -> dict:
         "flips_total": sum(p["flip_events"] for p in pods),
         "pp_max": max(col("post_settle_pp_deg"), default=float("nan")),
         "rest_rms_mean": _mean(col("rest_power_rms")),
+        "parked_fraction": sum(1 for p in pods if p.get("parked")) / len(pods),
+        "pulses_post_mean": _mean([float(p.get("pulses_post", 0)) for p in pods]),
+        "pulses_post_max": max((p.get("pulses_post", 0) for p in pods), default=0),
         "rise_mean": _mean(col("rise_10_90_s")),
         "loopHz_mean": _mean([r["loopHz_mean"] for r in results]),
         "loopHz_min": min(r["loopHz_min"] for r in results),
@@ -80,6 +83,8 @@ def format_summary(label: str, s: dict) -> str:
         f"|ss| mean {s['ss_abs_mean']:.2f} max {s['ss_abs_max']:.2f} deg\n"
         f"  rings mean {s['rings_mean']:.2f} max {s['rings_max']}   flips {s['flips_total']}   "
         f"pp max {s['pp_max']:.2f} deg   rest RMS {s['rest_rms_mean']:.4f}\n"
+        f"  parked {100*s['parked_fraction']:.0f}%   "
+        f"pulses/3s {s['pulses_post_mean']:.1f} mean {s['pulses_post_max']} max\n"
         f"  loop {s['loopHz_mean']:.0f} Hz (min {s['loopHz_min']:.0f})   "
         f"V {s['voltage_mean']:.2f}   pod spread {_n(s['pod_spread_pct'])}%"
     )

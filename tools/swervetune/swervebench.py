@@ -394,6 +394,19 @@ def score_step(
         pod["rest_power_mean_abs"] = _mean([abs(x) for x in wp])
         pod["peak_power"] = max((abs(x) for x in p), default=0.0)
 
+        # Discrete corrections in the post-settle window: every transition from no output to some
+        # output. For the pulsed controller this counts pulses, and a settled pod should need
+        # none - repeated pulses at rest are the stacking failure, not normal operation.
+        pod["pulses_post"] = sum(
+            1 for k in range(1, len(wp)) if abs(wp[k]) > 1e-3 and abs(wp[k - 1]) <= 1e-3
+        )
+        # The composite the pulsed work is aimed at: parked tight, quiet, and not still correcting.
+        pod["parked"] = bool(
+            abs(pod["steady_state_deg"]) <= 0.34
+            and pod["post_settle_pp_deg"] <= 0.34
+            and pod["pulses_post"] == 0
+        )
+
         out["pods"].append(pod)
 
     return out

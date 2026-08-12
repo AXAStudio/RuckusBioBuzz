@@ -17,7 +17,7 @@ import time
 from swervebench import Bench, _mean, _stdev
 
 CANDIDATE = dict(
-    kp=0.20, ki=0.0, kd=0.022, kf=0.0,
+    kp=0.20, ki=0.0, kd=0.014, kf=0.0,
     ks=0.035, ksband=2.0, cache=0.01, dom=False,
 )
 
