@@ -222,6 +222,9 @@ public class SwerveBringUp extends OpMode {
      */
     private LynxModule servoRailModule;
     private double servoRailMa;
+
+    /** Worst-case clamp margin from the last positional coverage proof, degrees. */
+    private double positionalCoverageDeg = Double.NaN;
     private double batteryMa;
     private double totalMa;
 
@@ -785,6 +788,16 @@ public class SwerveBringUp extends OpMode {
             }
             for (SwervePod pod : built) {
                 if (pod instanceof PositionalPod) {
+                    // Coverage is proved against the real calibration before anything is commanded.
+                    // A band narrower than 180 degrees leaves headings unreachable, and the pod
+                    // would stop tracking silently rather than report it.
+                    double margin = ((PositionalPod) pod).verifyCoverage(0.25);
+                    positionalCoverageDeg = margin;
+                    if (margin < 0) {
+                        throw new IllegalStateException("positional pod cannot reach every "
+                                + "heading: clamped band is " + fmt(margin + 180) + " deg wide, "
+                                + "needs 180. Re-check the endpoint calibration.");
+                    }
                     // Before anything commands it: a position-mode servo drives to whatever it is
                     // told the instant it has power.
                     ((PositionalPod) pod).initFromEncoder();
@@ -1858,6 +1871,26 @@ public class SwerveBringUp extends OpMode {
                         selected, doubleArg(cmd, "pos", 0.0));
                 break;
             }
+            case "probeClamp": {
+                // Deliberately asks for a position outside the clamp, in both directions, and
+                // reports what was actually written. A clamp that has never been exercised is an
+                // assumption, and this one stands between a command and a hard stop.
+                if (pods == null || !(pods[selected] instanceof PositionalPod)) {
+                    message = "Pod " + selected + " is not positional.";
+                    break;
+                }
+                PositionalPod pp = (PositionalPod) pods[selected];
+                double over = doubleArg(cmd, "over", 30.0);
+                setMode(Mode.IDLE);
+                double lo = pp.commandRawDegForTest(cals[selected].rawDegAtPos0
+                        + (cals[selected].rawDegAtPos1 > cals[selected].rawDegAtPos0 ? -over : over));
+                double hi = pp.commandRawDegForTest(cals[selected].rawDegAtPos1
+                        + (cals[selected].rawDegAtPos1 > cals[selected].rawDegAtPos0 ? over : -over));
+                message = String.format(Locale.US,
+                        "Clamp probe: asked %.0f deg past each end, wrote positions %.4f and %.4f "
+                                + "(both must be strictly inside 0 and 1).", over, lo, hi);
+                break;
+            }
             case "setPwmEnable":
                 applyPwmEnable(selected, Boolean.parseBoolean(cmd.get("value")));
                 break;
@@ -2258,6 +2291,7 @@ public class SwerveBringUp extends OpMode {
         sb.append(",\"loopHz\":").append(fmt(loopHz));
         sb.append(",\"voltage\":").append(fmt(batteryVolts()));
         sb.append(",\"servoMa\":").append(fmt(servoRailMa));
+        sb.append(",\"posCoverage\":").append(fmt(positionalCoverageDeg));
         sb.append(",\"batteryMa\":").append(fmt(batteryMa));
         sb.append(",\"totalMa\":").append(fmt(totalMa));
         sb.append(",\"busy\":").append(routineActive);

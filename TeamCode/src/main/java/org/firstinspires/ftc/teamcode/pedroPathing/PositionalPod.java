@@ -34,13 +34,22 @@ import java.util.Locale;
  *
  * <p>{@code move()} treats a heading and that heading plus 180 degrees as the same demand, inverting
  * drive power for the second, so the pod only ever needs 180 degrees of travel. The servo is
- * programmed for about 200, and the extra 20 is deliberate: in that overlap band both
- * representations of a heading are reachable, which turns the changeover into a hysteresis band the
- * controller can schedule rather than an instant it is forced through.
+ * programmed for 190, and the extra 10 is deliberate: in that overlap arc both representations of a
+ * heading are reachable, which turns the changeover into a hysteresis band the controller can
+ * schedule rather than an instant it is forced through.
  *
- * <p>A forced 180 degree traverse still happens when the demand crosses the window edge, costing
- * roughly 240 ms plus settling. It is placed away from the headings the pods actually occupy -
- * measured on this drivetrain as forward 90, strafe 0/180, and the X-lock at 46.5 and 133.5.
+ * <p>A forced 180 degree traverse still happens when the demand crosses that arc, costing roughly
+ * 240 ms plus settling, so the arc is placed away from the headings the pods dwell at - forward 90,
+ * strafe 0/180, and the X-lock diagonals at 46.49 and 133.51, the last from
+ * {@code atan2(146.42, +/-154.24)}. The gaps are unequal: forward-to-X-lock is 43.51 degrees and
+ * strafe-to-X-lock is 46.49, so the arc goes in a strafe-to-X-lock gap, centred. The whole arc must
+ * clear the dwell set, not just one end - which is why 190 degrees of travel beats 200: it halves
+ * the arc and raises achievable clearance from 13.24 degrees to 18.25.
+ *
+ * <p>Three degrees at each end are then held back in software ({@link #setClampMarginDeg}), because
+ * in position mode the travel ends are hard stops and driving into one stalls the servo into its
+ * overload cutout with nothing reported. That leaves a 184 degree commandable band for 180 degrees
+ * of headings; {@link #verifyCoverage} proves the remainder is enough.
  *
  * <p>Install the travel so the encoder's own wrap sits outside the window too. The Axon's analog
  * output is non-monotonic across that wrap - it produced a spurious 1452 deg/s reading during slew
@@ -77,6 +86,20 @@ public class PositionalPod implements SwervePod {
      * shapes the motion without any of the trajectory machinery an external loop would need.
      */
     private double maxSlewDegPerSec = 0;
+
+    /**
+     * How far inside each programmed endpoint the software will actually command, in degrees.
+     *
+     * <p>In position mode the travel ends are hard stops. Commanding past one stalls the servo into
+     * its overload cutout, which is a silent steering failure - the encoder just shows a pod that
+     * stopped tracking, and nothing is reported. CR mode had no equivalent because there were no
+     * ends. With 190 degrees of travel this costs 6 of the 10 degrees of overlap and leaves 4,
+     * which is still five times the residual, so the margin is effectively free.
+     */
+    private double clampMarginDeg = 3.0;
+
+    /** Set when no representation of the demanded heading fell inside the clamped band. */
+    private boolean noCandidateFault = false;
 
     private double commandedRawDeg = Double.NaN;
     private long lastMoveNano = 0;
@@ -158,6 +181,7 @@ public class PositionalPod implements SwervePod {
                 }
             }
 
+            noCandidateFault = Double.isNaN(best);
             if (!Double.isNaN(best)) {
                 lastMoveFlipped = bestFlipped;
                 if (maxSlewDegPerSec > 0 && dt > 0) {
@@ -169,8 +193,10 @@ public class PositionalPod implements SwervePod {
                 }
                 turnServo.setPosition(positionFor(commandedRawDeg));
             }
-            // No candidate inside the window means the calibration or the programmed travel is
-            // wrong. Holding the last command is the safe response; debugString() will show it.
+            // No candidate inside the clamped band means the calibration or the programmed travel
+            // is wrong - verifyCoverage() should have caught it before anything moved. Holding the
+            // last command is the safe response, and noCandidateFault makes it visible rather than
+            // letting the pod quietly stop tracking.
         }
 
         if (lastMoveFlipped) {
@@ -185,12 +211,22 @@ public class PositionalPod implements SwervePod {
 
     // ---- window and mapping ----------------------------------------------------------
 
-    private double windowLo() {
+    /** Programmed travel, before the safety margin. */
+    private double travelLo() {
         return Math.min(rawDegAtPos0, rawDegAtPos1);
     }
 
-    private double windowHi() {
+    private double travelHi() {
         return Math.max(rawDegAtPos0, rawDegAtPos1);
+    }
+
+    /** The band actually commanded: the programmed travel less the end margins. */
+    private double windowLo() {
+        return travelLo() + clampMarginDeg;
+    }
+
+    private double windowHi() {
+        return travelHi() - clampMarginDeg;
     }
 
     private boolean inWindow(double rawDeg) {
@@ -199,6 +235,81 @@ public class PositionalPod implements SwervePod {
 
     private double clampToWindow(double rawDeg) {
         return MathFunctions.clamp(rawDeg, windowLo(), windowHi());
+    }
+
+    public void setClampMarginDeg(double marginDeg) {
+        this.clampMarginDeg = Math.abs(marginDeg);
+    }
+
+    public double getClampMarginDeg() {
+        return clampMarginDeg;
+    }
+
+    public boolean hasNoCandidateFault() {
+        return noCandidateFault;
+    }
+
+    /**
+     * Proves every reachable wheel heading has a representation inside the clamped band.
+     *
+     * <p>The argument is short: a pod treats a heading and that heading plus 180 as the same
+     * demand, so the representations of any heading form a lattice spaced 180 degrees apart, and
+     * <em>any</em> interval at least 180 degrees wide contains a point of it. The clamped band is
+     * {@code travel - 2 * margin} wide, so coverage holds whenever that is at least 180 - with
+     * 190 degrees of travel and a 3 degree margin it is 184, leaving 4 degrees of slack.
+     *
+     * <p>That is the mathematics. This method checks the implementation, which is the part that can
+     * actually be wrong: it sweeps the whole heading circle at fine resolution against the real
+     * calibration and the real selection logic, and reports the worst margin any heading had. Run
+     * it at construction, before anything is commanded.
+     *
+     * @param stepDeg sweep resolution over the heading circle
+     * @return worst-case distance from a chosen position to the nearer clamp edge, in degrees;
+     *         negative means some heading is not reachable and the pod must not be driven
+     */
+    public double verifyCoverage(double stepDeg) {
+        double bandWidth = windowHi() - windowLo();
+        if (bandWidth < 180.0) {
+            return bandWidth - 180.0;
+        }
+        double worst = Double.MAX_VALUE;
+        for (double wheel = 0; wheel < 360.0; wheel += stepDeg) {
+            double desiredRaw = Math.toDegrees(MathFunctions.normalizeAngle(
+                    adjustThetaForEncoder(Math.toRadians(wheel)) + angleOffsetRad));
+            double best = Double.NaN;
+            double bestMargin = -Double.MAX_VALUE;
+            for (int k = -3; k <= 3; k++) {
+                double candidate = desiredRaw + 180.0 * k;
+                if (!inWindow(candidate)) {
+                    continue;
+                }
+                double margin = Math.min(candidate - windowLo(), windowHi() - candidate);
+                if (margin > bestMargin) {
+                    bestMargin = margin;
+                    best = candidate;
+                }
+            }
+            if (Double.isNaN(best)) {
+                return -1.0;
+            }
+            worst = Math.min(worst, bestMargin);
+        }
+        return worst == Double.MAX_VALUE ? -1.0 : worst;
+    }
+
+    /**
+     * Commands a raw encoder angle directly, through the same clamp {@link #move} uses.
+     *
+     * <p>Exists so the clamp can be tested by deliberately asking for something outside it, before
+     * any step response is run. A clamp that has never been exercised is an assumption.
+     *
+     * @return the position actually written, in [0, 1]
+     */
+    public double commandRawDegForTest(double rawDeg) {
+        commandedRawDeg = clampToWindow(rawDeg);
+        double p = positionFor(commandedRawDeg);
+        turnServo.setPosition(p);
+        return p;
     }
 
     /** Straight line through the two calibration endpoints. */
@@ -309,10 +420,11 @@ public class PositionalPod implements SwervePod {
     public String debugString() {
         return String.format(Locale.US,
                 "%s {positional%n  raw %.1f deg, commanded %.1f deg, slip %.2f deg%n"
-                        + "  window %.1f..%.1f deg, servo pos %.4f%n  flipped %s, drive %.2f%n}",
+                        + "  travel %.1f..%.1f, clamped to %.1f..%.1f (margin %.1f)%n"
+                        + "  servo pos %.4f%n  flipped %s, drive %.2f, noCandidateFault %s%n}",
                 label, Math.toDegrees(getRawAngleRad()), commandedRawDeg, getSlipDeg(),
-                windowLo(), windowHi(),
+                travelLo(), travelHi(), windowLo(), windowHi(), clampMarginDeg,
                 Double.isNaN(commandedRawDeg) ? -1 : positionFor(commandedRawDeg),
-                lastMoveFlipped, lastDrivePower);
+                lastMoveFlipped, lastDrivePower, noCandidateFault);
     }
 }

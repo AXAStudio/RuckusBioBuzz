@@ -16,7 +16,7 @@ downward. Confirm the label reads `MINI+` and not `MINI MK2`.
 | setting | value | why |
 |---|---|---|
 | Mode | Servo (load the Servo Mode firmware file) | this is a firmware download, not a parameter |
-| Servo Angle | **~200°** | 180° is all the flip logic needs. Narrower is better: at 1 µs over 600–2400 µs that is 1800 steps, so 200° gives 0.11°/step against 0.197° at 355°, and it shrinks the 1 µs deadband in pod-angle terms by the same ratio |
+| Servo Angle | **190°** | 180° is all the flip logic needs. Narrower wins twice: 190° gives 0.106°/step against 0.197° at 355°, and because the *whole* overlap arc must clear the dwell set, halving the arc from 20° to 10° raises achievable seam clearance from 13.24° to 18.25° |
 | Sensitivity (deadband) | **start mid-range, sweep** | do NOT max it. 1 µs deadband into a stiction-heavy 1:1 pod is how the internal loop hunts forever |
 | Soft Start | **on** | limits how hard the pod snaps on enable. Not a substitute for `initFromEncoder()` — both |
 | Inversion | as needed | match the existing pod direction convention |
@@ -26,18 +26,54 @@ downward. Confirm the label reads `MINI+` and not `MINI MK2`.
 
 ## Travel window placement
 
-Programmed travel ~200°, giving 180° of working range plus 20° of overlap. In the overlap both
-representations of a heading are reachable, so the changeover becomes a hysteresis band rather
-than a forced instant.
+190° of travel: 180° of headings plus a 10° overlap arc. Both representations of a heading are
+reachable inside that arc, so the changeover is a hysteresis band rather than a forced instant.
 
-Place the window so the seam sits at **wheel heading ≈20°**. Measured pod occupancy on this
-drivetrain: forward 90°, strafe 0/180°, X-lock 46.5° and 133.5°. 20° avoids all four and is clear
-of pure strafe. This is chosen from four drive-test headings, not match telemetry — if we want it
-placed on data, log pod-heading occupancy through a practice match and move it.
+**The whole arc must clear the dwell set, not just one end** — the traverse happens somewhere in it.
+Dwell headings mod 180 in the tool wheel frame (forward = 90), X-locks from
+`atan2(146.42, ±154.24) = ±43.51°`:
+
+| dwell | tool frame | from forward |
+|---|---|---|
+| forward | 90.00° | f |
+| X-lock RF/LB | 133.51° | f + 43.51° |
+| strafe | 0.00°/180° | f + 90° |
+| X-lock LF/RB | 46.49° | f + 136.49° |
+
+Gaps are unequal — forward↔X-lock 43.51°, strafe↔X-lock 46.49° — so the arc goes in a
+strafe↔X-lock gap. Centred there:
+
+**Overlap arc = tool frame 18.25° → 28.25° (f + 108.25° → f + 118.25°).**
+Clearances: strafe 18.25°, X-lock LF/RB 18.24°, forward 61.75°, X-lock RF/LB 64.74°.
+
+Balanced rather than biased toward X-lock: at 18° the clearance is ~20x the residual and has
+stopped binding, so an even split is more robust to calibration error either way.
 
 **Put the encoder's wrap in the same place.** The Axon's analog output is non-monotonic across its
 wrap; it produced a spurious 1452 °/s reading during slew characterisation. Both dead zones in one
 unreachable spot costs nothing and removes both.
+
+`seam.py` computes all of this from the measured endpoints and reports the best available tooth
+shift if the placement is poor.
+
+## End-stop clamp — mandatory before any step
+
+Position mode adds a hazard CR mode did not have: the travel ends are **hard stops**, and commanding
+past one stalls the servo into its overload cutout. That is a silent steering failure — the encoder
+just shows a pod that stopped tracking, and nothing is reported.
+
+1. **Clamp.** `setClampMarginDeg(3.0)` holds every command 3° inside each programmed endpoint.
+   190° − 6° = a 184° commandable band.
+2. **Coverage proof.** Representations of a heading form a lattice 180° apart, so *any* interval
+   ≥180° wide contains one; 184° works with 4° of slack. `verifyCoverage(0.25)` checks the
+   implementation against the real calibration by sweeping the whole heading circle, and
+   `rebuildPods()` refuses to build a positional pod that fails. Published as `posCoverage`.
+3. **Clamp probe.** `GET /swerve/cmd?action=probeClamp&over=30` asks for 30° past each end and
+   reports the positions actually written. **Run before any step response** — a clamp that has never
+   been exercised is an assumption.
+
+`noCandidateFault` surfaces the case where no representation lands in band, rather than letting the
+pod quietly stop tracking.
 
 ## Calibration
 
@@ -116,13 +152,23 @@ through regression to the mean) and pod 3 (0.52°, unrepresentatively good). If 
 markedly easier to reach, take it — the within-pod design is what makes the comparison valid, so
 accessibility is a fair tiebreak.
 
-**Procedure, all in one session on one pack:**
+**Procedure — note the double flash, it is deliberate:**
 
-1. Re-run pod 0's CR baseline immediately before touching it: `ploose.py` restricted to pod 0 at
-   the interim gains, plus `crit8_current.py 0`. Same scripts, same conditions.
-2. Reflash and refit.
-3. Re-run exactly those two. Score positional against pod 0's own numbers from step 1, never
-   against the fleet.
+Where the travel band lands in encoder space is a property of the reflashed servo, so it cannot be
+measured until after the first flash. If it needs re-clocking, that is a mechanical disturbance
+which must not fall between the baseline and the test. Reflashing is non-invasive — the programmer
+connects through the servo's existing cable — so flashing twice costs nothing and keeps the
+mechanical state identical across the comparison.
+
+1. Flash pod 0 to Servo Mode. Activate `swerve_positional_p0.xml`, restart, calibrate endpoints.
+2. `seam.py --pod 0`. If clearance is poor: re-clock, re-zero, re-calibrate, repeat.
+3. **Flash back to CR.** Restore `swerve_bringup.xml`, restart.
+4. CR baseline: `ploose.py --pod 0` and `crit8_current.py 0`.
+5. Flash to Servo Mode again, same settings. Positional config, restart, re-calibrate — endpoints
+   should match step 2.
+6. Coverage proof (automatic at build) and `probeClamp`.
+7. Positional run: exactly the two scripts from step 4. Score against pod 0's own numbers.
+8. Overload procedure — two-person, flag first.
 
 **No refit confound.** The programmer connects through the servo's existing cable — the servo
 stays in the pod and only the lead moves off the servo power module. Nothing mechanical is

@@ -122,7 +122,10 @@ public class PodCal {
 
     /** Raw encoder angle, degrees, at servo position 0.0 and 1.0. The whole positional calibration. */
     public double rawDegAtPos0 = 0.0;
-    public double rawDegAtPos1 = 200.0;
+    public double rawDegAtPos1 = 190.0;
+
+    /** Degrees held back from each programmed endpoint, so a command cannot reach a stop. */
+    public double clampMarginDeg = 3.0;
 
     /**
      * Minimum change in servo power before CoaxialPod actually writes it.
@@ -205,9 +208,11 @@ public class PodCal {
     /** Builds whichever pod type this calibration asks for. */
     public SwervePod toSwervePod(HardwareMap hardwareMap) {
         if (positional) {
-            return new PositionalPod(hardwareMap, motorName, servoName, encoderName,
+            PositionalPod pod = new PositionalPod(hardwareMap, motorName, servoName, encoderName,
                     driveDirection, rawDegAtPos0, rawDegAtPos1, angleOffsetRad,
                     new Pose(podX, podY), analogMin, analogMax, encoderReversed);
+            pod.setClampMarginDeg(clampMarginDeg);
+            return pod;
         }
         return toCoaxialPod(hardwareMap);
     }
