@@ -191,6 +191,20 @@ Calibration auto-saves to `FIRST/swerve_bringup_cal.txt` on the hub and reloads 
 restarts, so an interrupted session is not lost. Note this is the *tool's* state — it does not
 change robot behavior until you export the constants into `SwerveDrivetrainConstants.java`.
 
+Everything in `PodCal` round-trips through that file, and `PodCal.roundTripGaps()` proves it by
+reflection at every init, listing any field that does not survive in `state.errors`. That guard
+exists because the serialiser fell behind the fields repeatedly and silently — nothing fails when a
+field is simply never written. The expensive case was the positional endpoint calibration, which
+costs a guarded walk to both mechanical limits to obtain and was being discarded on restart.
+
+**Deliberately session-scoped**, and not a gap:
+
+| state | why it does not persist |
+| --- | --- |
+| heading kP/kD/kF | the source of truth is `FollowerConstants.headingPIDFCoefficients`; a saved copy would be a second place to disagree. Seeded from the shipped values at startup |
+| `xLock`, `headingHold` | diagnostic view toggles, not calibration |
+| servo PWM range and enable | controller-side settings the Robot Controller resets on restart. If you set a non-default PWM range, **re-apply it after every restart** — it silently reverts, and a measurement taken afterwards is not the one you set up |
+
 ## Files
 
 | File | Role |
