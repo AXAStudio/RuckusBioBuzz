@@ -8,6 +8,8 @@ import com.pedropathing.ftc.drivetrains.SwerveConstants;
 import com.pedropathing.math.MathFunctions;
 import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
 import com.qualcomm.hardware.lynx.LynxModule;
+import com.qualcomm.hardware.lynx.LynxNackException;
+import com.qualcomm.hardware.lynx.commands.core.LynxGetADCCommand;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.AnalogInput;
@@ -20,6 +22,7 @@ import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
+import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
 import org.firstinspires.ftc.robotcore.internal.system.AppUtil;
 
 import java.io.BufferedReader;
@@ -191,6 +194,22 @@ public class SwerveBringUp extends OpMode {
     private final double[] pwmLower = new double[POD_COUNT];
     private final double[] pwmUpper = new double[POD_COUNT];
     private final double[] pwmFrame = new double[POD_COUNT];
+
+    /**
+     * Servo rail current, milliamps, for the whole hub.
+     *
+     * <p>{@code LynxModule} exposes GPIO and I2C bus current but not the servo rail; the channel
+     * exists in the Lynx protocol and is reached by sending the ADC command directly.
+     *
+     * <p>Aggregate across all four ports, which is enough: with one servo's PWM enabled and the
+     * rest limp, the difference between enabled and disabled is that servo's holding current, and
+     * everything else on the rail cancels. Read at the slow sensor cadence, not every loop - it is
+     * a bus round trip and a holding current is DC.
+     */
+    private LynxModule servoRailModule;
+    private double servoRailMa;
+    private double batteryMa;
+    private double totalMa;
 
     /**
      * The four analog channels addressed by their fixed config names, independent of which pod each
@@ -411,6 +430,10 @@ public class SwerveBringUp extends OpMode {
 
         for (LynxModule module : hardwareMap.getAll(LynxModule.class)) {
             module.setBulkCachingMode(LynxModule.BulkCachingMode.AUTO);
+            // The servos are all on the Control Hub itself, so the parent module owns the rail.
+            if (servoRailModule == null || module.isParent()) {
+                servoRailModule = module;
+            }
         }
 
         acquireHardware();
@@ -481,6 +504,9 @@ public class SwerveBringUp extends OpMode {
 
         mark = System.nanoTime();
         readHeading(refreshIdleSensors);
+        if (refreshIdleSensors) {
+            readServoRailCurrent();
+        }
         msHeading = smooth(msHeading, System.nanoTime() - mark);
 
         handleGamepad();
@@ -531,7 +557,7 @@ public class SwerveBringUp extends OpMode {
             }
         }
 
-        recorder.add(dt, batteryVolts(), loopHz, mode.ordinal(),
+        recorder.add(dt, batteryVolts(), loopHz, mode.ordinal(), servoRailMa,
                 volts, recWheel, recTarget, recError, servoCmd, recFlipped);
     }
 
@@ -578,6 +604,49 @@ public class SwerveBringUp extends OpMode {
     /** True while heading is actually part of the control law rather than just a readout. */
     private boolean headingInUse() {
         return mode == Mode.HEADING || (mode == Mode.DRIVE && headingHold);
+    }
+
+    /** Reads the hub's servo rail current in milliamps, or leaves the last value on failure. */
+    private void readServoRailCurrent() {
+        if (servoRailModule == null) {
+            return;
+        }
+        try {
+            LynxGetADCCommand cmd = new LynxGetADCCommand(servoRailModule,
+                    LynxGetADCCommand.Channel.SERVO_CURRENT,
+                    LynxGetADCCommand.Mode.ENGINEERING);
+            servoRailMa = cmd.sendReceive().getValue();
+            batteryMa = new LynxGetADCCommand(servoRailModule,
+                    LynxGetADCCommand.Channel.BATTERY_CURRENT,
+                    LynxGetADCCommand.Mode.ENGINEERING).sendReceive().getValue();
+            totalMa = servoRailModule.getCurrent(CurrentUnit.MILLIAMPS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (RuntimeException | LynxNackException e) {
+            // A dropped ADC read is not worth failing a routine over; the stale value is obvious
+            // in the trace because it repeats.
+        }
+    }
+
+    /**
+     * Enables or disables a servo's PWM output.
+     *
+     * <p>Disabling is how a holding current gets measured: the rail reading with one servo enabled
+     * and holding, minus the reading with it disabled, is that servo's contribution with every
+     * other draw on the rail cancelling out.
+     */
+    private void applyPwmEnable(int i, boolean enabled) {
+        if (!(servos[i] instanceof PwmControl)) {
+            message = cals[i].servoName + " does not support PWM control.";
+            return;
+        }
+        if (enabled) {
+            ((PwmControl) servos[i]).setPwmEnable();
+        } else {
+            setServo(i, 0);
+            ((PwmControl) servos[i]).setPwmDisable();
+        }
+        message = cals[i].servoName + " PWM " + (enabled ? "enabled" : "disabled");
     }
 
     /** Reads back the PWM pulse limits and frame period the hardware is actually using. */
@@ -1728,6 +1797,9 @@ public class SwerveBringUp extends OpMode {
                 podsDirty = true;
                 saveCalibration();
                 break;
+            case "setPwmEnable":
+                applyPwmEnable(selected, Boolean.parseBoolean(cmd.get("value")));
+                break;
             case "setPwmRange": {
                 double lower = doubleArg(cmd, "lower", 600);
                 double upper = doubleArg(cmd, "upper", 2400);
@@ -2124,6 +2196,9 @@ public class SwerveBringUp extends OpMode {
         sb.append(",\"selected\":").append(selected);
         sb.append(",\"loopHz\":").append(fmt(loopHz));
         sb.append(",\"voltage\":").append(fmt(batteryVolts()));
+        sb.append(",\"servoMa\":").append(fmt(servoRailMa));
+        sb.append(",\"batteryMa\":").append(fmt(batteryMa));
+        sb.append(",\"totalMa\":").append(fmt(totalMa));
         sb.append(",\"busy\":").append(routineActive);
         sb.append(",\"started\":").append(started);
         sb.append(",\"xLock\":").append(xLock);

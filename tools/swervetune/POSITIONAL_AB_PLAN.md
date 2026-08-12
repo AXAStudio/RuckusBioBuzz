@@ -68,12 +68,66 @@ Repeat at two Sensitivity settings — deadband and overload interact.
 If recovery is not automatic, the follower needs a slip watchdog: `getSlipDeg()` above a threshold
 for longer than a settle time is a fault worth surfacing to the driver.
 
-## Criterion 8 needs redefining for positional mode
+## Criterion 8 for positional mode: holding current
 
-"Servo power at rest, RMS, below measured deadband" has no analogue — there is no commanded power
-to measure. Replace it with post-settle encoder peak-to-peak, which criterion 6 already covers,
-plus an audible check and a current draw reading if one is available. Worth agreeing before the
-A/B so the comparison is scored fairly rather than being handed a free pass.
+"Servo power at rest, RMS, below measured deadband" is a CR quantity with no analogue — there is no
+commanded power. Reusing post-settle peak-to-peak would be criterion 6 wearing a hat, and it misses
+the failure that matters: an internal loop working hard to hold station shows as current long
+before it shows as motion.
+
+**Measured on the battery current channel, not the servo rail.** The rail reads nothing useful here
+— the turn servos are fed from the servo power module and the hub supplies only their PWM. With all
+four holding, the rail moved −0 → 10 mA against a 44 mA sd, while the battery channel moved
+189 → 205 mA against 12, a 5.6σ effect. `crit8_current.py` measures it, with the three pods not
+under test PWM-disabled so only one thing changes state.
+
+**Pass condition:** holding current minus idle current indistinguishable from zero within noise.
+Stated relatively because the old 0.025 is a CR number that means nothing in position mode.
+
+**CR baseline, measured 2026-08-12 at 12.74 V, 30 s per condition, n≈128 samples each:**
+
+| pod | hold − idle | verdict |
+|---|---|---|
+| 0 | −1 ± 2 mA | pass |
+| 1 | +2 ± 2 mA | pass |
+| 2 | **+4 ± 2 mA** | elevated at 2σ |
+| 3 | +3 ± 2 mA | pass |
+
+Pod 2 being the only elevated one is consistent with it also having the worst residual (1.06°) and
+the worst post-settle peak-to-peak (1.24°) — it is working hardest at rest.
+
+Standard error is ~2 mA against a per-servo effect of a few mA, so the long dwell is load-bearing;
+do not shorten it. Keep the audible check as a qualitative gate, not the measurement. If a future
+setup puts the servos on hub power, the rail channel becomes the better instrument and this should
+be revisited.
+
+## A/B design: within-pod, on pod 0
+
+Scoring one reflashed pod against fleet aggregates would be invalid — the per-pod residual spread
+(0.76 / 0.73 / 1.06 / 0.52°) is larger than the effect being looked for, so which pod gets
+reflashed would determine the answer.
+
+**Reflash pod 0.** Its residual, 0.76°, is the closest of the four to the fleet mean of 0.77°, and
+it is clean on criterion 8 at −1 ± 2 mA, so any improvement is attributable to the mode change
+rather than to having fixed an outlier. Avoid pod 2 (worst on both, would flatter positional
+through regression to the mean) and pod 3 (0.52°, unrepresentatively good). If a different pod is
+markedly easier to reach, take it — the within-pod design is what makes the comparison valid, so
+accessibility is a fair tiebreak.
+
+**Procedure, all in one session on one pack:**
+
+1. Re-run pod 0's CR baseline immediately before touching it: `ploose.py` restricted to pod 0 at
+   the interim gains, plus `crit8_current.py 0`. Same scripts, same conditions.
+2. Reflash and refit.
+3. Re-run exactly those two. Score positional against pod 0's own numbers from step 1, never
+   against the fleet.
+
+**One confound to check first.** If reflashing requires removing the servo from the pod, the refit
+itself disturbs horn seating, spline engagement and preload — and that lands in the before/after
+alongside the mode change. If the programmer connects inline on the servo cable, unplug at the hub
+only and there is no disturbance. If it does need removal, insert a control: remove and refit
+**without** reflashing, re-baseline, and only then reflash. One extra cycle, and it separates the
+refit from the mode change.
 
 ## What to measure
 
