@@ -1691,6 +1691,12 @@ public class SwerveBringUp extends OpMode {
                         each.kIBandDeg = doubleArg(cmd, "kiband", each.kIBandDeg);
                         each.kIResetDeg = doubleArg(cmd, "kireset", each.kIResetDeg);
                         each.derivativeOnMeasurement = boolArg(cmd, "dom", each.derivativeOnMeasurement);
+                        each.pulsed = boolArg(cmd, "pulsed", each.pulsed);
+                        each.pulseBandDeg = doubleArg(cmd, "pband", each.pulseBandDeg);
+                        each.pulseTolDeg = doubleArg(cmd, "ptol", each.pulseTolDeg);
+                        each.pulsePower = doubleArg(cmd, "ppow", each.pulsePower);
+                        each.pulseMs = doubleArg(cmd, "pms", each.pulseMs);
+                        each.pulseCoastMs = doubleArg(cmd, "pcoast", each.pulseCoastMs);
                     }
                 } else {
                     c.kP = doubleArg(cmd, "kp", c.kP);
@@ -1704,6 +1710,12 @@ public class SwerveBringUp extends OpMode {
                     c.kIBandDeg = doubleArg(cmd, "kiband", c.kIBandDeg);
                     c.kIResetDeg = doubleArg(cmd, "kireset", c.kIResetDeg);
                     c.derivativeOnMeasurement = boolArg(cmd, "dom", c.derivativeOnMeasurement);
+                    c.pulsed = boolArg(cmd, "pulsed", c.pulsed);
+                    c.pulseBandDeg = doubleArg(cmd, "pband", c.pulseBandDeg);
+                    c.pulseTolDeg = doubleArg(cmd, "ptol", c.pulseTolDeg);
+                    c.pulsePower = doubleArg(cmd, "ppow", c.pulsePower);
+                    c.pulseMs = doubleArg(cmd, "pms", c.pulseMs);
+                    c.pulseCoastMs = doubleArg(cmd, "pcoast", c.pulseCoastMs);
                 }
                 podsDirty = true;
                 saveCalibration();
@@ -2242,6 +2254,12 @@ public class SwerveBringUp extends OpMode {
         sb.append(",\"kiband\":").append(fmt(c.kIBandDeg));
         sb.append(",\"kireset\":").append(fmt(c.kIResetDeg));
         sb.append(",\"dom\":").append(c.derivativeOnMeasurement);
+        sb.append(",\"pulsed\":").append(c.pulsed);
+        sb.append(",\"pband\":").append(fmt(c.pulseBandDeg));
+        sb.append(",\"ptol\":").append(fmt(c.pulseTolDeg));
+        sb.append(",\"ppow\":").append(fmt(c.pulsePower));
+        sb.append(",\"pms\":").append(fmt(c.pulseMs));
+        sb.append(",\"pcoast\":").append(fmt(c.pulseCoastMs));
         sb.append(",\"pwmLo\":").append(fmt(pwmLower[i]));
         sb.append(",\"pwmHi\":").append(fmt(pwmUpper[i]));
         sb.append(",\"pwmFrame\":").append(fmt(pwmFrame[i]));

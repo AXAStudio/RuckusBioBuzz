@@ -88,13 +88,16 @@ class Bench:
 
     def set_pidf(
         self, kp=None, ki=None, kd=None, kf=None, cache=None, ks=None, ksband=None,
-        dom=None, kilimit=None, kiband=None, kireset=None, scope="all"
+        dom=None, kilimit=None, kiband=None, kireset=None,
+        pulsed=None, pband=None, ptol=None, ppow=None, pms=None, pcoast=None, scope="all"
     ) -> dict:
         """Sets gains and returns the state afterwards, so the caller can verify they took."""
         self.cmd(
             "setPidf", kp=kp, ki=ki, kd=kd, kf=kf, cache=cache, ks=ks, ksband=ksband,
             dom=None if dom is None else str(bool(dom)).lower(),
-            kilimit=kilimit, kiband=kiband, kireset=kireset, scope=scope,
+            kilimit=kilimit, kiband=kiband, kireset=kireset,
+            pulsed=None if pulsed is None else str(bool(pulsed)).lower(),
+            pband=pband, ptol=ptol, ppow=ppow, pms=pms, pcoast=pcoast, scope=scope,
         )
         time.sleep(0.25)
         return self.state()
@@ -515,9 +518,13 @@ def _rms(xs: list[float]) -> float:
 
 def _gains_of(state: dict) -> list[dict]:
     return [
+        # Tolerant of missing keys: the host is often a build ahead of what is flashed on the hub,
+        # and a KeyError here would abort a run that is otherwise perfectly valid.
         {
             k: p[k]
-            for k in ("i", "label", "kp", "ki", "kd", "kf", "cache", "ks", "ksband", "dom")
+            for k in ("i", "label", "kp", "ki", "kd", "kf", "cache", "ks", "ksband", "dom",
+                      "pulsed", "pband", "ptol", "ppow", "pms", "pcoast")
+            if k in p
         }
         for p in state.get("pods", [])
     ]

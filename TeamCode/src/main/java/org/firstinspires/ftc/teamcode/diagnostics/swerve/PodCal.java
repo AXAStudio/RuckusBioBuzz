@@ -95,6 +95,21 @@ public class PodCal {
     public boolean derivativeOnMeasurement = false;
 
     /**
+     * Discrete-pulse final approach, for the last few degrees where the pod has no creep regime.
+     *
+     * <p>{@link #pulsePower} should sit just above the pod's measured breakaway, and
+     * {@link #pulseSeconds} sets how far each pulse travels - roughly the terminal speed at that
+     * power times the pulse length. A pulse shorter than one servo PWM frame may not be delivered.
+     */
+    public boolean pulsed = false;
+    public double pulseBandDeg = 3.0;
+    public double pulseTolDeg = 0.5;
+    public double pulsePower = 0.055;
+    public double pulseMs = 15.0;
+    public double pulseStationaryDegPerSec = 20.0;
+    public double pulseCoastMs = 100.0;
+
+    /**
      * Minimum change in servo power before CoaxialPod actually writes it.
      *
      * <p>This is a deadband on the control OUTPUT: below it the servo keeps whatever power it had,
@@ -192,6 +207,9 @@ public class PodCal {
         pod.setStaticFriction(kS, Math.toRadians(kSBandDeg));
         pod.setTurnIntegralSettings(kILimit, Math.toRadians(kIBandDeg), Math.toRadians(kIResetDeg));
         pod.setDerivativeOnMeasurement(derivativeOnMeasurement);
+        pod.setPulsedApproach(pulsed, Math.toRadians(pulseBandDeg), Math.toRadians(pulseTolDeg),
+                pulsePower, pulseMs / 1000.0, Math.toRadians(pulseStationaryDegPerSec),
+                pulseCoastMs / 1000.0);
         return pod;
     }
 

@@ -47,6 +47,18 @@ public class CoaxialPod implements SwervePod {
     private double staticFrictionPower = 0.0;
     private double staticFrictionBandRad = Math.toRadians(2.0);
 
+    /** RUCKUS PATCH: see {@link #setPulsedApproach}. */
+    private boolean pulsedApproach = false;
+    private double pulseBandRad = Math.toRadians(3.0);
+    private double pulseToleranceRad = Math.toRadians(0.5);
+    private double pulsePower = 0.055;
+    private double pulseSeconds = 0.015;
+    private double pulseStationaryRadPerSec = Math.toRadians(20);
+    private double pulseCoastSeconds = 0.10;
+    private long pulseEndNano = 0;
+    private double pulseSign = 0;
+    private boolean lastMovePulsed = false;
+
     /** RUCKUS PATCH: see {@link #setDerivativeOnMeasurement}. */
     private boolean derivativeOnMeasurement = false;
     private double previousActualRad = Double.NaN;
@@ -267,6 +279,28 @@ public class CoaxialPod implements SwervePod {
 
         double turnPower = MathFunctions.clamp(raw, -1.0, 1.0);
 
+        // RUCKUS PATCH: discrete pulses for the final approach. See setPulsedApproach.
+        lastMovePulsed = false;
+        if (pulsedApproach && Math.abs(errorRad) < pulseBandRad) {
+            lastMovePulsed = true;
+            if (nowNano < pulseEndNano) {
+                turnPower = pulseSign * pulsePower;
+            } else if (nowNano < pulseEndNano + (long) (pulseCoastSeconds * 1.0e9)) {
+                // Mandatory coast. The velocity gate alone is not enough: the hub's analog
+                // registers update more slowly than the control loop, so a stale reading reads as
+                // zero velocity while the pod is still moving, and pulses stack into an overshoot.
+                turnPower = 0;
+            } else if (Math.abs(errorRad) > pulseToleranceRad
+                    && Math.abs(lastMeasuredVelocityRad) < pulseStationaryRadPerSec) {
+                pulseSign = errorRad >= 0 ? 1.0 : -1.0;
+                pulseEndNano = nowNano + (long) (pulseSeconds * 1.0e9);
+                turnPower = pulseSign * pulsePower;
+            } else {
+                // Inside tolerance, or still coasting from the last pulse. Let it stop.
+                turnPower = 0;
+            }
+        }
+
         // RUCKUS PATCH: instrumentation only, no control effect.
         lastErrorRad = errorRad;
 
@@ -343,6 +377,48 @@ public class CoaxialPod implements SwervePod {
     public void setStaticFriction(double power, double bandRadians) {
         this.staticFrictionPower = power;
         this.staticFrictionBandRad = bandRadians;
+    }
+
+    /**
+     * RUCKUS PATCH: close the last few degrees with discrete pulses instead of a continuous loop.
+     *
+     * <p>The pod has no creep regime. Static friction breaks to kinetic and it goes from stopped to
+     * tens of degrees per second with nothing in between, so any continuous controller with enough
+     * authority to correct a small error commits to several degrees of travel before feedback -
+     * 39 ms of transport delay plus a 42 ms velocity time constant - can act on it. That is a limit
+     * cycle by construction, and it is why raising static-friction authority always bought ringing.
+     *
+     * <p>A pulse sidesteps it by being open loop and bounded. One pulse of {@code power} for
+     * {@code seconds} injects a known impulse - travel is roughly the terminal speed at that power
+     * times the pulse length - then the pod coasts to a stop and is measured again. The lag never
+     * enters the stability question because nothing is being stabilised; the loop is a sequence of
+     * measured, bounded steps.
+     *
+     * <p>Outside {@code bandRadians} the normal PD loop runs untouched. Inside it, a pulse fires
+     * only when the error exceeds {@code toleranceRadians} <em>and</em> the pod has come to rest,
+     * so pulses never stack on top of one another.
+     *
+     * <p>Pulse length wants to be short, and the servo PWM frame quantises it - a pulse shorter
+     * than one frame may not be delivered at all. At the SDK default 20 ms frame the shortest
+     * usable pulse is 20 ms; halving the frame to 10 ms halves the quantum, which is the real
+     * argument for changing it.
+     *
+     * <p>A no-op at {@code enabled = false}, which is the default.
+     */
+    public void setPulsedApproach(boolean enabled, double bandRadians, double toleranceRadians,
+            double power, double seconds, double stationaryRadPerSec, double coastSeconds) {
+        this.pulsedApproach = enabled;
+        this.pulseBandRad = bandRadians;
+        this.pulseToleranceRad = toleranceRadians;
+        this.pulsePower = power;
+        this.pulseSeconds = seconds;
+        this.pulseStationaryRadPerSec = stationaryRadPerSec;
+        this.pulseCoastSeconds = coastSeconds;
+    }
+
+    /** RUCKUS PATCH: true when the last {@link #move} call was in pulsed mode. Instrumentation. */
+    public boolean wasLastMovePulsed() {
+        return lastMovePulsed;
     }
 
     /**
