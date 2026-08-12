@@ -318,7 +318,23 @@ public class PodCal {
                 + "|" + kI
                 + "|" + servoCaching
                 + "|" + kS
-                + "|" + kSBandDeg;
+                + "|" + kSBandDeg
+                + "|" + kILimit
+                + "|" + kIBandDeg
+                + "|" + kIResetDeg
+                + "|" + derivativeOnMeasurement
+                + "|" + pulsed
+                + "|" + pulseBandDeg
+                + "|" + pulseTolDeg
+                + "|" + pulsePower
+                + "|" + pulseMs
+                + "|" + pulseStationaryDegPerSec
+                + "|" + pulseCoastMs
+                + "|" + positional
+                + "|" + rawDegAtPos0
+                + "|" + rawDegAtPos1
+                + "|" + clampMarginDeg
+                + "|" + posCalibrated;
     }
 
     /** Applies a line previously produced by {@link #serialize()}. Returns false if unusable. */
@@ -343,12 +359,34 @@ public class PodCal {
             kF = Double.parseDouble(p[13]);
             podX = Double.parseDouble(p[14]);
             podY = Double.parseDouble(p[15]);
-            // Fields appended after the first calibration files were written are all optional, so
-            // an older file still loads.
+            // Every field appended after the first calibration files were written is optional, so
+            // an older file still loads and simply takes the defaults for whatever it predates.
+            // This list had fallen behind: kS and kSBandDeg were persisted but nothing after them,
+            // so a restart silently reverted the integral bounds, the pulse settings and - the
+            // expensive one - the positional endpoint calibration.
             kI = p.length > 16 ? Double.parseDouble(p[16]) : 0.0;
             servoCaching = p.length > 17 ? Double.parseDouble(p[17]) : 0.05;
             kS = p.length > 18 ? Double.parseDouble(p[18]) : 0.0;
             kSBandDeg = p.length > 19 ? Double.parseDouble(p[19]) : 2.0;
+            kILimit = p.length > 20 ? Double.parseDouble(p[20]) : 0.08;
+            kIBandDeg = p.length > 21 ? Double.parseDouble(p[21]) : 6.0;
+            kIResetDeg = p.length > 22 ? Double.parseDouble(p[22]) : 2.0;
+            derivativeOnMeasurement = p.length > 23 && Boolean.parseBoolean(p[23]);
+            pulsed = p.length > 24 && Boolean.parseBoolean(p[24]);
+            pulseBandDeg = p.length > 25 ? Double.parseDouble(p[25]) : 3.0;
+            pulseTolDeg = p.length > 26 ? Double.parseDouble(p[26]) : 0.5;
+            pulsePower = p.length > 27 ? Double.parseDouble(p[27]) : 0.055;
+            pulseMs = p.length > 28 ? Double.parseDouble(p[28]) : 15.0;
+            pulseStationaryDegPerSec = p.length > 29 ? Double.parseDouble(p[29]) : 20.0;
+            pulseCoastMs = p.length > 30 ? Double.parseDouble(p[30]) : 100.0;
+            // The positional fields matter most of all: rawDegAtPos0/1 are a physical measurement
+            // that costs a guarded walk to both mechanical limits to obtain, and losing them to an
+            // OpMode restart would mean doing it again.
+            positional = p.length > 31 && Boolean.parseBoolean(p[31]);
+            rawDegAtPos0 = p.length > 32 ? Double.parseDouble(p[32]) : 0.0;
+            rawDegAtPos1 = p.length > 33 ? Double.parseDouble(p[33]) : 190.0;
+            clampMarginDeg = p.length > 34 ? Double.parseDouble(p[34]) : 3.0;
+            posCalibrated = p.length > 35 && Boolean.parseBoolean(p[35]);
             return true;
         } catch (NumberFormatException e) {
             return false;
