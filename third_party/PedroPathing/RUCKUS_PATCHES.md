@@ -21,6 +21,40 @@ The vendored Gradle metadata currently reports PedroPathing version `2.1.2`.
 
 ## Local Patches
 
+### 2026-08-12 — Derivative on measurement, and a pulsed final approach, on `CoaxialPod`
+
+- **Files changed:** `ftc/src/main/java/com/pedropathing/ftc/drivetrains/CoaxialPod.java`,
+  `core/src/main/java/com/pedropathing/control/PIDFController.java`
+- **Reason:** two attempts at the residual that a continuous loop cannot reach. Both are
+  implemented, both default to off, and **both are currently negative results** — kept because they
+  are cheap to re-test and expensive to re-derive.
+
+  **`setDerivativeOnMeasurement(boolean)`** plus `PIDFController.updateErrorWithDerivative`.
+  Differencing the error assumes a stationary setpoint; a pod's steps by up to 90° and jumps
+  discontinuously at the ±180° flip, and at 120 Hz a 90° step alone drives `kD = 0.010` to 1.96 of
+  output, saturating the clamp. Derivative-on-measurement removes that kick and is identical while
+  the setpoint holds. It did **not** permit more damping: kD 0.040 rings 16×, 0.070 and 0.110 are
+  unusable. The reason is structural — for a plant `1/(s(1+sT))` the PD zero cancels the lag pole at
+  `kD = kP·T`, so with the measured T = 42 ms the useful range is already covered. A randomised grid
+  confirmed the optimum sits at 1.7–2.4× that value, above it rather than below, because the 39 ms
+  of *pure transport delay* needs additional lead that pole cancellation does not account for.
+
+  **`setPulsedApproach(...)`.** The pod has no creep regime: static friction breaks to kinetic and it
+  goes from stopped to tens of degrees per second with nothing between, so any continuous controller
+  with the authority to correct a small error commits to several degrees of travel before feedback
+  (39 ms transport + 42 ms velocity lag) can act. A bounded open-loop pulse sidesteps the stability
+  question entirely. Where it works it is decisive — 11 of 16 pod-runs parked at ≤0.34° with
+  peak-to-peak ≤0.34° and *exactly zero* holding power. It is blocked by the pulse quantum: at the
+  SDK's default 20 ms servo PWM frame the shortest possible pulse travels 0.06–2.85° at 0.040 power,
+  already more than the whole 1.0° error budget, and travel is not a repeatable function of duration
+  (pod 0 moves 2.85° at 20 ms and 1.80° at 45 ms), so the scatter is intrinsic breakaway variability
+  rather than something a calibration can remove. Halving the frame period halves the quantum but
+  not necessarily the scatter, which is the thing to judge a retest on.
+
+- **Upstream issue:** none filed.
+- **How to remove:** search for `RUCKUS PATCH`. Both are inert at their defaults, so removal is
+  deleting the setters, the two `if` blocks in `move()` and `updateErrorWithDerivative`.
+
 ### 2026-08-12 — Continuous static-friction term and instrumentation on `CoaxialPod`
 
 - **Files changed:** `ftc/src/main/java/com/pedropathing/ftc/drivetrains/CoaxialPod.java`

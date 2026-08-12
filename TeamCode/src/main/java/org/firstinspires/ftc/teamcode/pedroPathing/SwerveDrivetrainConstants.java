@@ -88,12 +88,20 @@ public class SwerveDrivetrainConstants {
     // ---------------------------------------------------------------------------------------
     //
     // Committed because they are a large, measured improvement on what shipped, not because they
-    // are finished. Measured on a randomised interleaved A/B against the previous gains, same
-    // battery, 40 pod-runs each, 90 degree steps on blocks at 13.1 V:
+    // are finished. Randomised interleaved A/B against the previous gains, same battery, 40
+    // pod-runs each, 90 degree steps on blocks at 13.1 V:
     //
     //     steady-state error   3.23 -> 0.96 deg mean,  7.24 -> 2.52 deg max
     //     error sign changes   2.35 -> 0.85 per step
-    //     post-settle p-p      0.53 -> 0.21 deg mean, 0.45 max  (first time this criterion passed)
+    //     post-settle p-p      0.53 -> 0.21 deg mean, 0.45 max
+    //
+    // kD chosen at n=60 pod-runs against three rivals, randomised, 12.87-12.95 V. Selection was
+    // lexicographic: zero loose-mode runs first, then lowest residual. kD 0.022 was the only one
+    // of four to hold 0/60 (true rate bounded below 6%); kD 0.020, 0.014 and 0.010 drew 3, 1 and 1.
+    // At kD 0.022: residual at t=3 s 0.77 deg mean / 2.36 max, settle to +/-2.0 deg 0.647 s with
+    // 97% of pods settling, post-settle p-p 1.24 max. Per pod the residual is 0.76 / 0.73 / 1.06 /
+    // 0.52 deg, so it is a broad distribution rather than one bad pod - 35% of pod-runs exceed
+    // 1.0 deg and 12% exceed 1.5 deg.
     //
     // What was actually wrong, in order of size:
     //
@@ -136,7 +144,7 @@ public class SwerveDrivetrainConstants {
     // is the open problem. Full trial log and traces in tools/swervetune.
 
     private static double turnKP = 0.200;
-    private static double turnKD = 0.014;
+    private static double turnKD = 0.022;
 
     /** Static-friction feed-forward, set to the measured breakaway. Replaces the kF relay. */
     private static double turnKS = 0.035;
