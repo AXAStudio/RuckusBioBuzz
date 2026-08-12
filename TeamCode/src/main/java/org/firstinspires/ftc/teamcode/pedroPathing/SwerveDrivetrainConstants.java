@@ -30,7 +30,20 @@ public class SwerveDrivetrainConstants {
             .translationalPIDFCoefficients(new PIDFCoefficients(0.125, 0, 0.008, 0))
             //.secondaryTranslationalPIDFCoefficients(new PIDFCoefficients(0.0825, 0, 0.008, 0))
 
-            .headingPIDFCoefficients(new PIDFCoefficients(1.75, 0, 0.003, 0))
+            // Measured 2026-08-11 on the Pinpoint IMU (no odometry pods needed), across commanded
+            // rotations of 15/45/90/135/180 degrees in both directions.
+            //
+            // kP: below ~1.0 the robot never settles (0.80 left 3-4 degrees standing); 1.40 hits a
+            // stability edge, overshooting 22 then 51 degrees. 1.20 settles in ~0.65s.
+            // kD: 0.003 overshot 8-12 degrees on anything past 45 degrees, because the output
+            // saturates on large errors and the robot arrives carrying momentum. 0.030 cuts that to
+            // 3-5 degrees for ~0.5 degrees more residual, and leaves small rotations clean
+            // (15 degrees: no overshoot, settles in 0.22s).
+            // kF stays 0: like the pod turn PIDF it is applied as a sign-only relay, and 0.06
+            // produced 23-26 oscillations per step.
+            //
+            // Verified holding heading to +/-3 degrees while translating through two full circles.
+            .headingPIDFCoefficients(new PIDFCoefficients(1.20, 0, 0.030, 0))
             //.secondaryHeadingPIDFCoefficients(new PIDFCoefficients(0.8, 0, 0.015, 0))
 
             .drivePIDFCoefficients(new FilteredPIDFCoefficients(0.005, 0, 0.00003, 0.6, 0.13))

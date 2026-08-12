@@ -1,9 +1,12 @@
 package org.firstinspires.ftc.teamcode.diagnostics.swerve;
 
+import com.pedropathing.control.PIDFCoefficients;
+import com.pedropathing.control.PIDFController;
 import com.pedropathing.ftc.drivetrains.CoaxialPod;
 import com.pedropathing.ftc.drivetrains.Swerve;
 import com.pedropathing.ftc.drivetrains.SwerveConstants;
 import com.pedropathing.math.MathFunctions;
+import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
 import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
@@ -15,6 +18,7 @@ import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
+import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.robotcore.internal.system.AppUtil;
 
 import java.io.BufferedReader;
@@ -118,6 +122,8 @@ public class SwerveBringUp extends OpMode {
         JOG,
         ENC_SWEEP,
         PID,
+        /** Robot heading step response: displace open-loop, then close the loop and record. */
+        HEADING,
         AUTOTUNE,
         DRIVE
     }
@@ -132,6 +138,8 @@ public class SwerveBringUp extends OpMode {
                 || "pidStep".equals(action)
                 || "pidStepAll".equals(action)
                 || "autoTune".equals(action)
+                || "headingStep".equals(action)
+                || "headingGoto".equals(action)
                 || "drive".equals(action);
     }
 
@@ -224,6 +232,67 @@ public class SwerveBringUp extends OpMode {
     /** Zero-input behaviour of the bench drivetrain: X_LOCK when true, hold heading when false. */
     private boolean xLock = true;
 
+    // ---- robot heading (Pinpoint IMU; works with no odometry pods attached) ----
+    private GoBildaPinpointDriver pinpoint;
+    private double headingRad;
+    private boolean headingOk;
+
+    /** Heading PIDF under test. Units match FollowerConstants.headingPIDFCoefficients (radians). */
+    private double headingKp = 1.75;
+    private double headingKd = 0.003;
+    private double headingKf = 0.0;
+
+    private double headingTargetRad;
+    private boolean headingClosedLoop;
+    private double headingOpenLoopPower;
+
+    /**
+     * Heading controller, driven exactly as Pedro drives it.
+     *
+     * <p>{@code ErrorCalculator} builds a SIGNED error as
+     * {@code getTurnDirection(current, target) * getSmallestAngleDifference(current, target)}, and
+     * {@code VectorCalculator.getHeadingVector} feeds the turn direction in as the feed-forward
+     * input before clamping the output to max power. Reproducing that exactly is what makes gains
+     * tuned here transfer to {@code FollowerConstants.headingPIDFCoefficients}.
+     */
+    private final PIDFController headingPidf = new PIDFController(
+            new com.pedropathing.control.PIDFCoefficientSupplier() {
+                @Override
+                public PIDFCoefficients get(double error) {
+                    // Supplied per call, because PIDFController.run() re-reads the supplier and
+                    // discards anything set with setCoefficients().
+                    return new PIDFCoefficients(headingKp, 0, headingKd, headingKf);
+                }
+            });
+
+    /** Right stick sweeps a heading SETPOINT rather than commanding rotation power directly. */
+    private boolean headingHold = true;
+    private boolean headingStickActive;
+
+    /** Frozen-heading watchdog: a dead sensor plus a heading controller means a full-power spin. */
+    private double headingLastSeen;
+    private double headingStuckSeconds;
+    private static final double HEADING_STUCK_LIMIT_S = 1.2;
+    /**
+     * Setpoint sweep rate at full stick, matched to what the robot can actually do.
+     *
+     * <p>Measured on this drivetrain: 0.3 stick -> 72 deg/s, 0.6 -> 165, 1.0 -> 328. Sweeping the
+     * setpoint slower than the robot can turn wastes the difference - the controller only ever
+     * needs a fraction of full power to keep up, so a held stick feels weak. Pedro's own teleop
+     * maps the stick straight to rotation power, so full stick must mean full authority here too.
+     */
+    private static final double HEADING_STICK_RATE = 5.5;   // rad/s, ~315 deg/s
+
+    /**
+     * How far the setpoint may lead the measured heading.
+     *
+     * <p>Without this the setpoint outruns the robot, the error grows past 180 degrees, and
+     * {@code getTurnDirection} flips to the now-shorter way round - so the robot reverses, stalls,
+     * and surges. Capping the lead keeps the error inside the controller's linear region and makes
+     * a held stick produce smooth continuous rotation.
+     */
+    private static final double HEADING_MAX_LEAD = Math.toRadians(60);
+
     /** How long the current jog should run before stopping itself. */
     private double jogSeconds;
 
@@ -231,6 +300,7 @@ public class SwerveBringUp extends OpMode {
 
     private final PodAutoTuner tuner = new PodAutoTuner();
     private final ElapsedTime autoTuneTimer = new ElapsedTime();
+    private final ElapsedTime headingStickTimer = new ElapsedTime();
 
     /** Commanded pod state for the visualizer. NaN theta means "nothing commanded right now". */
     private final double[] targetTheta = new double[POD_COUNT];
@@ -264,6 +334,14 @@ public class SwerveBringUp extends OpMode {
         }
 
         acquireHardware();
+
+        try {
+            pinpoint = hardwareMap.get(GoBildaPinpointDriver.class, "pinpoint");
+            pinpoint.update();
+        } catch (RuntimeException e) {
+            pinpoint = null;
+            hwErrors.add("No \"pinpoint\" device; heading tuning unavailable.");
+        }
 
         try {
             voltageSensor = hardwareMap.voltageSensor.iterator().next();
@@ -310,6 +388,7 @@ public class SwerveBringUp extends OpMode {
 
         drainCommands();
         readEncoders();
+        readHeading();
         handleGamepad();
         runMode();
         publish();
@@ -355,6 +434,24 @@ public class SwerveBringUp extends OpMode {
         }
     }
 
+    /** Heading comes off the Pinpoint's IMU, so it is valid with no odometry pods attached. */
+    private void readHeading() {
+        if (pinpoint == null) {
+            headingOk = false;
+            return;
+        }
+        try {
+            pinpoint.update();
+            double h = pinpoint.getHeading(AngleUnit.RADIANS);
+            headingOk = !Double.isNaN(h);
+            if (headingOk) {
+                headingRad = h;
+            }
+        } catch (RuntimeException e) {
+            headingOk = false;
+        }
+    }
+
     private void readEncoders() {
         for (int i = 0; i < POD_COUNT; i++) {
             volts[i] = readVoltage(encoders[i]);
@@ -385,10 +482,13 @@ public class SwerveBringUp extends OpMode {
 
             SwerveConstants sc = new SwerveConstants()
                     .velocity(73.9)
-                    // Matches competition by default so the drive test behaves like the real robot.
-                    // IGNORE_ANGLE_CHANGES is available from the dashboard because X_LOCK hides what
-                    // the pods are doing while tuning - every dropout yanks all four to the X.
-                    .zeroPowerBehavior(xLock
+                    // X_LOCK matches competition, but it cannot coexist with heading hold:
+                    // arcadeDrive engages the lock whenever |rotation| < epsilon, and the lock
+                    // points pods ALONG their radius while rotating points them PERPENDICULAR to
+                    // it. Every time the heading PID output dips under epsilon on approach, all
+                    // four pods snap 90 degrees, the robot stops rotating, error grows, output
+                    // rises and they snap back - which reads as rotation happening in bursts.
+                    .zeroPowerBehavior(xLock && !headingHold
                             ? SwerveConstants.ZeroPowerBehavior.X_LOCK
                             : SwerveConstants.ZeroPowerBehavior.IGNORE_ANGLE_CHANGES)
                     .useBrakeModeInTeleOp(false)
@@ -454,6 +554,9 @@ public class SwerveBringUp extends OpMode {
                 break;
             case AUTOTUNE:
                 runAutoTune();
+                break;
+            case HEADING:
+                runHeadingTune();
                 break;
             case DRIVE:
                 runDriveMode();
@@ -958,6 +1061,117 @@ public class SwerveBringUp extends OpMode {
         message = "Auto-tuning pod " + selected + ".";
     }
 
+
+    /**
+     * Rotation power to drive the robot's heading to {@link #headingTargetRad}, computed the way
+     * {@code VectorCalculator.getHeadingVector} computes it.
+     */
+    private double headingCorrection() {
+        double direction = MathFunctions.getTurnDirection(headingRad, headingTargetRad);
+        double error = direction
+                * MathFunctions.getSmallestAngleDifference(headingRad, headingTargetRad);
+
+        headingPidf.updateFeedForwardInput(direction);
+        headingPidf.updateError(error);
+        return MathFunctions.clamp(headingPidf.run(), -SWERVE_MAX_POWER, SWERVE_MAX_POWER);
+    }
+
+    // ---------------------------------------------------------------- heading tuning
+
+    /** Open-loop displacement time before the loop is closed. */
+    private static final double HEADING_OPEN_LOOP_S = 0.55;
+
+    /**
+     * Robot heading step response.
+     *
+     * <p>The robot is first rotated open-loop away from the captured target, with the controller
+     * off, then the loop is closed and the recovery recorded. Displacing under control would only
+     * ever show the controller chasing itself; letting it start from a genuine offset is what
+     * exposes the gain.
+     */
+    private void runHeadingTune() {
+        ensurePods();
+        if (swerve == null || !headingOk) {
+            message = swerve == null
+                    ? "Cannot build drivetrain: " + podBuildError
+                    : "No heading from the Pinpoint; cannot tune heading.";
+            setMode(Mode.IDLE);
+            return;
+        }
+
+        double error = MathFunctions.normalizeAngleSigned(headingTargetRad - headingRad);
+
+        if (!headingClosedLoop) {
+            // Open loop: spin away from the target so the closed-loop phase starts displaced.
+            if (phaseTimer.seconds() < HEADING_OPEN_LOOP_S) {
+                swerve.arcadeDrive(0, 0, headingOpenLoopPower);
+                message = String.format(Locale.US, "Displacing open-loop (%.0f deg so far)",
+                        Math.toDegrees(Math.abs(error)));
+                return;
+            }
+            // Close the loop and start the recording from here.
+            headingClosedLoop = true;
+            headingPidf.reset();
+            clearTrace(selected);
+            phaseTimer.reset();
+        }
+
+        swerve.arcadeDrive(0, 0, headingCorrection());
+
+        recordHeadingTrace();
+
+        if (phaseTimer.seconds() > 3.0) {
+            swerve.arcadeDrive(0, 0, 0);
+            message = String.format(Locale.US,
+                    "Heading step done. Final error %.1f deg.", Math.toDegrees(error));
+            setMode(Mode.IDLE);
+        }
+    }
+
+    /** Reuses the pod trace buffer to graph robot heading against its target. */
+    private void recordHeadingTrace() {
+        double actualDeg = Math.toDegrees(headingRad);
+        double targetDeg = Math.toDegrees(headingTargetRad);
+        double delta = targetDeg - actualDeg;
+        if (delta > 180) {
+            targetDeg -= 360;
+        } else if (delta < -180) {
+            targetDeg += 360;
+        }
+
+        traceT[traceHead] = phaseTimer.seconds();
+        traceTarget[traceHead] = targetDeg;
+        traceActual[traceHead] = actualDeg;
+        traceHead = (traceHead + 1) % TRACE_LEN;
+        if (traceCount < TRACE_LEN) {
+            traceCount++;
+        }
+    }
+
+    private void startHeadingStep(double displaceDeg) {
+        ensurePods();
+        if (swerve == null) {
+            message = "Cannot build drivetrain: " + podBuildError;
+            return;
+        }
+        if (!headingOk) {
+            message = "No heading from the Pinpoint; cannot tune heading.";
+            return;
+        }
+
+        headingTargetRad = headingRad;
+        headingOpenLoopPower = displaceDeg >= 0 ? 0.35 : -0.35;
+        headingClosedLoop = false;
+        clearTrace(selected);
+        tracePod = -2;   // marks the trace as heading rather than a pod
+        allStop();
+        phaseTimer.reset();
+        autoTuneTimer.reset();
+        mode = Mode.HEADING;
+        routineActive = true;
+        message = "Heading step: displacing open-loop, then closing the loop.";
+    }
+
     private void startPidStep(double targetDeg, boolean allPods) {
         pidAllPods = allPods;
         startPidStep(targetDeg);
@@ -997,11 +1211,75 @@ public class SwerveBringUp extends OpMode {
             message = "Drive watchdog tripped - no command from the dashboard.";
         }
 
-        swerve.arcadeDrive(driveForward, driveStrafe, driveTurn);
+        double turn = driveTurn;
 
-        // computeTargets() runs at publish time, so the value here is from the previous loop -
-        // close enough for a graph, and it keeps arcadeDrive's kinematics as the single source.
-        if (!Double.isNaN(targetTheta[selected])) {
+        if (headingHold && headingOk) {
+            // The stick sets a heading RATE; the controller holds whatever setpoint it leaves
+            // behind. Releasing it therefore locks the current heading instead of coasting, and a
+            // shove off-heading is corrected rather than accepted.
+            double dt = Math.min(0.25, Math.max(1e-3, headingStickTimer.seconds()));
+            headingStickTimer.reset();
+
+            boolean stickActive = Math.abs(driveTurn) > 0.02;
+
+            if (stickActive) {
+                headingTargetRad = MathFunctions.normalizeAngle(
+                        headingTargetRad + driveTurn * HEADING_STICK_RATE * dt);
+
+                // Never let the setpoint lead further than the controller can chase. Past 180 the
+                // error wraps and getTurnDirection flips, which reverses the robot mid-turn.
+                double lead = MathFunctions.getTurnDirection(headingRad, headingTargetRad)
+                        * MathFunctions.getSmallestAngleDifference(headingRad, headingTargetRad);
+                if (lead > HEADING_MAX_LEAD) {
+                    headingTargetRad = MathFunctions.normalizeAngle(headingRad + HEADING_MAX_LEAD);
+                } else if (lead < -HEADING_MAX_LEAD) {
+                    headingTargetRad = MathFunctions.normalizeAngle(headingRad - HEADING_MAX_LEAD);
+                }
+            } else if (headingStickActive) {
+                // Stick just released. Latch the heading we are at rather than unwinding the lead,
+                // which would otherwise keep turning for another lead-angle after letting go.
+                headingTargetRad = headingRad;
+                headingPidf.reset();
+            }
+
+            headingStickActive = stickActive;
+            turn = headingCorrection();
+
+            // If we are commanding real rotation but the measured heading has not moved at all,
+            // the sensor is dead and this loop would happily spin the robot at full power.
+            if (Math.abs(turn) > 0.15) {
+                if (Math.abs(headingRad - headingLastSeen) < 1e-6) {
+                    headingStuckSeconds += dt;
+                } else {
+                    headingStuckSeconds = 0;
+                }
+                if (headingStuckSeconds > HEADING_STUCK_LIMIT_S) {
+                    headingHold = false;
+                    podsDirty = true;
+                    driveForward = 0;
+                    driveStrafe = 0;
+                    driveTurn = 0;
+                    headingStuckSeconds = 0;
+                    message = "Heading has not changed while turning - sensor looks dead. "
+                            + "Heading hold disabled; recalibrate the Pinpoint.";
+                    swerve.arcadeDrive(0, 0, 0);
+                    return;
+                }
+            } else {
+                headingStuckSeconds = 0;
+            }
+            headingLastSeen = headingRad;
+        }
+
+        swerve.arcadeDrive(driveForward, driveStrafe, turn);
+
+        if (headingHold && headingOk) {
+            // Heading is the interesting signal while holding, and it is what the circle test and
+            // the rotation tests are judged on.
+            recordHeadingTrace();
+        } else if (!Double.isNaN(targetTheta[selected])) {
+            // computeTargets() runs at publish time, so the value here is from the previous loop -
+            // close enough for a graph, and it keeps arcadeDrive's kinematics as the single source.
             recordTrace(selected, targetTheta[selected]);
         }
     }
@@ -1192,10 +1470,86 @@ public class SwerveBringUp extends OpMode {
             case "autoTune":
                 startAutoTune();
                 break;
+            case "headingStep":
+                startHeadingStep(doubleArg(cmd, "deg", 90));
+                break;
+            case "setHeadingPidf":
+                headingKp = doubleArg(cmd, "hkp", headingKp);
+                headingKd = doubleArg(cmd, "hkd", headingKd);
+                headingKf = doubleArg(cmd, "hkf", headingKf);
+                message = String.format(Locale.US, "Heading PIDF: kP=%.4f kD=%.4f kF=%.4f",
+                        headingKp, headingKd, headingKf);
+                break;
             case "pidHold":
                 pidHolding = false;
                 allStop();
                 message = "Pod released.";
+                break;
+            case "headingGoto": {
+                // Commands a heading change of a chosen size and holds it, so rotations of very
+                // different magnitudes can be compared with the same controller.
+                if (!headingOk) {
+                    message = "No heading from the Pinpoint.";
+                    break;
+                }
+                headingTargetRad = MathFunctions.normalizeAngle(
+                        headingRad + Math.toRadians(doubleArg(cmd, "deg", 90)));
+                headingPidf.reset();
+                headingHold = true;
+                podsDirty = true;
+                driveForward = 0;
+                driveStrafe = 0;
+                driveTurn = 0;
+                lastDriveCmdMs = System.currentTimeMillis();
+                clearTrace(selected);
+                tracePod = -2;
+                phaseTimer.reset();
+                headingStickTimer.reset();
+                mode = Mode.DRIVE;
+                message = String.format(Locale.US, "Turning %.0f deg and holding.",
+                        doubleArg(cmd, "deg", 90));
+                break;
+            }
+            case "recalibrateImu":
+                if (pinpoint == null) {
+                    message = "No pinpoint device.";
+                    break;
+                }
+                try {
+                    allStop();
+                    pinpoint.recalibrateIMU();
+                    headingStuckSeconds = 0;
+                    message = "Pinpoint IMU recalibrating - keep the robot still for a moment.";
+                } catch (RuntimeException e) {
+                    message = "Recalibrate failed: " + e.getMessage();
+                }
+                break;
+            case "resetImu":
+                if (pinpoint == null) {
+                    message = "No pinpoint device.";
+                    break;
+                }
+                try {
+                    allStop();
+                    pinpoint.resetPosAndIMU();
+                    headingStuckSeconds = 0;
+                    message = "Pinpoint position and IMU reset - keep the robot still.";
+                } catch (RuntimeException e) {
+                    message = "Reset failed: " + e.getMessage();
+                }
+                break;
+            case "setHeadingHold":
+                headingHold = cmd.get("value") == null
+                        ? !headingHold
+                        : Boolean.parseBoolean(cmd.get("value"));
+                if (headingHold && headingOk) {
+                    headingTargetRad = headingRad;
+                    headingPidf.reset();
+                }
+                podsDirty = true;   // zero-power behaviour depends on this
+                message = headingHold
+                        ? "Right stick steers a heading setpoint; the robot holds it."
+                        : "Right stick commands rotation power directly.";
                 break;
             case "setXLock":
                 xLock = cmd.get("value") == null ? !xLock : Boolean.parseBoolean(cmd.get("value"));
@@ -1205,6 +1559,12 @@ public class SwerveBringUp extends OpMode {
                         : "Zero input holds pod headings (easier to read while tuning).";
                 break;
             case "drive":
+                if (mode != Mode.DRIVE && headingOk) {
+                    // Adopt the heading we are already at, so enabling drive never snaps the robot.
+                    headingTargetRad = headingRad;
+                    headingPidf.reset();
+                    headingStickTimer.reset();
+                }
                 driveForward = doubleArg(cmd, "f", 0);
                 driveStrafe = doubleArg(cmd, "s", 0);
                 driveTurn = doubleArg(cmd, "t", 0);
@@ -1465,6 +1825,15 @@ public class SwerveBringUp extends OpMode {
         sb.append(",\"busy\":").append(routineActive);
         sb.append(",\"started\":").append(started);
         sb.append(",\"xLock\":").append(xLock);
+        sb.append(",\"heading\":{\"ok\":").append(headingOk)
+                .append(",\"deg\":").append(fmt(Math.toDegrees(headingRad)))
+                .append(",\"targetDeg\":").append(fmt(Math.toDegrees(headingTargetRad)))
+                .append(",\"kp\":").append(fmt(headingKp))
+                .append(",\"kd\":").append(fmt(headingKd))
+                .append(",\"kf\":").append(fmt(headingKf))
+                .append(",\"closedLoop\":").append(headingClosedLoop)
+                .append(",\"hold\":").append(headingHold)
+                .append('}');
         sb.append(",\"message\":\"").append(esc(message)).append('"');
         sb.append(",\"phase\":").append(fmt(phaseTimer.seconds()));
 

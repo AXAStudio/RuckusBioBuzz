@@ -377,6 +377,60 @@
     </div>
   </section>
 
+
+  <section>
+    <h2>Robot heading PIDF</h2>
+    <div class="row" style="margin-bottom:10px">
+      <span class="stat">heading <b id="hdgNow">--</b>&deg;</span>
+      <span class="stat">target <b id="hdgTgt">--</b>&deg;</span>
+      <span class="stat">loop <b id="hdgLoop">--</b></span>
+      <span class="spacer"></span>
+      <span class="hint" id="hdgSrc">Pinpoint IMU</span>
+    </div>
+    <div class="hint" style="margin-bottom:10px">
+      Captures the current heading as target, rotates the robot away from it <b>with the controller
+      off</b>, then closes the loop and records the recovery. Starting from a genuine offset is what
+      exposes the gain &mdash; displacing under control only shows the controller chasing itself.
+      Needs clear space to spin.
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <label class="inline">kP <input type="number" id="hkp" step="0.05"></label>
+      <label class="inline">kD <input type="number" id="hkd" step="0.001"></label>
+      <label class="inline">kF <input type="number" id="hkf" step="0.005"></label>
+      <button onclick="applyHeadingPidf()">Apply</button>
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <button id="hdgHoldBtn" onclick="cmd('setHeadingHold')">right stick: …</button>
+      <button class="primary" onclick="cmd('headingStep', {deg: 90})">Displace &#8630; then correct</button>
+      <button class="primary" onclick="cmd('headingStep', {deg: -90})">Displace &#8631; then correct</button>
+      <button class="stop" onclick="stopAllTests()">Stop</button>
+    </div>
+
+    <div class="row" style="margin-bottom:8px">
+      <span class="hint" style="min-width:74px">turn by</span>
+      <button class="small" onclick="cmd('headingGoto', {deg: -135})">-135&deg;</button>
+      <button class="small" onclick="cmd('headingGoto', {deg: -90})">-90&deg;</button>
+      <button class="small" onclick="cmd('headingGoto', {deg: -45})">-45&deg;</button>
+      <button class="small" onclick="cmd('headingGoto', {deg: -15})">-15&deg;</button>
+      <button class="small" onclick="cmd('headingGoto', {deg: 15})">+15&deg;</button>
+      <button class="small" onclick="cmd('headingGoto', {deg: 45})">+45&deg;</button>
+      <button class="small" onclick="cmd('headingGoto', {deg: 90})">+90&deg;</button>
+      <button class="small" onclick="cmd('headingGoto', {deg: 135})">+135&deg;</button>
+      <button class="small" onclick="cmd('headingGoto', {deg: 180})">180&deg;</button>
+      <span class="hint">Turns by that much and holds. Small and large moves stress the loop
+        differently &mdash; big ones saturate the output and arrive carrying momentum.</span>
+    </div>
+
+    <div class="row">
+      <span class="hint" style="min-width:74px">circle test</span>
+      <button id="circleBtn" onclick="toggleCircle()">Start circle</button>
+      <label class="inline">power <input type="number" id="circAmp" value="0.22" step="0.02" style="width:70px"></label>
+      <label class="inline">period s <input type="number" id="circPeriod" value="3.0" step="0.5" style="width:70px"></label>
+      <span class="hint">Drives a circle while holding heading &mdash; needs heading hold on and
+        clear space. Watch the graph stay flat.</span>
+    </div>
+  </section>
+
   <section>
     <h2>Pods &mdash; click a card to select</h2>
     <div class="grid" id="pods"></div>
@@ -813,6 +867,70 @@ function setGain(id, value) {
   if (document.activeElement !== e && e.value !== text) e.value = text;
 }
 
+var hdgDirty = false;
+['hkp', 'hkd', 'hkf'].forEach(function (id) {
+  var e = document.getElementById(id);
+  if (e) e.addEventListener('input', function () { hdgDirty = true; });
+});
+
+var circleTimer = null;
+var circleStart = 0;
+
+function toggleCircle() {
+  if (circleTimer !== null) {
+    clearInterval(circleTimer);
+    circleTimer = null;
+    drive(0, 0, 0);
+  } else {
+    var amp = parseFloat(document.getElementById('circAmp').value) || 0.22;
+    var period = Math.max(0.5, parseFloat(document.getElementById('circPeriod').value) || 3.0);
+    circleStart = Date.now();
+    // Re-sent well inside the robot's 400 ms drive watchdog, so closing this tab stops the robot.
+    circleTimer = setInterval(function () {
+      var th = 2 * Math.PI * ((Date.now() - circleStart) / 1000) / period;
+      cmd('drive', {f: (amp * Math.cos(th)).toFixed(3), s: (amp * Math.sin(th)).toFixed(3), t: 0});
+    }, 90);
+  }
+  var b = document.getElementById('circleBtn');
+  b.textContent = circleTimer !== null ? 'Stop circle' : 'Start circle';
+  b.className = circleTimer !== null ? 'stop' : '';
+}
+
+function stopAllTests() {
+  if (circleTimer !== null) toggleCircle();
+  cmd('stop');
+}
+
+function applyHeadingPidf() {
+  cmd('setHeadingPidf', {
+    hkp: document.getElementById('hkp').value,
+    hkd: document.getElementById('hkd').value,
+    hkf: document.getElementById('hkf').value
+  });
+  hdgDirty = false;
+}
+
+function renderHeading(h) {
+  if (!h) return;
+  document.getElementById('hdgNow').textContent = h.ok ? fmt(h.deg, 1) : '--';
+  document.getElementById('hdgTgt').textContent = fmt(h.targetDeg, 1);
+  document.getElementById('hdgLoop').textContent = h.closedLoop ? 'closed' : 'open';
+
+  var hb = document.getElementById('hdgHoldBtn');
+  if (hb) {
+    hb.textContent = h.hold ? 'right stick: heading setpoint' : 'right stick: direct rotation';
+    hb.className = h.hold ? 'primary' : '';
+  }
+  document.getElementById('hdgSrc').textContent = h.ok
+    ? 'Pinpoint IMU (works with no odometry pods)'
+    : 'no heading - check the pinpoint device';
+  if (!hdgDirty) {
+    document.getElementById('hkp').value = Number(h.kp).toFixed(4);
+    document.getElementById('hkd').value = Number(h.kd).toFixed(4);
+    document.getElementById('hkf').value = Number(h.kf).toFixed(4);
+  }
+}
+
 function applyPodPidf(i) {
   var read = function (n) {
     var e = el(podFieldId(i, n));
@@ -882,6 +1000,7 @@ function render() {
   }
 
   renderTune(state.tune);
+  renderHeading(state.heading);
   drawViz(state);
   renderVizTable(state);
   drawTrace(state.trace);
