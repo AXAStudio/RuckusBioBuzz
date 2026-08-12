@@ -13,9 +13,10 @@ it is measured rather than predicted.
 
 from __future__ import annotations
 
+import math
 import time
 
-from swervebench import Bench, parse_csv, _mean, _stdev
+from swervebench import Bench, parse_csv, _mean, _stdev, _archive
 from phase2_plant import unwrap, segments
 
 POD_COUNT = 4
@@ -35,7 +36,9 @@ def one_pulse(b: Bench, pod: int, power: float, ms: float, sign: int) -> float |
     b.cmd("recStop")
     time.sleep(0.15)
 
-    tr = parse_csv(b.rec_csv())
+    csv_text = b.rec_csv()
+    _archive(csv_text, {"label": f"pulsecal-p{pod}-{power:.3f}-{ms:.0f}ms"})
+    tr = parse_csv(csv_text)
     t = tr["t"]
     ang = unwrap(tr[f"p{pod}_wheel"])
     pwr = tr[f"p{pod}_pwr"]
@@ -59,6 +62,7 @@ def main() -> None:
     header = "  pwr    ms  " + "".join(f"  p{p}+    p{p}-  " for p in range(POD_COUNT))
     print(header)
     rates = {}
+    reps = {}
     for power in POWERS:
         for ms in DURATIONS_MS:
             cells = ""
@@ -71,6 +75,7 @@ def main() -> None:
                             vals.append(v)
                     m = _mean(vals) if vals else float("nan")
                     rates[(power, ms, pod, sign)] = m
+                    reps[(power, ms, pod, sign)] = vals
                     cells += f"{m:6.2f} "
             print(f"  {power:<5.3f} {ms:>3.0f} {cells}")
     b.stop()
@@ -86,14 +91,31 @@ def main() -> None:
         print(f"  {power:>6.3f} {cells}")
 
     print("\nSmallest reliable pulse, and what tolerance it permits:")
+    print("  Two scatters matter and they are not the same thing. Between-condition is how much")
+    print("  the pods and directions differ from each other, which a single pulse power has to")
+    print("  straddle. Within-condition is how much one pod repeats, which no calibration can")
+    print("  remove. The mechanical pass is aimed at both; report both.")
     for power in POWERS:
-        vs = [rates[(power, DURATIONS_MS[0], p, s)] for p in range(POD_COUNT) for s in (1, -1)]
-        vs = [v for v in vs if v == v]
-        if not vs:
+        cells = [(p, s) for p in range(POD_COUNT) for s in (1, -1)]
+        means = [rates[(power, DURATIONS_MS[0], p, s)] for p, s in cells]
+        means = [v for v in means if v == v]
+        withins = [
+            reps[(power, DURATIONS_MS[0], p, s)]
+            for p, s in cells
+            if len(reps.get((power, DURATIONS_MS[0], p, s), [])) > 1
+        ]
+        within_sd = _mean([_stdev(v) for v in withins]) if withins else float("nan")
+        if not means:
             continue
-        print(f"  power {power:.3f}, {DURATIONS_MS[0]:.0f} ms: travel "
-              f"{min(vs):.2f}-{max(vs):.2f} deg (mean {_mean(vs):.2f}, sd {_stdev(vs):.2f})")
-        print(f"      -> tolerance must exceed {max(vs):.2f} deg or the pod hunts")
+        print(f"\n  power {power:.3f}, {DURATIONS_MS[0]:.0f} ms:")
+        print(f"    travel {min(means):.2f}-{max(means):.2f} deg, "
+              f"mean {_mean(means):.2f}")
+        print(f"    between-condition sd {_stdev(means):.2f} deg, "
+              f"within-condition sd {within_sd:.2f} deg")
+        combined = _mean(means) + math.sqrt(
+            _stdev(means) ** 2 + (0.0 if within_sd != within_sd else within_sd ** 2)
+        )
+        print(f"    mean + combined sd = {combined:.2f} deg   (target for pulsed control: 0.50)")
 
 
 if __name__ == "__main__":
