@@ -59,11 +59,11 @@ public class SwerveDrivetrainConstants {
 
     public static SwerveConstants swerveConstants = new SwerveConstants()
             .velocity(73.9)
-            // BRING-UP SETTING: pods hold their heading when the sticks are neutral. Switch back to
-            // X_LOCK for competition, where snapping to an X to resist being pushed is what you
-            // want. During bring-up it hides what the pods are actually doing, because every
-            // momentary drop to zero input yanks all four back to the X.
-            .zeroPowerBehavior(SwerveConstants.ZeroPowerBehavior.IGNORE_ANGLE_CHANGES)
+            // Pods snap to an X with no input, so the robot resists being pushed. Note this makes
+            // any momentary drop to zero input visible as all four pods yanking to the X - which is
+            // correct behaviour, but during bring-up it hides what the pods are doing. Swap to
+            // IGNORE_ANGLE_CHANGES while diagnosing, then put this back.
+            .zeroPowerBehavior(SwerveConstants.ZeroPowerBehavior.X_LOCK)
             .useBrakeModeInTeleOp(true);
 
     // Zero offsets, analog ranges, encoder pairings and drive directions below come from a

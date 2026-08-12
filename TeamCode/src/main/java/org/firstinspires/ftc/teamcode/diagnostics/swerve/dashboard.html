@@ -362,6 +362,13 @@
           Hold a button to drive, release to stop.
         </div>
         <div class="row" id="driveButtons"></div>
+        <div class="row" style="margin-top:8px">
+          <button id="xlockBtn" onclick="cmd('setXLock')">zero input: …</button>
+          <span class="hint">
+            X-lock matches competition. Hold-heading is easier to read while tuning, because
+            X-lock yanks all four pods to the X on any momentary loss of input.
+          </span>
+        </div>
         <div class="hint" style="margin-top:6px">
           If a wheel drives backward while the others drive forward, flip that pod's
           <code>drive</code> flag on its card below.
@@ -847,6 +854,12 @@ function render() {
   document.getElementById('volt').textContent = fmt(state.voltage, 2);
   document.getElementById('hz').textContent = fmt(state.loopHz, 0);
   document.getElementById('message').textContent = state.message || '';
+
+  var xb = document.getElementById('xlockBtn');
+  if (xb) {
+    xb.textContent = state.xLock ? 'zero input: X-lock' : 'zero input: hold heading';
+    xb.className = state.xLock ? 'primary' : '';
+  }
 
   var issues = '';
   (state.errors || []).forEach(function (e) { issues += '<div class="issue">' + esc(e) + '</div>'; });

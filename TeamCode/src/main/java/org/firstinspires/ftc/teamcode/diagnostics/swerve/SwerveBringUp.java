@@ -221,6 +221,9 @@ public class SwerveBringUp extends OpMode {
     /** True once START has been pressed. Nothing is allowed to move before then. */
     private boolean started;
 
+    /** Zero-input behaviour of the bench drivetrain: X_LOCK when true, hold heading when false. */
+    private boolean xLock = true;
+
     /** How long the current jog should run before stopping itself. */
     private double jogSeconds;
 
@@ -382,7 +385,12 @@ public class SwerveBringUp extends OpMode {
 
             SwerveConstants sc = new SwerveConstants()
                     .velocity(73.9)
-                    .zeroPowerBehavior(SwerveConstants.ZeroPowerBehavior.IGNORE_ANGLE_CHANGES)
+                    // Matches competition by default so the drive test behaves like the real robot.
+                    // IGNORE_ANGLE_CHANGES is available from the dashboard because X_LOCK hides what
+                    // the pods are doing while tuning - every dropout yanks all four to the X.
+                    .zeroPowerBehavior(xLock
+                            ? SwerveConstants.ZeroPowerBehavior.X_LOCK
+                            : SwerveConstants.ZeroPowerBehavior.IGNORE_ANGLE_CHANGES)
                     .useBrakeModeInTeleOp(false)
                     // Set explicitly so they cannot drift from the visualizer's copy of the math.
                     .maxPower(SWERVE_MAX_POWER)
@@ -1189,6 +1197,13 @@ public class SwerveBringUp extends OpMode {
                 allStop();
                 message = "Pod released.";
                 break;
+            case "setXLock":
+                xLock = cmd.get("value") == null ? !xLock : Boolean.parseBoolean(cmd.get("value"));
+                podsDirty = true;
+                message = xLock
+                        ? "Zero input locks the pods into an X."
+                        : "Zero input holds pod headings (easier to read while tuning).";
+                break;
             case "drive":
                 driveForward = doubleArg(cmd, "f", 0);
                 driveStrafe = doubleArg(cmd, "s", 0);
@@ -1401,8 +1416,16 @@ public class SwerveBringUp extends OpMode {
         boolean zeroTrans = transMag < SWERVE_EPSILON;
         boolean zeroRot = Math.abs(rotation) < SWERVE_EPSILON;
 
-        // With IGNORE_ANGLE_CHANGES the pods simply hold their angle, so nothing is commanded.
         if (zeroTrans && zeroRot) {
+            if (!xLock) {
+                // Pods just hold their heading, so there is nothing being commanded to show.
+                return;
+            }
+            // X_LOCK points each pod along its own radius, which is what draws the X.
+            for (int i = 0; i < POD_COUNT; i++) {
+                targetTheta[i] = Math.atan2(cals[i].podX, -cals[i].podY);
+                targetPower[i] = 0;
+            }
             return;
         }
 
@@ -1441,6 +1464,7 @@ public class SwerveBringUp extends OpMode {
         sb.append(",\"voltage\":").append(fmt(batteryVolts()));
         sb.append(",\"busy\":").append(routineActive);
         sb.append(",\"started\":").append(started);
+        sb.append(",\"xLock\":").append(xLock);
         sb.append(",\"message\":\"").append(esc(message)).append('"');
         sb.append(",\"phase\":").append(fmt(phaseTimer.seconds()));
 
