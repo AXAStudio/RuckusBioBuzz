@@ -119,7 +119,7 @@ Work top to bottom through the guided steps on the page.
 Turns each pod one at a time while watching all four analog channels, and determines two things
 that are otherwise guesswork:
 
-- **Which encoder belongs to which pod.** The Axon Mini MK1 feedback wires are spliced two per
+- **Which encoder belongs to which pod.** The Axon MINI+ feedback wires are spliced two per
   analog port, so a swapped pair is easy to create and nearly invisible later — the robot simply
   drives wrong. A pod whose encoder is remapped shows a red `remapped → seN` badge.
 - **Servo direction.** `CoaxialPod`'s turn PID only converges if positive servo power makes the

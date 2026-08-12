@@ -101,6 +101,18 @@ public class PositionalPod implements SwervePod {
     /** Set when no representation of the demanded heading fell inside the clamped band. */
     private boolean noCandidateFault = false;
 
+    /**
+     * Whether the two endpoints have actually been measured on this servo.
+     *
+     * <p>Until they have, {@code rawDegAtPos0/1} are placeholders and the position mapping is
+     * fiction - {@link #initFromEncoder} would map the pod's real angle through a wrong line
+     * and command an arbitrary position, which in position mode means driving there at once.
+     * So an uncalibrated pod writes nothing to the servo at all. Calibration goes through
+     * {@link #setRawPositionForCalibration}, which bypasses the mapping precisely because the
+     * mapping is what it is there to establish.
+     */
+    private boolean calibrated = false;
+
     private double commandedRawDeg = Double.NaN;
     private long lastMoveNano = 0;
     private double lastDrivePower = 0;
@@ -139,6 +151,9 @@ public class PositionalPod implements SwervePod {
      * happens; it does not stop it happening, so both are wanted, not either.
      */
     public void initFromEncoder() {
+        if (!calibrated) {
+            return;
+        }
         double raw = Math.toDegrees(getRawAngleRad());
         commandedRawDeg = clampToWindow(raw);
         lastMoveNano = System.nanoTime();
@@ -151,6 +166,9 @@ public class PositionalPod implements SwervePod {
         double dt = lastMoveNano == 0 ? 0 : (now - lastMoveNano) / 1.0e9;
         lastMoveNano = now;
 
+        if (!calibrated) {
+            return;
+        }
         if (Double.isNaN(commandedRawDeg)) {
             initFromEncoder();
         }
@@ -235,6 +253,26 @@ public class PositionalPod implements SwervePod {
 
     private double clampToWindow(double rawDeg) {
         return MathFunctions.clamp(rawDeg, windowLo(), windowHi());
+    }
+
+    public void setCalibrated(boolean value) {
+        this.calibrated = value;
+    }
+
+    public boolean isCalibrated() {
+        return calibrated;
+    }
+
+    /**
+     * Calibration only: writes a servo position directly, bypassing the angle mapping.
+     *
+     * <p>The mapping needs the endpoints, and finding the endpoints needs to move the servo,
+     * so this is the one path that may command an uncalibrated pod. Callers must approach the
+     * ends incrementally and watch the encoder for a stall - the pod's mechanical range may be
+     * smaller than the servo's programmed travel, and nothing else would notice.
+     */
+    public void setRawPositionForCalibration(double position) {
+        turnServo.setPosition(MathFunctions.clamp(position, 0.0, 1.0));
     }
 
     public void setClampMarginDeg(double marginDeg) {

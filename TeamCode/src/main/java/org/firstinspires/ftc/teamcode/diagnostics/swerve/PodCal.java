@@ -127,6 +127,9 @@ public class PodCal {
     /** Degrees held back from each programmed endpoint, so a command cannot reach a stop. */
     public double clampMarginDeg = 3.0;
 
+    /** True once both endpoints have been measured on this servo. Until then it will not drive. */
+    public boolean posCalibrated = false;
+
     /**
      * Minimum change in servo power before CoaxialPod actually writes it.
      *
@@ -212,6 +215,7 @@ public class PodCal {
                     driveDirection, rawDegAtPos0, rawDegAtPos1, angleOffsetRad,
                     new Pose(podX, podY), analogMin, analogMax, encoderReversed);
             pod.setClampMarginDeg(clampMarginDeg);
+            pod.setCalibrated(posCalibrated);
             return pod;
         }
         return toCoaxialPod(hardwareMap);

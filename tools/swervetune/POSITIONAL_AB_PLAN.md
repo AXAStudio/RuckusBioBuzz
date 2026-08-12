@@ -10,8 +10,9 @@ breakaway targets stop mattering.
 
 ## Programmer settings
 
-Needs the **archive-generation programmer** (MAX+/MINI+/MICRO+). The MK2 unit is not compatible
-downward. Confirm the label reads `MINI+` and not `MINI MK2`.
+Servos are **Axon MINI+**, and the archive-generation programmer is confirmed — these exact
+units were flashed into CR mode with it during the build, so step 1 reverses an operation already
+performed once rather than attempting a new one.
 
 | setting | value | why |
 |---|---|---|
@@ -160,15 +161,40 @@ which must not fall between the baseline and the test. Reflashing is non-invasiv
 connects through the servo's existing cable — so flashing twice costs nothing and keeps the
 mechanical state identical across the comparison.
 
-1. Flash pod 0 to Servo Mode. Activate `swerve_positional_p0.xml`, restart, calibrate endpoints.
-2. `seam.py --pod 0`. If clearance is poor: re-clock, re-zero, re-calibrate, repeat.
-3. **Flash back to CR.** Restore `swerve_bringup.xml`, restart.
-4. CR baseline: `ploose.py --pod 0` and `crit8_current.py 0`.
-5. Flash to Servo Mode again, same settings. Positional config, restart, re-calibrate — endpoints
-   should match step 2.
-6. Coverage proof (automatic at build) and `probeClamp`.
-7. Positional run: exactly the two scripts from step 4. Score against pod 0's own numbers.
-8. Overload procedure — two-person, flag first.
+**Steps 1–2 are the most dangerous moment in the whole sequence** and need someone at the bench.
+The band is unmeasured, so the position mapping is fiction, and a position-mode servo drives to
+whatever it is told the instant it has power. Three things stand in the way:
+
+- `PositionalPod` **writes nothing to the servo while uncalibrated**. `initFromEncoder()` and
+  `move()` both return early. The only path that can move an uncalibrated pod is `calGoto`.
+- `calGoto` **walks** to a target position in 0.02 steps with a 0.15 s dwell, checking after each
+  that the encoder actually followed. Two consecutive steps under 1° of movement and it stops and
+  says so. The pod's mechanical range may be smaller than the servo's programmed travel, and
+  nothing else would notice the difference between measuring a limit and grinding into one.
+- Coverage proof and `probeClamp` run **after the first calibration too**, not only before the
+  test. A band that has been measured but never verified is still unverified.
+
+Expect the pod to move when PWM is first enabled: with nothing commanded the servo drives to its
+default position, roughly mid-travel. Soft Start limits how hard. Hands clear, robot on blocks.
+
+1. Flash pod 0 to Servo Mode. Activate `swerve_positional_p0.xml`, restart.
+2. **Flag before enabling the servo.** Then `calGoto` outward from mid-travel to each end,
+   `calMark` each one. `posCalibrated` goes true once the span exceeds 100°.
+3. **Gate: coverage + clamp.** `posCoverage` must be positive, and `probeClamp` must write two
+   positions strictly inside 0 and 1. Do not proceed otherwise.
+4. `seam.py --pod 0`. If clearance is poor: re-clock, re-zero, re-calibrate, repeat from 2.
+5. `bandgate.py --save 0` — records where this flash put the band.
+6. **Flash back to CR.** Restore `swerve_bringup.xml`, restart.
+7. CR baseline: `ploose.py --pod 0` and `crit8_current.py 0`.
+8. Flash to Servo Mode again, same settings. Positional config, restart, re-calibrate.
+9. **Hard gate: `bandgate.py --check 0`.** Endpoints must match the first flash within **2.0°**
+   and the span within **1.0°**. It exits non-zero and says stop if not — a band that does not
+   reproduce means the first flash's calibration does not describe the second, the seam analysis
+   is void, and every number downstream would be scored against a wrong mapping. That failure is
+   silent and would look like a result.
+10. Coverage + `probeClamp` again.
+11. Positional run: exactly the two scripts from step 7. Score against pod 0's own numbers.
+12. Overload procedure — two-person, flag first.
 
 **No refit confound.** The programmer connects through the servo's existing cable — the servo
 stays in the pod and only the lead moves off the servo power module. Nothing mechanical is
