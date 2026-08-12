@@ -87,11 +87,14 @@ class Bench:
         return [p["wheelDeg"] for p in self.state()["pods"]]
 
     def set_pidf(
-        self, kp=None, ki=None, kd=None, kf=None, cache=None, ks=None, ksband=None, scope="all"
+        self, kp=None, ki=None, kd=None, kf=None, cache=None, ks=None, ksband=None,
+        dom=None, kilimit=None, kiband=None, kireset=None, scope="all"
     ) -> dict:
         """Sets gains and returns the state afterwards, so the caller can verify they took."""
         self.cmd(
-            "setPidf", kp=kp, ki=ki, kd=kd, kf=kf, cache=cache, ks=ks, ksband=ksband, scope=scope
+            "setPidf", kp=kp, ki=ki, kd=kd, kf=kf, cache=cache, ks=ks, ksband=ksband,
+            dom=None if dom is None else str(bool(dom)).lower(),
+            kilimit=kilimit, kiband=kiband, kireset=kireset, scope=scope,
         )
         time.sleep(0.25)
         return self.state()
@@ -337,13 +340,19 @@ def score_step(
             overshoot_frac = max(y) - 1.0
             pod["overshoot_deg"] = max(0.0, overshoot_frac * abs(travelled))
             pod["overshoot_pct"] = 100.0 * max(0.0, overshoot_frac)
-            pod["rings"] = _ring_count(
-                [(v - 1.0) * abs(travelled) for v in y], ring_threshold_deg
-            )
+            residual = [(v - 1.0) * abs(travelled) for v in y]
+            pod["rings"] = _ring_count(residual, ring_threshold_deg)
+            # The same count against a threshold scaled to the step. Which one is "the" ring count
+            # is a real choice, not a detail: at a fixed 0.3 deg, a 0.4 deg wobble on a 90 deg move
+            # counts as a ring, and that is 0.4% of the travel - far below anything visible on a
+            # chart, which is how the ring counts in the repo's existing notes were arrived at.
+            # Both are reported so the comparison is explicit rather than implied.
+            pod["rings_1pct"] = _ring_count(residual, max(0.30, 0.01 * abs(travelled)))
         else:
             pod["overshoot_deg"] = 0.0
             pod["overshoot_pct"] = 0.0
             pod["rings"] = 0
+            pod["rings_1pct"] = 0
 
         for band in settle_bands:
             # One decimal always, so 1.0 keys as settle_1_0 rather than settle_1 and the column
@@ -506,7 +515,10 @@ def _rms(xs: list[float]) -> float:
 
 def _gains_of(state: dict) -> list[dict]:
     return [
-        {k: p[k] for k in ("i", "label", "kp", "ki", "kd", "kf", "cache", "ks", "ksband")}
+        {
+            k: p[k]
+            for k in ("i", "label", "kp", "ki", "kd", "kf", "cache", "ks", "ksband", "dom")
+        }
         for p in state.get("pods", [])
     ]
 

@@ -87,6 +87,14 @@ public class PodCal {
     public double kIResetDeg = 2.0;
 
     /**
+     * Take the D term from the measured pod velocity instead of from the error.
+     *
+     * <p>Removes the derivative kick a setpoint step and the 180 degree flip both produce, which is
+     * what limits how much damping the loop can carry.
+     */
+    public boolean derivativeOnMeasurement = false;
+
+    /**
      * Minimum change in servo power before CoaxialPod actually writes it.
      *
      * <p>This is a deadband on the control OUTPUT: below it the servo keeps whatever power it had,
@@ -183,6 +191,7 @@ public class PodCal {
         pod.setServoCachingThreshold(servoCaching);
         pod.setStaticFriction(kS, Math.toRadians(kSBandDeg));
         pod.setTurnIntegralSettings(kILimit, Math.toRadians(kIBandDeg), Math.toRadians(kIResetDeg));
+        pod.setDerivativeOnMeasurement(derivativeOnMeasurement);
         return pod;
     }
 

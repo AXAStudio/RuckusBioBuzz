@@ -180,6 +180,33 @@ public class PIDFController {
     }
 
     /**
+     * RUCKUS PATCH: as {@link #updateError}, but the caller supplies the derivative.
+     *
+     * <p>Differencing the error assumes the setpoint holds still. A swerve pod's does not: it steps
+     * by up to 90 degrees on a new command, and jumps discontinuously whenever {@code move()} takes
+     * the plus-or-minus 180 degree flip. Both put a spike into the D term that has nothing to do
+     * with how fast the pod is moving — at a 90 degree step and 120 Hz, {@code kD = 0.010} alone
+     * produces 1.96 of output and saturates the clamp.
+     *
+     * <p>Passing the negated measured velocity instead gives derivative-on-measurement: identical
+     * behaviour while the setpoint is constant, no kick when it moves.
+     *
+     * @param error the current error
+     * @param derivative d(error)/dt to use, normally the negated measurement velocity
+     */
+    public void updateErrorWithDerivative(double error, double derivative) {
+        previousError = this.error;
+        this.error = error;
+        long nanoTime = System.nanoTime();
+
+        deltaTimeNano = nanoTime - previousUpdateTimeNano;
+        previousUpdateTimeNano = nanoTime;
+
+        accumulateIntegral(deltaTimeNano / Math.pow(10.0, 9));
+        errorDerivative = derivative;
+    }
+
+    /**
      * This can be used to update the feedforward equation's input, if applicable.
      *
      * @param input the input into the feedforward equation.

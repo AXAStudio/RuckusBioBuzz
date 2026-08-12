@@ -47,6 +47,12 @@ public class CoaxialPod implements SwervePod {
     private double staticFrictionPower = 0.0;
     private double staticFrictionBandRad = Math.toRadians(2.0);
 
+    /** RUCKUS PATCH: see {@link #setDerivativeOnMeasurement}. */
+    private boolean derivativeOnMeasurement = false;
+    private double previousActualRad = Double.NaN;
+    private long previousMoveNano = 0;
+    private double lastMeasuredVelocityRad = 0;
+
     /**
      * @param motorName drive motor name
      * @param servoName turn servo name
@@ -232,7 +238,25 @@ public class CoaxialPod implements SwervePod {
             turnPID.updateFeedForwardInput(MathFunctions.getTurnDirection(actualRad, desiredRad));
         }
 
-        turnPID.updateError(setpointRad - actualRad);
+        // RUCKUS PATCH: measured pod velocity, wrapped correctly across the encoder's 0/2pi seam.
+        long nowNano = System.nanoTime();
+        if (!Double.isNaN(previousActualRad) && previousMoveNano != 0) {
+            double dt = (nowNano - previousMoveNano) / 1.0e9;
+            if (dt > 1e-6) {
+                lastMeasuredVelocityRad =
+                        MathFunctions.normalizeAngleSigned(actualRad - previousActualRad) / dt;
+            }
+        }
+        previousActualRad = actualRad;
+        previousMoveNano = nowNano;
+
+        if (derivativeOnMeasurement) {
+            // d(error)/dt is -d(measurement)/dt whenever the setpoint is holding still, and unlike
+            // differencing the error it does not spike when the setpoint steps or the pod flips.
+            turnPID.updateErrorWithDerivative(setpointRad - actualRad, -lastMeasuredVelocityRad);
+        } else {
+            turnPID.updateError(setpointRad - actualRad);
+        }
         double raw = turnPID.run();
 
         // RUCKUS PATCH: continuous static-friction feed-forward. A no-op while
@@ -319,6 +343,31 @@ public class CoaxialPod implements SwervePod {
     public void setStaticFriction(double power, double bandRadians) {
         this.staticFrictionPower = power;
         this.staticFrictionBandRad = bandRadians;
+    }
+
+    /**
+     * RUCKUS PATCH: take the derivative from the measurement rather than from the error.
+     *
+     * <p>Measured on this drivetrain, the pod's actuation lag is 106 ms equivalent - 41 ms of
+     * transport plus a 64 ms velocity time constant - against a loop period of 8 ms. Lead
+     * compensation is the only thing that answers a plant lag that large, so the D term has to be
+     * usable. It was not: differencing the error means a 90 degree setpoint step produces
+     * {@code kD * 1.571 rad / 0.008 s}, which saturates the output clamp at kD as small as 0.010,
+     * and the 180 degree flip does the same thing with the opposite sign.
+     *
+     * <p>A no-op at {@code false}, which is the default and every stock configuration.
+     */
+    public void setDerivativeOnMeasurement(boolean enabled) {
+        this.derivativeOnMeasurement = enabled;
+    }
+
+    public boolean isDerivativeOnMeasurement() {
+        return derivativeOnMeasurement;
+    }
+
+    /** RUCKUS PATCH: last measured pod angular velocity, rad/s. Instrumentation. */
+    public double getMeasuredVelocityRad() {
+        return lastMeasuredVelocityRad;
     }
 
     /**

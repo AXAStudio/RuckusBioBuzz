@@ -15,6 +15,7 @@ import com.qualcomm.robotcore.hardware.CRServo;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
+import com.qualcomm.robotcore.hardware.PwmControl;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
@@ -179,6 +180,17 @@ public class SwerveBringUp extends OpMode {
      * put stale numbers in the trace that look like real measurements.
      */
     private final boolean[] podMoved = new boolean[POD_COUNT];
+
+    /**
+     * The servo PWM configuration actually in force, read back from the hardware.
+     *
+     * <p>Nothing in this codebase ever called {@code setPwmRange}, so these are whatever the SDK
+     * defaults to - and the frame period in particular is a hard bound on actuation bandwidth that
+     * no amount of loop rate can improve. Reported rather than assumed.
+     */
+    private final double[] pwmLower = new double[POD_COUNT];
+    private final double[] pwmUpper = new double[POD_COUNT];
+    private final double[] pwmFrame = new double[POD_COUNT];
 
     /**
      * The four analog channels addressed by their fixed config names, independent of which pod each
@@ -545,6 +557,7 @@ public class SwerveBringUp extends OpMode {
                 servos[i] = null;
                 hwErrors.add("Missing turn servo \"" + c.servoName + "\" (pod " + i + ").");
             }
+            readPwmRange(i);
             try {
                 encoders[i] = hardwareMap.get(AnalogInput.class, c.encoderName);
             } catch (RuntimeException e) {
@@ -565,6 +578,55 @@ public class SwerveBringUp extends OpMode {
     /** True while heading is actually part of the control law rather than just a readout. */
     private boolean headingInUse() {
         return mode == Mode.HEADING || (mode == Mode.DRIVE && headingHold);
+    }
+
+    /** Reads back the PWM pulse limits and frame period the hardware is actually using. */
+    private void readPwmRange(int i) {
+        pwmLower[i] = 0;
+        pwmUpper[i] = 0;
+        pwmFrame[i] = 0;
+        if (!(servos[i] instanceof PwmControl)) {
+            return;
+        }
+        try {
+            PwmControl.PwmRange r = ((PwmControl) servos[i]).getPwmRange();
+            pwmLower[i] = r.usPulseLower;
+            pwmUpper[i] = r.usPulseUpper;
+            pwmFrame[i] = r.usFrame;
+        } catch (RuntimeException e) {
+            hwErrors.add("Could not read PWM range for " + cals[i].servoName + ": " + e.getMessage());
+        }
+    }
+
+    /**
+     * Widens (or restores) the servo PWM pulse range.
+     *
+     * <p>The range is a property of the controller port, not of the Java object, so this applies to
+     * the {@link CoaxialPod} writing to the same port as well.
+     *
+     * <p>Changing it rescales every gain: the same commanded power becomes a different pulse width
+     * and therefore a different speed. Re-tune after, not before.
+     */
+    private void applyPwmRange(double lower, double upper, double frame, boolean allPods) {
+        int from = allPods ? 0 : selected;
+        int to = allPods ? POD_COUNT : selected + 1;
+        for (int i = from; i < to; i++) {
+            if (!(servos[i] instanceof PwmControl)) {
+                message = cals[i].servoName + " does not support PWM control.";
+                continue;
+            }
+            try {
+                setServo(i, 0);
+                ((PwmControl) servos[i]).setPwmRange(
+                        new PwmControl.PwmRange(lower, upper, frame));
+                readPwmRange(i);
+            } catch (RuntimeException e) {
+                message = "setPwmRange failed on " + cals[i].servoName + ": " + e.getMessage();
+                return;
+            }
+        }
+        message = String.format(Locale.US, "PWM range %.0f-%.0f us, frame %.0f us.",
+                lower, upper, frame);
     }
 
     /** Heading comes off the Pinpoint's IMU, so it is valid with no odometry pods attached. */
@@ -1628,6 +1690,7 @@ public class SwerveBringUp extends OpMode {
                         each.kILimit = doubleArg(cmd, "kilimit", each.kILimit);
                         each.kIBandDeg = doubleArg(cmd, "kiband", each.kIBandDeg);
                         each.kIResetDeg = doubleArg(cmd, "kireset", each.kIResetDeg);
+                        each.derivativeOnMeasurement = boolArg(cmd, "dom", each.derivativeOnMeasurement);
                     }
                 } else {
                     c.kP = doubleArg(cmd, "kp", c.kP);
@@ -1640,6 +1703,7 @@ public class SwerveBringUp extends OpMode {
                     c.kILimit = doubleArg(cmd, "kilimit", c.kILimit);
                     c.kIBandDeg = doubleArg(cmd, "kiband", c.kIBandDeg);
                     c.kIResetDeg = doubleArg(cmd, "kireset", c.kIResetDeg);
+                    c.derivativeOnMeasurement = boolArg(cmd, "dom", c.derivativeOnMeasurement);
                 }
                 podsDirty = true;
                 saveCalibration();
@@ -1652,6 +1716,13 @@ public class SwerveBringUp extends OpMode {
                 podsDirty = true;
                 saveCalibration();
                 break;
+            case "setPwmRange": {
+                double lower = doubleArg(cmd, "lower", 600);
+                double upper = doubleArg(cmd, "upper", 2400);
+                double frame = doubleArg(cmd, "frame", PwmControl.PwmRange.usFrameDefault);
+                applyPwmRange(lower, upper, frame, "all".equals(cmd.get("scope")));
+                break;
+            }
             case "recStart":
                 recorder.start(cmd.get("label"));
                 message = "Recording run " + recorder.runId() + ".";
@@ -1830,6 +1901,11 @@ public class SwerveBringUp extends OpMode {
         } catch (NumberFormatException e) {
             return fallback;
         }
+    }
+
+    private static boolean boolArg(Map<String, String> cmd, String key, boolean fallback) {
+        String v = cmd.get(key);
+        return v == null ? fallback : Boolean.parseBoolean(v);
     }
 
     private static double doubleArg(Map<String, String> cmd, String key, double fallback) {
@@ -2165,6 +2241,10 @@ public class SwerveBringUp extends OpMode {
         sb.append(",\"kilimit\":").append(fmt(c.kILimit));
         sb.append(",\"kiband\":").append(fmt(c.kIBandDeg));
         sb.append(",\"kireset\":").append(fmt(c.kIResetDeg));
+        sb.append(",\"dom\":").append(c.derivativeOnMeasurement);
+        sb.append(",\"pwmLo\":").append(fmt(pwmLower[i]));
+        sb.append(",\"pwmHi\":").append(fmt(pwmUpper[i]));
+        sb.append(",\"pwmFrame\":").append(fmt(pwmFrame[i]));
         sb.append(",\"discovered\":").append(c.discoveredEncoderIndex);
         sb.append(",\"servoPower\":")
                 .append(servos[i] != null ? fmt(servos[i].getPower()) : "0");
