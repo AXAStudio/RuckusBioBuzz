@@ -152,23 +152,35 @@ public final class SwerveConfigWriter {
      * regardless of which module's {@code R} class is on the classpath.
      */
     public static Result activateBuiltIn() {
+        return activateBuiltIn(BUILT_IN_RESOURCE);
+    }
+
+    /**
+     * Activates any configuration shipped in {@code res/xml}, by resource name without extension.
+     *
+     * <p>Parameterised because there is now more than one: the positional A/B needs pod 0's port
+     * declared {@code Servo} while the rest stay continuous rotation, and with no Driver Station
+     * this is the only way to select it.
+     */
+    public static Result activateBuiltIn(String resourceName) {
         try {
             Context context = AppUtil.getInstance().getApplication();
             int resourceId = context.getResources().getIdentifier(
-                    BUILT_IN_RESOURCE, "xml", context.getPackageName());
+                    resourceName, "xml", context.getPackageName());
 
             if (resourceId == 0) {
                 return new Result(false,
                         "No built-in configuration found. Expected res/xml/"
-                                + BUILT_IN_RESOURCE + ".xml in the APK.", "");
+                                + resourceName + ".xml in the APK.", "");
             }
 
             RobotConfigFileManager manager = new RobotConfigFileManager();
-            RobotConfigFile file = new RobotConfigFile(BUILT_IN_RESOURCE, resourceId);
+            RobotConfigFile file = new RobotConfigFile(resourceName, resourceId);
             manager.setActiveConfig(file);
 
             return new Result(true,
-                    "Activated the built-in configuration. Restart the robot to apply it.", "");
+                    "Activated built-in configuration \"" + resourceName
+                            + "\". Restart the robot to apply it.", "");
         } catch (Exception e) {
             return new Result(false,
                     "Could not activate the built-in configuration: "

@@ -197,8 +197,13 @@ public class SwerveWebApp {
         boolean ok;
         String message;
 
-        if ("1".equals(p.get("builtin"))) {
-            SwerveConfigWriter.Result result = SwerveConfigWriter.activateBuiltIn();
+        if (p.get("builtin") != null) {
+            // "1" keeps the original meaning; any other value names a res/xml file,
+            // so the positional A/B config is reachable without a Driver Station.
+            String which = p.get("builtin");
+            SwerveConfigWriter.Result result = "1".equals(which)
+                    ? SwerveConfigWriter.activateBuiltIn()
+                    : SwerveConfigWriter.activateBuiltIn(which);
             ok = result.ok;
             message = result.message;
         } else if (write) {

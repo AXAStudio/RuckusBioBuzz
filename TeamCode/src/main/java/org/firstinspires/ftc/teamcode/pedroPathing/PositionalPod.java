@@ -253,6 +253,30 @@ public class PositionalPod implements SwervePod {
         return commandedRawDeg;
     }
 
+    /**
+     * Signed tracking error, radians, in the same encoder frame {@link CoaxialPod} reports.
+     *
+     * <p>Lets the same scorer read both pod types. For a positional pod this is the servo's own
+     * loop error rather than an external controller's, which is the point of the comparison.
+     */
+    public double getLastErrorRad() {
+        if (Double.isNaN(commandedRawDeg)) {
+            return 0;
+        }
+        return Math.toRadians(commandedRawDeg - Math.toDegrees(getRawAngleRad()));
+    }
+
+    /**
+     * Always NaN: a positional pod has no commanded power to report.
+     *
+     * <p>Present so the recorder can treat both pod types alike. Everything downstream that keys
+     * on servo power - resting power RMS, pulse counting - is meaningless here by construction,
+     * which is exactly why criterion 8 moved to measuring holding current instead.
+     */
+    public double getLastTurnPower() {
+        return Double.NaN;
+    }
+
     public boolean wasLastMoveFlipped() {
         return lastMoveFlipped;
     }

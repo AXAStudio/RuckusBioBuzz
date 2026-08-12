@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Swerve hardware configuration for the positional A/B: pod 0 only, on a Servo port.
+
+    Identical to swerve_bringup.xml except that ss0 is declared <Servo> rather than
+    <ContinuousRotationServo>. The SDK builds a different device class per port type, so a servo
+    reflashed to Servo Mode must have its port redeclared too - asking for a Servo on a CR port
+    throws, and vice versa. Pods 1-3 stay continuous rotation, which is what makes the A/B a
+    same-session comparison rather than a before-and-after.
+
+    Pod 0 is the pod under test because its steady-state residual, 0.76 deg, is the closest of the
+    four to the fleet mean of 0.77, and it is clean on holding current - so an improvement is
+    attributable to the mode change rather than to having fixed an outlier.
+
+    Switch back to swerve_bringup.xml when the A/B is done, or if the servo is reflashed to CR.
+-->
+<Robot type="FirstInspires-FTC">
+    <LynxUsbDevice name="Control Hub Portal" serialNumber="(embedded)" parentModuleAddress="173">
+        <LynxModule name="Control Hub" port="173">
+            <Motor name="sm0" port="0" />
+            <Motor name="sm1" port="1" />
+            <Motor name="sm2" port="2" />
+            <Motor name="sm3" port="3" />
+            <Servo name="ss0" port="0" />
+            <ContinuousRotationServo name="ss1" port="1" />
+            <ContinuousRotationServo name="ss2" port="2" />
+            <ContinuousRotationServo name="ss3" port="3" />
+            <AnalogInput name="se0" port="0" />
+            <AnalogInput name="se1" port="1" />
+            <AnalogInput name="se2" port="2" />
+            <AnalogInput name="se3" port="3" />
+            <goBILDAPinpoint name="pinpoint" port="0" bus="0" />
+        </LynxModule>
+    </LynxUsbDevice>
+</Robot>

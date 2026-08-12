@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import math
 import random
+import sys
 import time
 
 from swervebench import Bench, _mean, _stdev
@@ -49,6 +50,12 @@ def wilson_upper(k: int, n: int, z: float = 1.96) -> float:
 
 
 def main() -> None:
+    # A single pod, for the within-pod positional A/B. Scoring a reflashed pod against fleet
+    # aggregates would be invalid: the per-pod residual spread is larger than the effect.
+    only = None
+    for a in sys.argv[1:]:
+        if a.startswith("--pod"):
+            only = int(a.split("=", 1)[1]) if "=" in a else int(sys.argv[sys.argv.index(a) + 1])
     b = Bench()
     v0 = b.voltage()
     plan = [(name, i) for name in CONFIGS for i in range(TRIALS_PER_CONFIG)]
@@ -64,7 +71,10 @@ def main() -> None:
         r = b.step_trial(step_deg=STEP_DEG, hold_s=5.0,
                          label=f"ploose-{name.replace(' ', '_').replace('.', '_')}-{i+1}",
                          notes={"config": name, "order": n})
-        pods[name].extend(p for p in r["pods"] if p.get("ok"))
+        pods[name].extend(
+            p for p in r["pods"]
+            if p.get("ok") and (only is None or p["pod"] == only)
+        )
         if n % 10 == 0:
             print(f"  ... {n+1}/{len(plan)}, {r['voltage_mean']:.2f} V")
         time.sleep(0.3)

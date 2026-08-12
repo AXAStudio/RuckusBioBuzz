@@ -4,6 +4,8 @@ import com.pedropathing.control.PIDFCoefficients;
 import com.pedropathing.control.PIDFController;
 import com.pedropathing.ftc.drivetrains.CoaxialPod;
 import com.pedropathing.ftc.drivetrains.Swerve;
+import com.pedropathing.ftc.drivetrains.SwervePod;
+import org.firstinspires.ftc.teamcode.pedroPathing.PositionalPod;
 import com.pedropathing.ftc.drivetrains.SwerveConstants;
 import com.pedropathing.math.MathFunctions;
 import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
@@ -18,6 +20,7 @@ import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.PwmControl;
+import com.qualcomm.robotcore.hardware.Servo;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
@@ -153,6 +156,17 @@ public class SwerveBringUp extends OpMode {
     private final PodCal[] cals = new PodCal[POD_COUNT];
     private final DcMotorEx[] motors = new DcMotorEx[POD_COUNT];
     private final CRServo[] servos = new CRServo[POD_COUNT];
+
+    /**
+     * The same ports, when configured as positional servos instead.
+     *
+     * <p>The SDK builds a different device class per port type, so a port declared {@code Servo}
+     * cannot be fetched as a {@code CRServo} and vice versa - the get simply throws. During the
+     * positional A/B one port is Servo and three are CR, so both arrays are populated and every
+     * site uses whichever is non-null. Losing this would cost PWM enable/disable on exactly the
+     * pod under test, which is what the holding-current measurement toggles.
+     */
+    private final Servo[] posServos = new Servo[POD_COUNT];
     private final AnalogInput[] encoders = new AnalogInput[POD_COUNT];
     private final double[] volts = new double[POD_COUNT];
 
@@ -224,7 +238,7 @@ public class SwerveBringUp extends OpMode {
     private final List<String> hwErrors = new ArrayList<>();
     private final List<String> scanNotes = new ArrayList<>();
 
-    private CoaxialPod[] pods;
+    private SwervePod[] pods;
     private Swerve swerve;
     private boolean podsDirty = true;
     private String podBuildError;
@@ -547,10 +561,19 @@ public class SwerveBringUp extends OpMode {
                     ? Double.NaN
                     : Math.toDegrees(normalizeTwoPi(targetTheta[i]));
 
-            if (podMoved[i] && pods != null) {
-                recError[i] = Math.toDegrees(pods[i].getLastErrorRad());
-                recFlipped[i] = pods[i].wasLastMoveFlipped();
-                servoCmd[i] = pods[i].getLastTurnPower();
+            if (podMoved[i] && pods != null && pods[i] instanceof CoaxialPod) {
+                CoaxialPod cp = (CoaxialPod) pods[i];
+                recError[i] = Math.toDegrees(cp.getLastErrorRad());
+                recFlipped[i] = cp.wasLastMoveFlipped();
+                servoCmd[i] = cp.getLastTurnPower();
+            } else if (podMoved[i] && pods != null && pods[i] instanceof PositionalPod) {
+                // Same error convention so one scorer reads both. Turn power is NaN by
+                // construction - a positional pod has none - and everything downstream that keys
+                // on it is meaningless here, which is why criterion 8 moved to holding current.
+                PositionalPod pp = (PositionalPod) pods[i];
+                recError[i] = Math.toDegrees(pp.getLastErrorRad());
+                recFlipped[i] = pp.wasLastMoveFlipped();
+                servoCmd[i] = pp.getLastTurnPower();
             } else {
                 recError[i] = Double.NaN;
                 recFlipped[i] = false;
@@ -636,15 +659,16 @@ public class SwerveBringUp extends OpMode {
      * other draw on the rail cancelling out.
      */
     private void applyPwmEnable(int i, boolean enabled) {
-        if (!(servos[i] instanceof PwmControl)) {
+        Object dev = servos[i] != null ? servos[i] : posServos[i];
+        if (!(dev instanceof PwmControl)) {
             message = cals[i].servoName + " does not support PWM control.";
             return;
         }
         if (enabled) {
-            ((PwmControl) servos[i]).setPwmEnable();
+            ((PwmControl) dev).setPwmEnable();
         } else {
             setServo(i, 0);
-            ((PwmControl) servos[i]).setPwmDisable();
+            ((PwmControl) dev).setPwmDisable();
         }
         message = cals[i].servoName + " PWM " + (enabled ? "enabled" : "disabled");
     }
@@ -654,11 +678,12 @@ public class SwerveBringUp extends OpMode {
         pwmLower[i] = 0;
         pwmUpper[i] = 0;
         pwmFrame[i] = 0;
-        if (!(servos[i] instanceof PwmControl)) {
+        Object dev = servos[i] != null ? servos[i] : posServos[i];
+        if (!(dev instanceof PwmControl)) {
             return;
         }
         try {
-            PwmControl.PwmRange r = ((PwmControl) servos[i]).getPwmRange();
+            PwmControl.PwmRange r = ((PwmControl) dev).getPwmRange();
             pwmLower[i] = r.usPulseLower;
             pwmUpper[i] = r.usPulseUpper;
             pwmFrame[i] = r.usFrame;
@@ -680,13 +705,14 @@ public class SwerveBringUp extends OpMode {
         int from = allPods ? 0 : selected;
         int to = allPods ? POD_COUNT : selected + 1;
         for (int i = from; i < to; i++) {
-            if (!(servos[i] instanceof PwmControl)) {
+            Object dev = servos[i] != null ? servos[i] : posServos[i];
+            if (!(dev instanceof PwmControl)) {
                 message = cals[i].servoName + " does not support PWM control.";
                 continue;
             }
             try {
                 setServo(i, 0);
-                ((PwmControl) servos[i]).setPwmRange(
+                ((PwmControl) dev).setPwmRange(
                         new PwmControl.PwmRange(lower, upper, frame));
                 readPwmRange(i);
             } catch (RuntimeException e) {
@@ -753,9 +779,16 @@ public class SwerveBringUp extends OpMode {
     private void rebuildPods() {
         podBuildError = null;
         try {
-            CoaxialPod[] built = new CoaxialPod[POD_COUNT];
+            SwervePod[] built = new SwervePod[POD_COUNT];
             for (int i = 0; i < POD_COUNT; i++) {
-                built[i] = cals[i].toCoaxialPod(hardwareMap);
+                built[i] = cals[i].toSwervePod(hardwareMap);
+            }
+            for (SwervePod pod : built) {
+                if (pod instanceof PositionalPod) {
+                    // Before anything commands it: a position-mode servo drives to whatever it is
+                    // told the instant it has power.
+                    ((PositionalPod) pod).initFromEncoder();
+                }
             }
             pods = built;
 
@@ -1797,6 +1830,34 @@ public class SwerveBringUp extends OpMode {
                 podsDirty = true;
                 saveCalibration();
                 break;
+            case "setPositional": {
+                cals[selected].positional = boolArg(cmd, "value", !cals[selected].positional);
+                cals[selected].rawDegAtPos0 = doubleArg(cmd, "raw0", cals[selected].rawDegAtPos0);
+                cals[selected].rawDegAtPos1 = doubleArg(cmd, "raw1", cals[selected].rawDegAtPos1);
+                podsDirty = true;
+                saveCalibration();
+                message = "Pod " + selected + (cals[selected].positional
+                        ? " is positional. Its port must be configured as Servo, not "
+                          + "ContinuousRotationServo."
+                        : " is back to continuous rotation.");
+                break;
+            }
+            case "calPositional": {
+                // Drives the servo to each end of its travel and records what the encoder reads
+                // there. Two points is the whole calibration: shaft and pod are 1:1 and the
+                // encoder is on that shaft, so between them the relationship is a straight line.
+                if (posServos[selected] == null) {
+                    message = "Pod " + selected + " is not on a Servo-configured port.";
+                    break;
+                }
+                setMode(Mode.IDLE);
+                posServos[selected].setPosition(doubleArg(cmd, "pos", 0.0));
+                message = String.format(Locale.US,
+                        "Pod %d driven to position %.3f. Wait for it to stop, read rawDeg, then "
+                                + "send setPositional with raw0/raw1.",
+                        selected, doubleArg(cmd, "pos", 0.0));
+                break;
+            }
             case "setPwmEnable":
                 applyPwmEnable(selected, Boolean.parseBoolean(cmd.get("value")));
                 break;
@@ -2335,6 +2396,9 @@ public class SwerveBringUp extends OpMode {
         sb.append(",\"ppow\":").append(fmt(c.pulsePower));
         sb.append(",\"pms\":").append(fmt(c.pulseMs));
         sb.append(",\"pcoast\":").append(fmt(c.pulseCoastMs));
+        sb.append(",\"positional\":").append(c.positional);
+        sb.append(",\"raw0\":").append(fmt(c.rawDegAtPos0));
+        sb.append(",\"raw1\":").append(fmt(c.rawDegAtPos1));
         sb.append(",\"pwmLo\":").append(fmt(pwmLower[i]));
         sb.append(",\"pwmHi\":").append(fmt(pwmUpper[i]));
         sb.append(",\"pwmFrame\":").append(fmt(pwmFrame[i]));

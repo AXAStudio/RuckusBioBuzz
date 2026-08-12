@@ -2,6 +2,8 @@ package org.firstinspires.ftc.teamcode.diagnostics.swerve;
 
 import com.pedropathing.control.PIDFCoefficients;
 import com.pedropathing.ftc.drivetrains.CoaxialPod;
+import com.pedropathing.ftc.drivetrains.SwervePod;
+import org.firstinspires.ftc.teamcode.pedroPathing.PositionalPod;
 import com.pedropathing.geometry.Pose;
 import com.qualcomm.robotcore.hardware.CRServo;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
@@ -110,6 +112,19 @@ public class PodCal {
     public double pulseCoastMs = 100.0;
 
     /**
+     * Run this pod through {@link PositionalPod} instead, letting the servo close its own loop.
+     *
+     * <p>Requires the servo to have been reflashed to Servo Mode AND its port reconfigured from
+     * {@code ContinuousRotationServo} to {@code Servo} - the SDK builds a different device class
+     * per port type, and asking for a Servo on a CR port throws.
+     */
+    public boolean positional = false;
+
+    /** Raw encoder angle, degrees, at servo position 0.0 and 1.0. The whole positional calibration. */
+    public double rawDegAtPos0 = 0.0;
+    public double rawDegAtPos1 = 200.0;
+
+    /**
      * Minimum change in servo power before CoaxialPod actually writes it.
      *
      * <p>This is a deadband on the control OUTPUT: below it the servo keeps whatever power it had,
@@ -185,6 +200,16 @@ public class PodCal {
 
         label = c;
         return true;
+    }
+
+    /** Builds whichever pod type this calibration asks for. */
+    public SwervePod toSwervePod(HardwareMap hardwareMap) {
+        if (positional) {
+            return new PositionalPod(hardwareMap, motorName, servoName, encoderName,
+                    driveDirection, rawDegAtPos0, rawDegAtPos1, angleOffsetRad,
+                    new Pose(podX, podY), analogMin, analogMax, encoderReversed);
+        }
+        return toCoaxialPod(hardwareMap);
     }
 
     /** Builds a real Pedro pod from the current calibration. */

@@ -93,8 +93,10 @@ Stated relatively because the old 0.025 is a CR number that means nothing in pos
 | 2 | **+4 ± 2 mA** | elevated at 2σ |
 | 3 | +3 ± 2 mA | pass |
 
-Pod 2 being the only elevated one is consistent with it also having the worst residual (1.06°) and
-the worst post-settle peak-to-peak (1.24°) — it is working hardest at rest.
+Pod 2 being the only elevated one is *consistent with* it also having the worst residual (1.06°)
+and the worst post-settle peak-to-peak (1.24°). It is a pre-registered directional test rather than
+a fishing result, but it is 2σ off a single 30 s window, so it should not carry weight until it is
+re-run with longer integration. Treat it as a hypothesis, not a finding.
 
 Standard error is ~2 mA against a per-servo effect of a few mA, so the long dwell is load-bearing;
 do not shorten it. Keep the audible check as a qualitative gate, not the measurement. If a future
@@ -122,12 +124,14 @@ accessibility is a fair tiebreak.
 3. Re-run exactly those two. Score positional against pod 0's own numbers from step 1, never
    against the fleet.
 
-**One confound to check first.** If reflashing requires removing the servo from the pod, the refit
-itself disturbs horn seating, spline engagement and preload — and that lands in the before/after
-alongside the mode change. If the programmer connects inline on the servo cable, unplug at the hub
-only and there is no disturbance. If it does need removal, insert a control: remove and refit
-**without** reflashing, re-baseline, and only then reflash. One extra cycle, and it separates the
-refit from the mode change.
+**No refit confound.** The programmer connects through the servo's existing cable — the servo
+stays in the pod and only the lead moves off the servo power module. Nothing mechanical is
+disturbed, so no remove-and-refit control run is needed.
+
+**Port type must change too.** A servo reflashed to Servo Mode needs its port redeclared: the SDK
+builds a different device class per port type and asking for a `Servo` on a CR port throws.
+Activate `swerve_positional_p0.xml` (`GET /swerve/config?builtin=swerve_positional_p0`) and restart
+the robot. `swerve_bringup.xml` goes back when the A/B is done.
 
 ## What to measure
 
