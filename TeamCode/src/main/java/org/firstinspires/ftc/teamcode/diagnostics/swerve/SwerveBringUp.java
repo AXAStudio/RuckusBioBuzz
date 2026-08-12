@@ -471,13 +471,6 @@ public class SwerveBringUp extends OpMode {
         cals[2] = new PodCal(2, "LF", dtLength, dtWidth);
         cals[3] = new PodCal(3, "LB", -dtLength, dtWidth);
 
-        // Guard, not a review: PodCal's serialiser has fallen behind its fields more than once,
-        // and nothing fails when a field is simply never written. Reflection means a field added
-        // later is covered without anyone remembering to cover it.
-        for (String gap : PodCal.roundTripGaps()) {
-            hwErrors.add("PodCal does not persist: " + gap);
-        }
-
         loadCalibration();
 
         for (LynxModule module : hardwareMap.getAll(LynxModule.class)) {
@@ -489,6 +482,14 @@ public class SwerveBringUp extends OpMode {
         }
 
         acquireHardware();
+
+        // After acquireHardware, not before: its first act is hwErrors.clear(), so anything
+        // reported earlier was being thrown away unread. Guard, not a review - PodCal's serialiser
+        // has fallen behind its fields more than once, and nothing fails when a field is simply
+        // never written.
+        for (String gap : PodCal.roundTripGaps()) {
+            hwErrors.add("PodCal does not persist: " + gap);
+        }
 
         try {
             pinpoint = hardwareMap.get(GoBildaPinpointDriver.class, "pinpoint");
@@ -636,13 +637,40 @@ public class SwerveBringUp extends OpMode {
                 motors[i] = null;
                 hwErrors.add("Missing drive motor \"" + c.motorName + "\" (pod " + i + ").");
             }
+            // A port declared Servo cannot be fetched as a CRServo and vice versa - the SDK
+            // builds a different device class per port type and the get simply throws. During the
+            // positional A/B one port is Servo and three are CR, so try both and keep whichever
+            // answers; every site downstream uses the one that is non-null.
+            servos[i] = null;
+            posServos[i] = null;
+            String crFailure = null;
             try {
                 servos[i] = hardwareMap.get(CRServo.class, c.servoName);
                 servos[i].setDirection(c.servoDirection);
                 setServo(i, 0);
             } catch (RuntimeException e) {
-                servos[i] = null;
-                hwErrors.add("Missing turn servo \"" + c.servoName + "\" (pod " + i + ").");
+                crFailure = e.getMessage();
+            }
+            if (servos[i] == null) {
+                try {
+                    posServos[i] = hardwareMap.get(Servo.class, c.servoName);
+                } catch (RuntimeException e) {
+                    // Name both attempts. "Missing" was misleading when the device was present
+                    // and simply of the other type, which cost a bench session to work out.
+                    hwErrors.add("Turn servo \"" + c.servoName + "\" (pod " + i
+                            + ") is neither a ContinuousRotationServo nor a Servo. As CRServo: "
+                            + crFailure + ". As Servo: " + e.getMessage());
+                }
+            }
+            if (cals[i].positional && posServos[i] == null) {
+                hwErrors.add("Pod " + i + " is configured positional but \"" + c.servoName
+                        + "\" did not resolve as a Servo. Its port must be declared <Servo> in "
+                        + "the active hardware configuration, not <ContinuousRotationServo>.");
+            }
+            if (!cals[i].positional && servos[i] == null && posServos[i] != null) {
+                hwErrors.add("Pod " + i + " is configured continuous-rotation but \"" + c.servoName
+                        + "\" resolved as a positional Servo. Set it positional, or change the "
+                        + "port back to <ContinuousRotationServo>.");
             }
             readPwmRange(i);
             try {
