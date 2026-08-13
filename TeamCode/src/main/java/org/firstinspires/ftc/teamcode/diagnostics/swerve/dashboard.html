@@ -311,17 +311,46 @@
         <div class="title">Tune the turn PIDF</div>
         <div class="desc">
           Commands a step on the selected pod using the real <code>CoaxialPod</code> control path, so
-          whatever you tune here transfers directly to competition code. Raise <code>kF</code> until
-          the pod just overcomes stiction, then <code>kP</code> for speed, then <code>kD</code> to
-          damp overshoot.
+          whatever you tune here transfers directly to competition code. Set <code>kS</code> to the
+          measured breakaway first, then <code>kP</code> for speed, then <code>kD</code> to damp
+          overshoot. <b>Do not tune <code>kF</code></b> - <code>CoaxialPod</code> feeds the PIDF a
+          sign, not an error, so the F term is a &plusmn;kF relay rather than a feed-forward. It
+          ships at 0 and <code>kS</code> replaces it.
         </div>
         <div class="row">
           <label class="inline">kP <input type="number" id="kp" step="0.01"></label>
           <label class="inline">kI <input type="number" id="ki" step="0.005"></label>
           <label class="inline">kD <input type="number" id="kd" step="0.001"></label>
           <label class="inline">kF <input type="number" id="kf" step="0.001"></label>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <label class="inline">kS <input type="number" id="ks" step="0.005"></label>
+          <label class="inline">kS band&deg; <input type="number" id="ksband" step="0.5"></label>
+          <label class="inline">cache <input type="number" id="cache" step="0.005"></label>
+          <label class="inline" title="Derivative on measurement instead of on error">
+            <input type="checkbox" id="dom"> D on measurement</label>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <label class="inline">kI limit <input type="number" id="kilimit" step="0.01"></label>
+          <label class="inline">kI band&deg; <input type="number" id="kiband" step="0.5"></label>
+          <label class="inline">kI reset&deg; <input type="number" id="kireset" step="0.5"></label>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <label class="inline" title="Shelved - see tools/swervetune/POSITIONAL_SHELVED.md">
+            <input type="checkbox" id="pulsed"> pulsed</label>
+          <label class="inline">band&deg; <input type="number" id="pband" step="0.5"></label>
+          <label class="inline">tol&deg; <input type="number" id="ptol" step="0.1"></label>
+          <label class="inline">power <input type="number" id="ppow" step="0.005"></label>
+          <label class="inline">on ms <input type="number" id="pms" step="1"></label>
+          <label class="inline">coast ms <input type="number" id="pcoast" step="1"></label>
+        </div>
+        <div class="row" style="margin-top:8px">
           <button onclick="applyPidf(false)">Apply to pod</button>
           <button onclick="applyPidf(true)">Apply to all</button>
+          <span class="hint">
+            Values follow the selected pod and stop updating once you start typing.
+            The pulsed row is a shelved experiment and is a no-op while unchecked.
+          </span>
         </div>
         <div class="row" style="margin-top:8px">
           <button class="primary" onclick="cmd('pidStep', {deg: 0})">Step 0&deg;</button>
@@ -515,14 +544,29 @@ function driveStop() {
 window.addEventListener('mouseup', driveStop);
 window.addEventListener('blur', driveStop);
 
+// Every tunable CoaxialPod exposes, so a manual session never has to drop to the Python tool
+// and never has to guess which coefficient the robot is actually holding. The backend already
+// accepted all of these; only the UI was short.
+var PIDF_NUM = ['kp', 'ki', 'kd', 'kf', 'ks', 'ksband', 'cache',
+                'kilimit', 'kiband', 'kireset',
+                'pband', 'ptol', 'ppow', 'pms', 'pcoast'];
+var PIDF_BOOL = ['dom', 'pulsed'];
+
+// Input ids match the robot-side field names in the pod state, so no id-to-key mapping is needed.
+
 function applyPidf(all) {
-  cmd('setPidf', {
-    kp: document.getElementById('kp').value,
-    ki: document.getElementById('ki').value,
-    kd: document.getElementById('kd').value,
-    kf: document.getElementById('kf').value,
-    scope: all ? 'all' : 'one'
+  var p = {scope: all ? 'all' : 'one'};
+  PIDF_NUM.forEach(function (n) {
+    var e = document.getElementById(n);
+    // Skip empty boxes. doubleArg already falls back on an unparseable value, so this is belt and
+    // braces rather than a fix - but it keeps "left blank" and "typed a number" visibly distinct.
+    if (e && e.value !== '') p[n] = e.value;
   });
+  PIDF_BOOL.forEach(function (n) {
+    var e = document.getElementById(n);
+    if (e) p[n] = e.checked ? 'true' : 'false';
+  });
+  cmd('setPidf', p);
   pidfDirty = false;
 }
 
@@ -548,9 +592,14 @@ function copyExport() {
   try { document.execCommand('copy'); } catch (e) { /* user can copy manually */ }
 }
 
-// Mark the PIDF inputs dirty so live polling does not overwrite what is being typed.
-['kp', 'ki', 'kd', 'kf'].forEach(function (id) {
-  document.getElementById(id).addEventListener('input', function () { pidfDirty = true; });
+// Mark the PIDF inputs dirty so live polling does not overwrite what is being typed. Checkboxes
+// count too - a toggle that got reverted by the next poll before Apply was pressed would look
+// like the robot rejecting the change.
+PIDF_NUM.concat(PIDF_BOOL).forEach(function (id) {
+  var e = document.getElementById(id);
+  if (!e) return;
+  e.addEventListener('input', function () { pidfDirty = true; });
+  e.addEventListener('change', function () { pidfDirty = true; });
 });
 
 // ---------------------------------------------------------------- gamepad
@@ -989,10 +1038,16 @@ function render() {
 
   var cur = pods[selected];
   if (cur && !pidfDirty) {
-    document.getElementById('kp').value = Number(cur.kp).toFixed(4);
-    document.getElementById('ki').value = Number(cur.ki).toFixed(4);
-    document.getElementById('kd').value = Number(cur.kd).toFixed(4);
-    document.getElementById('kf').value = Number(cur.kf).toFixed(4);
+    PIDF_NUM.forEach(function (n) {
+      var e = document.getElementById(n);
+      // Only mirror fields the robot actually reports. Blanking an input because a key was
+      // missing would read as "this coefficient is unset" when it is simply not published.
+      if (e && cur[n] !== undefined && cur[n] !== null) e.value = Number(cur[n]).toFixed(4);
+    });
+    PIDF_BOOL.forEach(function (n) {
+      var e = document.getElementById(n);
+      if (e && cur[n] !== undefined && cur[n] !== null) e.checked = !!cur[n];
+    });
   }
 
   if (state.export && document.getElementById('export').value !== state.export) {
