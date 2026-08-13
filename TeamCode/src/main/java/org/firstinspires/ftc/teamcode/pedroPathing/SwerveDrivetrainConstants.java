@@ -149,12 +149,19 @@ public class SwerveDrivetrainConstants {
     // of peak-to-peak rather than the usual 0.23 deg - that bimodality is gain-controllable and
     // is the open problem. Full trial log and traces in tools/swervetune.
 
-    private static double turnKP = 0.200;
-    private static double turnKD = 0.022;
+    // Public so the bring-up tool can read them and report any divergence from its own working
+    // copy. The tool is supposed to be able to hold different gains - that is what it is for - but
+    // it should never be possible to measure at gains nobody intended, which is what happened when
+    // its calibration file sat at kD 0.010 while this file said 0.022.
+    public static final double turnKP = 0.200;
+    public static final double turnKD = 0.022;
 
     /** Static-friction feed-forward, set to the measured breakaway. Replaces the kF relay. */
-    private static double turnKS = 0.035;
-    private static double turnKSBandDeg = 2.0;
+    public static final double turnKS = 0.035;
+    public static final double turnKSBandDeg = 2.0;
+
+    /** Servo output caching threshold applied to every pod. */
+    public static final double turnServoCaching = 0.01;
 
     private static double dtLength = 146.420; //distance from robot center to front/back pod center
     private static double dtWidth = 154.240; // distance from robot center to left/right pod center
@@ -168,7 +175,7 @@ public class SwerveDrivetrainConstants {
                 DcMotorSimple.Direction.REVERSE, Math.toRadians(338.2), new Pose(dtLength, dtWidth),
                 0.136, 3.336, false);
         pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(0.01);
+        pod.setServoCachingThreshold(turnServoCaching);
         pod.setStaticFriction(turnKS, Math.toRadians(turnKSBandDeg));
         return pod;
     }
@@ -179,7 +186,7 @@ public class SwerveDrivetrainConstants {
                 DcMotorSimple.Direction.REVERSE, Math.toRadians(323.3), new Pose(dtLength, -dtWidth),
                 0.145, 3.350, false);
         pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(0.01);
+        pod.setServoCachingThreshold(turnServoCaching);
         pod.setStaticFriction(turnKS, Math.toRadians(turnKSBandDeg));
         return pod;
     }
@@ -190,7 +197,7 @@ public class SwerveDrivetrainConstants {
                 DcMotorSimple.Direction.REVERSE, Math.toRadians(62.2), new Pose(-dtLength, dtWidth),
                 0.266, 3.467, false);
         pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(0.01);
+        pod.setServoCachingThreshold(turnServoCaching);
         pod.setStaticFriction(turnKS, Math.toRadians(turnKSBandDeg));
         return pod;
     }
@@ -201,7 +208,7 @@ public class SwerveDrivetrainConstants {
                 DcMotorSimple.Direction.REVERSE, Math.toRadians(32.0), new Pose(-dtLength, -dtWidth),
                 0.075, 3.247, false);
         pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(0.01);
+        pod.setServoCachingThreshold(turnServoCaching);
         pod.setStaticFriction(turnKS, Math.toRadians(turnKSBandDeg));
         return pod;
     }

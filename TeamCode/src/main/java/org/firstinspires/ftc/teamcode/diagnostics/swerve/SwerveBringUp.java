@@ -6,6 +6,7 @@ import com.pedropathing.ftc.drivetrains.CoaxialPod;
 import com.pedropathing.ftc.drivetrains.Swerve;
 import com.pedropathing.ftc.drivetrains.SwervePod;
 import org.firstinspires.ftc.teamcode.pedroPathing.PositionalPod;
+import org.firstinspires.ftc.teamcode.pedroPathing.SwerveDrivetrainConstants;
 import com.pedropathing.ftc.drivetrains.SwerveConstants;
 import com.pedropathing.math.MathFunctions;
 import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
@@ -311,6 +312,42 @@ public class SwerveBringUp extends OpMode {
     private double msHeading;
     private double msMode;
     private double msPublish;
+
+    /**
+     * Turn gains this tool is holding that differ from the ones the robot actually ships with.
+     *
+     * <p>Divergence is legitimate - holding non-shipped gains is what a tuning tool is for - so
+     * this reports rather than corrects. What is not legitimate is measuring at gains nobody
+     * intended, which is exactly what happened when the calibration file sat at kD 0.010 while
+     * SwerveDrivetrainConstants said 0.022: every number taken through the tool in that window was
+     * at a configuration no one had chosen, and nothing said so.
+     *
+     * @return one description per differing pod and coefficient, empty when they agree
+     */
+    private List<String> gainDivergences() {
+        List<String> out = new ArrayList<>();
+        for (int i = 0; i < POD_COUNT; i++) {
+            PodCal c = cals[i];
+            appendIfDifferent(out, i, "kP", c.kP, SwerveDrivetrainConstants.turnKP);
+            appendIfDifferent(out, i, "kD", c.kD, SwerveDrivetrainConstants.turnKD);
+            appendIfDifferent(out, i, "kS", c.kS, SwerveDrivetrainConstants.turnKS);
+            appendIfDifferent(out, i, "kS band", c.kSBandDeg, SwerveDrivetrainConstants.turnKSBandDeg);
+            appendIfDifferent(out, i, "cache", c.servoCaching,
+                    SwerveDrivetrainConstants.turnServoCaching);
+            appendIfDifferent(out, i, "kF", c.kF, 0.0);
+            appendIfDifferent(out, i, "kI", c.kI, 0.0);
+        }
+        return out;
+    }
+
+    private static void appendIfDifferent(List<String> out, int pod, String name,
+            double tool, double shipped) {
+        if (Math.abs(tool - shipped) > 1e-9) {
+            out.add(String.format(Locale.US,
+                    "pod %d %s: tool %.4f, shipped %.4f - measurements here are NOT at the "
+                            + "competition configuration", pod, name, tool, shipped));
+        }
+    }
 
     private static double smooth(double previous, long nanos) {
         return 0.9 * previous + 0.1 * (nanos / 1.0e6);
@@ -2578,14 +2615,33 @@ public class SwerveBringUp extends OpMode {
         }
         sb.append(']');
 
+        // Hardware faults first, then any divergence from the shipped gains. The divergence
+        // entries are recomputed every publish rather than stored, so they clear themselves the
+        // moment the gains match again.
         sb.append(",\"errors\":[");
-        for (int i = 0; i < hwErrors.size(); i++) {
-            if (i > 0) {
+        boolean firstError = true;
+        for (String e : hwErrors) {
+            if (!firstError) {
                 sb.append(',');
             }
-            sb.append('"').append(esc(hwErrors.get(i))).append('"');
+            sb.append('"').append(esc(e)).append('"');
+            firstError = false;
+        }
+        for (String d : gainDivergences()) {
+            if (!firstError) {
+                sb.append(',');
+            }
+            sb.append('"').append(esc(d)).append('"');
+            firstError = false;
         }
         sb.append(']');
+
+        sb.append(",\"shipped\":{\"kp\":").append(fmt(SwerveDrivetrainConstants.turnKP))
+                .append(",\"kd\":").append(fmt(SwerveDrivetrainConstants.turnKD))
+                .append(",\"ks\":").append(fmt(SwerveDrivetrainConstants.turnKS))
+                .append(",\"ksband\":").append(fmt(SwerveDrivetrainConstants.turnKSBandDeg))
+                .append(",\"cache\":").append(fmt(SwerveDrivetrainConstants.turnServoCaching))
+                .append('}');
 
         sb.append(",\"notes\":[");
         for (int i = 0; i < scanNotes.size(); i++) {
