@@ -44,12 +44,31 @@ class BenchError(RuntimeError):
     pass
 
 
-def _get(path: str, params: dict[str, Any] | None = None, timeout: float = 5.0) -> str:
+# The hub's WiFi drops for a second or two several times an hour. Without this, a drop anywhere
+# inside a twenty-minute sweep destroys the whole run - which happened repeatedly on 2026-08-13.
+# Retrying is safe for the endpoints here: /state is a read, and the commands that matter are
+# idempotent (setPidf writes a value, recStart resets a buffer, zeroAll recaptures the same
+# reading). rawServo is the one exception - a duplicate restarts its dwell timer and can bleed one
+# power level into the next - so its caller passes retries=1.
+RETRY_ATTEMPTS = 6
+RETRY_SLEEP_S = 0.75
+
+
+def _get(path: str, params: dict[str, Any] | None = None, timeout: float = 5.0,
+         retries: int = RETRY_ATTEMPTS) -> str:
     url = BASE + path
     if params:
         url += "?" + urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
-    with urllib.request.urlopen(url, timeout=timeout) as resp:
-        return resp.read().decode("utf-8", "replace")
+    last = None
+    for attempt in range(max(1, retries)):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                return resp.read().decode("utf-8", "replace")
+        except Exception as exc:  # noqa: BLE001 - transport failures are what we are retrying
+            last = exc
+            if attempt < retries - 1:
+                time.sleep(RETRY_SLEEP_S)
+    raise BenchError(f"{path} failed after {retries} attempts: {last}") from last
 
 
 class Bench:
@@ -71,8 +90,8 @@ class Bench:
     def state(self) -> dict:
         return json.loads(_get("/state"))
 
-    def cmd(self, action: str, **params) -> None:
-        _get("/cmd", {"action": action, **params})
+    def cmd(self, action: str, retries: int = RETRY_ATTEMPTS, **params) -> None:
+        _get("/cmd", {"action": action, **params}, retries=retries)
 
     def rec_csv(self) -> str:
         # Big payload; the hub takes a moment to render 3000 rows.
@@ -178,7 +197,10 @@ class Bench:
         self.cmd("recStart", label=label or f"staircase_p{pod}")
         time.sleep(0.2)
         for p in powers:
-            self.cmd("rawServo", pow=p, sec=dwell_s, pod=pod)
+            # retries=1: a duplicate rawServo restarts the dwell timer and can bleed one power
+            # level into the next. Losing a point to a dropped packet is recoverable; silently
+            # merging two dwells is not.
+            self.cmd("rawServo", retries=1, pow=p, sec=dwell_s, pod=pod)
             time.sleep(dwell_s + gap_s)
         self.cmd("recStop")
         time.sleep(0.2)

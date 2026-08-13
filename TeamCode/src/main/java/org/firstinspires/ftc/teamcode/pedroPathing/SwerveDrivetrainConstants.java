@@ -89,9 +89,44 @@ public class SwerveDrivetrainConstants {
     // Swerve Bring-Up session on 2026-08-10, verified driving.
     //
     // ---------------------------------------------------------------------------------------
-    // TURN GAINS: INTERIM, NOT FINAL. Updated 2026-08-12. Off the ground only - NOT yet
-    // validated on carpet, at competition weight, or on a drained battery.
+    // TURN GAINS: retuned 2026-08-13 on the FTC game tiles after a pod repair and lubrication
+    // of all four steering paths. Still NOT validated on a drained battery (criterion 12).
     // ---------------------------------------------------------------------------------------
+    //
+    // Everything below the 2026-08-12 block was measured before the mechanical work and no
+    // longer describes this robot's friction. Kept because the negative results are still
+    // valid and re-running them would cost days.
+    //
+    // Post-lube retune, all on the tiles at 12.9-13.6 V, randomised and interleaved:
+    //
+    //   kD: 0.022 confirmed. At kS 0.050, raising kD made things worse, not better -
+    //       4/31 loose at 0.022, 7/30 at 0.030, 24/32 at 0.040. Damping does not buy back
+    //       the wide mode.
+    //   kS: 0.035 confirmed against 0.050 at n=60/53, Fisher exact p=0.025 - 1.7% loose
+    //       against 13.2%, worst peak-to-peak 7.98 deg against 47.67. This REVERSES the
+    //       pre-lube result where 0.045 beat 0.035 on the same tiles. The story is
+    //       consistent: lubrication cut kinetic friction, so a kS sized to static breakaway
+    //       (measured 0.050 on tiles) now overdrives the pod once it is moving. kS wants to
+    //       track the kinetic regime, which is why the measured breakaway is the wrong target.
+    //   kP: 0.200 -> 0.320. Residual falls monotonically and unambiguously across 534
+    //       pod-runs: 3.24 / 2.64 / 1.86 / 1.09 deg mean at kP 0.200 / 0.230 / 0.260 / 0.320.
+    //
+    // The reason kP went UP rather than down, which is the opposite of the usual instinct:
+    // large excursions (>15 deg post-settle peak-to-peak) occur at EVERY kP tested - 8 out of
+    // 534 pod-runs overall, including one 30.7 deg event at kP 0.200 and a 43.4 deg event at
+    // 0.230. Their rate does not separate by kP (0.5 / 1.0 / 2.4 / 3.3 percent, all four 95%
+    // intervals overlapping). Backing kP off therefore buys no measurable protection while
+    // costing the one criterion still being missed. The point estimates do trend upward, so
+    // if more data ever separates them this decision should be revisited.
+    //
+    // Also measured post-lube and worth keeping:
+    //   - Breakaway is 0.050 on tiles, 0.030 off the ground, uniform across all four pods
+    //     (it was 0.05/0.07/0.06/0.05 before the mechanical work). The pod-to-pod spread is
+    //     gone; the surface difference is not.
+    //   - No backlash after the repair. Directional dead zone 0.05-0.45 deg, nothing
+    //     significant on any pod, so criteria 5 and 6 remain mechanically unblocked.
+    //   - Servo current at breakaway is under ~1% of the 3300 mA stall figure (Axon MINI+,
+    //     interpolated to the 5 V rail). Torque headroom is large and is not the constraint.
     //
     // Committed because they are a large, measured improvement on what shipped, not because they
     // are finished. Randomised interleaved A/B against the previous gains, same battery, 40
@@ -169,7 +204,7 @@ public class SwerveDrivetrainConstants {
     // copy. The tool is supposed to be able to hold different gains - that is what it is for - but
     // it should never be possible to measure at gains nobody intended, which is what happened when
     // its calibration file sat at kD 0.010 while this file said 0.022.
-    public static final double turnKP = 0.200;
+    public static final double turnKP = 0.320;
     public static final double turnKD = 0.022;
 
     /**
@@ -213,14 +248,32 @@ public class SwerveDrivetrainConstants {
     private static double dtLength = 146.420; //distance from robot center to front/back pod center
     private static double dtWidth = 154.240; // distance from robot center to left/right pod center
 
+    /**
+     * Per-pod zero offset and analog range, indexed by servo number: ss0, ss1, ss2, ss3.
+     *
+     * <p>These were literals inside the pod factories, which meant nothing could compare them
+     * against the bring-up tool's live calibration. The tool's divergence guard covered gains only,
+     * so on 2026-08-13, after a pod repair and a re-zero of all four, this file was carrying zeros
+     * 30-175 degrees away from the calibrated hardware and absolutely nothing said so. Gains being
+     * wrong costs tuning; zeros being wrong points the wheels the wrong way.
+     *
+     * <p>Keep these as the single source of truth - the factories below read them, and
+     * SwerveBringUp compares against them.
+     */
+    public static final double[] podZeroDeg = {222.67, 144.11, 163.24, 185.57};
+
+    /** Analog encoder low/high voltage per pod, same ss0..ss3 indexing as {@link #podZeroDeg}. */
+    public static final double[] podMinV = {0.075, 0.145, 0.136, 0.266};
+    public static final double[] podMaxV = {3.247, 3.350, 3.336, 3.467};
+
     // The encoder names do NOT follow the sm#/ss#/se# numbering. The Axon feedback wires are
     // spliced two per analog port, and the wiring scan found every pod landing on a different
     // channel than its own number. Do not "tidy" these to match.
     private static CoaxialPod leftFront(HardwareMap hardwareMap) {
         CoaxialPod pod = new CoaxialPod(hardwareMap, "sm2", "ss2", "se3",
                 new PIDFCoefficients(turnKP, 0, turnKD, 0), DcMotorSimple.Direction.FORWARD,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(338.2), new Pose(dtLength, dtWidth),
-                0.136, 3.336, false);
+                DcMotorSimple.Direction.REVERSE, Math.toRadians(podZeroDeg[2]), new Pose(dtLength, dtWidth),
+                podMinV[2], podMaxV[2], false);
         pod.setMotorCachingThreshold(0.05);
         pod.setServoCachingThreshold(turnServoCaching);
         pod.setStaticFriction(turnKS, Math.toRadians(turnKSBandDeg));
@@ -230,8 +283,8 @@ public class SwerveDrivetrainConstants {
     private static CoaxialPod rightFront(HardwareMap hardwareMap) {
         CoaxialPod pod = new CoaxialPod(hardwareMap, "sm1", "ss1", "se0",
                 new PIDFCoefficients(turnKP, 0, turnKD, 0), DcMotorSimple.Direction.FORWARD,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(323.3), new Pose(dtLength, -dtWidth),
-                0.145, 3.350, false);
+                DcMotorSimple.Direction.REVERSE, Math.toRadians(podZeroDeg[1]), new Pose(dtLength, -dtWidth),
+                podMinV[1], podMaxV[1], false);
         pod.setMotorCachingThreshold(0.05);
         pod.setServoCachingThreshold(turnServoCaching);
         pod.setStaticFriction(turnKS, Math.toRadians(turnKSBandDeg));
@@ -241,8 +294,8 @@ public class SwerveDrivetrainConstants {
     private static CoaxialPod leftBack(HardwareMap hardwareMap) {
         CoaxialPod pod = new CoaxialPod(hardwareMap, "sm3", "ss3", "se2",
                 new PIDFCoefficients(turnKP, 0, turnKD, 0), DcMotorSimple.Direction.REVERSE,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(62.2), new Pose(-dtLength, dtWidth),
-                0.266, 3.467, false);
+                DcMotorSimple.Direction.REVERSE, Math.toRadians(podZeroDeg[3]), new Pose(-dtLength, dtWidth),
+                podMinV[3], podMaxV[3], false);
         pod.setMotorCachingThreshold(0.05);
         pod.setServoCachingThreshold(turnServoCaching);
         pod.setStaticFriction(turnKS, Math.toRadians(turnKSBandDeg));
@@ -252,8 +305,8 @@ public class SwerveDrivetrainConstants {
     private static CoaxialPod rightBack(HardwareMap hardwareMap) {
         CoaxialPod pod = new CoaxialPod(hardwareMap, "sm0", "ss0", "se1",
                 new PIDFCoefficients(turnKP, 0, turnKD, 0), DcMotorSimple.Direction.REVERSE,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(32.0), new Pose(-dtLength, -dtWidth),
-                0.075, 3.247, false);
+                DcMotorSimple.Direction.REVERSE, Math.toRadians(podZeroDeg[0]), new Pose(-dtLength, -dtWidth),
+                podMinV[0], podMaxV[0], false);
         pod.setMotorCachingThreshold(0.05);
         pod.setServoCachingThreshold(turnServoCaching);
         pod.setStaticFriction(turnKS, Math.toRadians(turnKSBandDeg));

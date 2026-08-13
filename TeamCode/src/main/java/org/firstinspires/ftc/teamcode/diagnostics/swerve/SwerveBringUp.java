@@ -314,6 +314,9 @@ public class SwerveBringUp extends OpMode {
     private double msPublish;
     private double msTelemetry;
 
+    /** Last unrecognised command action, surfaced in errors[] so a typo cannot pass unnoticed. */
+    private volatile String unknownCommand;
+
     /**
      * Turn gains this tool is holding that differ from the ones the robot actually ships with.
      *
@@ -337,8 +340,43 @@ public class SwerveBringUp extends OpMode {
                     SwerveDrivetrainConstants.turnServoCaching);
             appendIfDifferent(out, i, "kF", c.kF, 0.0);
             appendIfDifferent(out, i, "kI", c.kI, 0.0);
+
+            // Calibration, not just gains. Wrong gains cost tuning time; a wrong zero points the
+            // wheel somewhere else entirely, and until 2026-08-13 nothing compared these at all -
+            // a repair and a re-zero left this file 30-175 degrees out with no warning anywhere.
+            // Tolerance is deliberately loose: these are hand-captured and a tenth of a degree of
+            // disagreement is not worth shouting about, but tens of degrees is.
+            double zeroDeg = Math.toDegrees(c.angleOffsetRad);
+            double shippedZero = SwerveDrivetrainConstants.podZeroDeg[i];
+            // Wrap-aware: 359 against 1 is two degrees apart, not 358.
+            double zeroGap = Math.abs(((zeroDeg - shippedZero) % 360 + 540) % 360 - 180);
+            if (zeroGap > 0.5) {
+                out.add(String.format(Locale.US,
+                        "pod %d zero: tool %.1f deg, shipped %.1f deg (%.1f apart) - the robot is "
+                                + "NOT calibrated the way competition code will drive it",
+                        i, zeroDeg, shippedZero, zeroGap));
+            }
+            appendIfDifferentTol(out, i, "min V", c.analogMin,
+                    SwerveDrivetrainConstants.podMinV[i], 0.01, "V");
+            appendIfDifferentTol(out, i, "max V", c.analogMax,
+                    SwerveDrivetrainConstants.podMaxV[i], 0.01, "V");
         }
         return out;
+    }
+
+    /**
+     * Reports a divergence only when it exceeds {@code tol}, so hand-captured values that agree to
+     * within measurement noise do not fill the error panel and train people to ignore it.
+     */
+    private void appendIfDifferentTol(List<String> out, int pod, String name, double tool,
+            double shipped, double tol, String unit) {
+        if (Math.abs(tool - shipped) <= tol) {
+            return;
+        }
+        out.add(String.format(Locale.US,
+                "pod %d %s: tool %.3f %s, shipped %.3f %s - the robot is NOT calibrated the way "
+                        + "competition code will drive it",
+                pod, name, tool, unit, shipped, unit));
     }
 
     private static void appendIfDifferent(List<String> out, int pod, String name,
@@ -701,7 +739,7 @@ public class SwerveBringUp extends OpMode {
             }
         }
 
-        recorder.add(dt, batteryVolts(), loopHz, mode.ordinal(), servoRailMa,
+        recorder.add(dt, batteryVolts(), loopHz, mode.ordinal(), servoRailMa, batteryMa,
                 volts, recWheel, recTarget, recError, servoCmd, recFlipped);
     }
 
@@ -2385,6 +2423,12 @@ public class SwerveBringUp extends OpMode {
                 message = "Calibration reloaded.";
                 break;
             default:
+                // A misspelt or imagined action used to fall through here and report nothing, so
+                // the caller saw a successful HTTP response for a command that did not exist. That
+                // burned a whole staircase run against a "setMode" that was never implemented.
+                // Silence is the worst answer available; say so instead.
+                message = "UNKNOWN COMMAND: \"" + action + "\" - nothing was done.";
+                unknownCommand = action;
                 break;
         }
     }
@@ -2684,6 +2728,14 @@ public class SwerveBringUp extends OpMode {
                 sb.append(',');
             }
             sb.append('"').append(esc(e)).append('"');
+            firstError = false;
+        }
+        if (unknownCommand != null) {
+            if (!firstError) {
+                sb.append(',');
+            }
+            sb.append('"').append(esc("UNKNOWN COMMAND \"" + unknownCommand
+                    + "\" was sent and ignored - check the caller for a typo")).append('"');
             firstError = false;
         }
         for (String d : gainDivergences()) {

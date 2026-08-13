@@ -24,6 +24,24 @@ from swervebench import Bench, parse_csv
 RUNS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "runs")
 STOP = os.path.join(RUNS, "DRIVE_STOP")
 
+# The hub's WiFi drops for a second or two fairly often, and a driving session is exactly when
+# nobody wants to be told the capture died twenty seconds ago. Every call goes through a retry:
+# a transient drop costs a sample, not the session.
+RETRY_S = 25.0
+
+
+def retry(fn, *a, **kw):
+    """Runs fn until it succeeds or RETRY_S elapses. Returns None if it never does."""
+    t0 = time.time()
+    while time.time() - t0 < RETRY_S:
+        try:
+            return fn(*a, **kw)
+        except Exception:  # noqa: BLE001 - any transport failure is worth another go
+            if os.path.exists(STOP):
+                return None
+            time.sleep(0.5)
+    return None
+
 
 def main() -> int:
     label = sys.argv[1] if len(sys.argv) > 1 else "drive"
@@ -31,9 +49,12 @@ def main() -> int:
     if os.path.exists(STOP):
         os.remove(STOP)
 
-    b = Bench()
+    b = retry(Bench)
+    if b is None:
+        print("no link to the robot", flush=True)
+        return 1
 
-    st = b.state()
+    st = retry(b.state) or {}
     if st.get("mode") != "DRIVE":
         print(f"warning: mode is {st.get('mode')}, not DRIVE", flush=True)
     print(f"session {label}  |  V {st['voltage']:.2f}  |  "
@@ -46,7 +67,9 @@ def main() -> int:
         while not os.path.exists(STOP):
             chunk += 1
             tag = f"{label}-{chunk:03d}"
-            b.cmd("recStart", label=tag)
+            if retry(b.cmd, "recStart", label=tag) is None and not os.path.exists(STOP):
+                print(f"  {tag}: link down through recStart; retrying", flush=True)
+                continue
 
             # Commands are queued and drained on the OpMode loop, and /state serves the last
             # published snapshot. Reading it straight after recStart returns the pre-start
@@ -58,7 +81,8 @@ def main() -> int:
             started_ok = False
             while time.time() - t0 < 5:
                 time.sleep(0.25)
-                rec = b.state().get("rec") or {}
+                st = retry(b.state)
+                rec = (st or {}).get("rec") or {}
                 if rec.get("label") == tag:
                     started_ok = True
                     break
@@ -73,18 +97,20 @@ def main() -> int:
             while time.time() - t0 < 90:
                 if os.path.exists(STOP):
                     break
-                rec = b.state().get("rec") or {}
+                st = retry(b.state)
+                if st is None:
+                    break
+                rec = st.get("rec") or {}
                 if rec.get("label") != tag or not rec.get("recording", True):
                     break
                 time.sleep(0.5)
 
-            b.cmd("recStop")
+            retry(b.cmd, "recStop")
             time.sleep(0.2)
 
-            try:
-                csv_text = b.rec_csv()
-            except Exception as exc:  # noqa: BLE001 - keep the session alive over a WiFi blip
-                print(f"  {tag}: pull failed ({exc}); continuing", flush=True)
+            csv_text = retry(b.rec_csv)
+            if csv_text is None:
+                print(f"  {tag}: pull failed after retries; continuing", flush=True)
                 continue
 
             try:
@@ -104,19 +130,18 @@ def main() -> int:
                 fh.write(csv_text)
 
             span = cols["t"][-1] - cols["t"][0]
-            hz = [x for x in cols.get("loopHz", []) if x == x]
+            # 1/mean(dt), not mean(loopHz): loopHz is instantaneous and averaging it reads ~1.8x
+            # optimistic.
+            dts = [x for x in cols.get("dt", []) if x == x and x > 0]
             volts = [x for x in cols.get("volts", []) if x == x]
             print(f"  {tag}: {n} samples, {span:.1f}s, "
-                  f"{(sum(hz) / len(hz) if hz else float('nan')):.0f} Hz, "
+                  f"{(len(dts) / sum(dts) if dts else float('nan')):.0f} Hz, "
                   f"{(sum(volts) / len(volts) if volts else float('nan')):.2f} V "
                   f"-> {os.path.basename(path)}", flush=True)
     except KeyboardInterrupt:
         print("interrupted", flush=True)
     finally:
-        try:
-            b.cmd("recStop")
-        except Exception:  # noqa: BLE001
-            pass
+        retry(b.cmd, "recStop")
 
     print(f"done: {chunk} chunks", flush=True)
     return 0

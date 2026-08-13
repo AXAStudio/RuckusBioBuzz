@@ -22,7 +22,7 @@ import java.util.Locale;
 public class PodRecorder {
 
     /** Columns shared by the whole robot. */
-    private static final int GLOBAL_COLS = 6;
+    private static final int GLOBAL_COLS = 7;
 
     /** Columns recorded per pod. */
     private static final int POD_COLS = 6;
@@ -96,6 +96,7 @@ public class PodRecorder {
      * @param volts battery voltage
      * @param loopHz smoothed loop rate
      * @param mode ordinal of the OpMode's current mode
+     * @param batteryMa hub battery-side current, milliamps
      * @param servoMa hub servo rail current, milliamps; sampled slower than the loop
      * @param podVolts raw encoder voltage per pod
      * @param wheelDeg measured wheel heading per pod, degrees
@@ -105,8 +106,8 @@ public class PodRecorder {
      * @param flipped whether the pod took the 180 degree flip this loop
      */
     public void add(double dt, double volts, double loopHz, int mode, double servoMa,
-            double[] podVolts, double[] wheelDeg, double[] targetDeg, double[] errDeg,
-            double[] power, boolean[] flipped) {
+            double batteryMa, double[] podVolts, double[] wheelDeg, double[] targetDeg,
+            double[] errDeg, double[] power, boolean[] flipped) {
         if (!recording) {
             return;
         }
@@ -123,6 +124,7 @@ public class PodRecorder {
         data[at + 3] = (float) loopHz;
         data[at + 4] = mode;
         data[at + 5] = (float) servoMa;
+        data[at + 6] = (float) batteryMa;
 
         for (int i = 0; i < POD_COUNT; i++) {
             int p = at + GLOBAL_COLS + i * POD_COLS;
@@ -154,7 +156,7 @@ public class PodRecorder {
                 .append(" recording=").append(recording)
                 .append('\n');
 
-        sb.append("t,dt,volts,loopHz,mode,servoMa");
+        sb.append("t,dt,volts,loopHz,mode,servoMa,batteryMa");
         for (int i = 0; i < POD_COUNT; i++) {
             sb.append(",p").append(i).append("_v")
                     .append(",p").append(i).append("_wheel")
