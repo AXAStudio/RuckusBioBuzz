@@ -246,6 +246,18 @@ public class SwerveBringUp extends OpMode {
     private double calLastRaw;
     private int calStalls;
     private int calSteps;
+
+    /**
+     * Whether {@link #calPos} is known to match where the servo physically is.
+     *
+     * <p>{@code Servo.getPosition()} returns the controller's last <em>commanded</em> position, not
+     * a measurement - after a restart it is a default that has nothing to do with the pod. Walking
+     * outward from it would make the first 0.02 step an absolute command to somewhere arbitrary,
+     * and the pod would cross up to half its travel in one go. The incremental walk protects every
+     * step except the one that matters, so calGoto refuses until calHome has established a true
+     * starting position.
+     */
+    private boolean calHomed;
     private double batteryMa;
     private double totalMa;
 
@@ -1967,6 +1979,7 @@ public class SwerveBringUp extends OpMode {
                 cals[selected].rawDegAtPos0 = doubleArg(cmd, "raw0", cals[selected].rawDegAtPos0);
                 cals[selected].rawDegAtPos1 = doubleArg(cmd, "raw1", cals[selected].rawDegAtPos1);
                 cals[selected].posCalibrated = boolArg(cmd, "cal", cals[selected].posCalibrated);
+                calHomed = false;
                 podsDirty = true;
                 saveCalibration();
                 message = "Pod " + selected + (cals[selected].positional
@@ -1991,16 +2004,47 @@ public class SwerveBringUp extends OpMode {
                         selected, doubleArg(cmd, "pos", 0.0));
                 break;
             }
+            case "calHome": {
+                // The one unavoidable uncontrolled move. Nothing can know where a position-mode
+                // servo physically is until it has been commanded somewhere, so this commands
+                // mid-travel - at most half the travel away from anywhere in the band, and Soft
+                // Start bounds how fast. Everything after it walks from a known position.
+                ensurePods();
+                if (posServos[selected] == null) {
+                    message = "Pod " + selected + " is not on a Servo-configured port.";
+                    break;
+                }
+                allStop();
+                double before = Math.toDegrees(cals[selected].rawAngleRad(volts[selected]));
+                calPos = MathFunctions.clamp(doubleArg(cmd, "pos", 0.5), 0.0, 1.0);
+                posServos[selected].setPosition(calPos);
+                calHomed = true;
+                calLastRaw = before;
+                calSteps = 0;
+                calStalls = 0;
+                phaseTimer.reset();
+                message = String.format(Locale.US,
+                        "Pod %d commanded to %.3f from encoder %.1f deg. FIRST COMMANDED MOVE - "
+                                + "expect up to half the travel, Soft Start limited. Let it stop, "
+                                + "check the encoder settled, then calGoto.", selected, calPos, before);
+                break;
+            }
             case "calGoto": {
                 ensurePods();
+                if (!calHomed) {
+                    message = "Run calHome first: without it the starting position is the "
+                            + "controller's cached default, not where the pod is, and the first "
+                            + "step would be an absolute jump.";
+                    break;
+                }
                 if (!(pods != null && pods[selected] instanceof PositionalPod)
                         || posServos[selected] == null) {
                     message = "Pod " + selected + " is not a positional pod on a Servo port.";
                     break;
                 }
                 allStop();
-                // Start from where the controller is already holding it, not from an assumption.
-                calPos = posServos[selected].getPosition();
+                // calPos is carried forward from calHome and each completed walk, so it tracks
+                // where the servo actually is rather than what the controller last cached.
                 calTargetPos = MathFunctions.clamp(doubleArg(cmd, "pos", 0.5), 0.0, 1.0);
                 calStalls = 0;
                 calSteps = 0;
@@ -2454,7 +2498,9 @@ public class SwerveBringUp extends OpMode {
         sb.append(",\"loopHz\":").append(fmt(loopHz));
         sb.append(",\"voltage\":").append(fmt(batteryVolts()));
         sb.append(",\"servoMa\":").append(fmt(servoRailMa));
-        sb.append(",\"posCoverage\":").append(fmt(positionalCoverageDeg));
+        sb.append(",\"posCoverage\":")
+                .append(Double.isNaN(positionalCoverageDeg)
+                        ? "null" : fmt(positionalCoverageDeg));
         sb.append(",\"batteryMa\":").append(fmt(batteryMa));
         sb.append(",\"totalMa\":").append(fmt(totalMa));
         sb.append(",\"busy\":").append(routineActive);
@@ -2553,7 +2599,9 @@ public class SwerveBringUp extends OpMode {
         sb.append(",\"servo\":\"").append(esc(c.servoName)).append('"');
         sb.append(",\"enc\":\"").append(esc(c.encoderName)).append('"');
         sb.append(",\"hasMotor\":").append(motors[i] != null);
-        sb.append(",\"hasServo\":").append(servos[i] != null);
+        sb.append(",\"hasServo\":").append(servos[i] != null || posServos[i] != null);
+        sb.append(",\"servoType\":\"").append(servos[i] != null ? "CRServo"
+                : (posServos[i] != null ? "Servo" : "none")).append('"');
         sb.append(",\"hasEnc\":").append(encoders[i] != null);
         sb.append(",\"volts\":").append(readable ? fmt(v) : "null");
         sb.append(",\"rawDeg\":").append(readable ? fmt(Math.toDegrees(c.rawAngleRad(v))) : "null");
