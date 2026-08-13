@@ -12,18 +12,26 @@ sits near 90 degrees, which is what the 85/88/90/92/95 sweep looks for.
 from __future__ import annotations
 
 import math
+import sys
 import time
 
 from swervebench import Bench, _mean, _stdev
 
+# Shipped set as of the 2026-08-13 post-lube retune on the game tiles.
 CANDIDATE = dict(
-    kp=0.20, ki=0.0, kd=0.014, kf=0.0,
+    kp=0.320, ki=0.0, kd=0.022, kf=0.0,
     ks=0.035, ksband=2.0, cache=0.01, dom=False,
 )
 
 # Measured open-loop breakaway, lowest of the eight pod/direction combinations. Criterion 8 asks
 # for resting servo power below this.
-BREAKAWAY_MIN = 0.025
+# Re-measured after lubrication: 0.030 off the ground, 0.050 on the tiles, uniform across all
+# four pods. The lower of the two is the harder bar for criterion 8, so keep using it.
+BREAKAWAY_MIN = 0.030
+
+# Stated by the operator, never assumed. This printed "robot on blocks" as a constant and said
+# so while sitting on the game tiles.
+SURFACE = sys.argv[1] if len(sys.argv) > 1 else "SURFACE NOT STATED - pass it as argv[1]"
 
 REPEATS_MAIN = 10
 REPEATS_SMALL = 6
@@ -75,7 +83,7 @@ def main() -> None:
     print("Candidate gain set (all four pods identical):")
     print(f"  kP={p0['kp']}  kI={p0['ki']}  kD={p0['kd']}  kF={p0['kf']}  "
           f"kS={p0['ks']} band={p0['ksband']} deg  cache={p0['cache']}  dom={p0['dom']}")
-    print(f"  battery {st['voltage']:.2f} V, robot on blocks\n")
+    print(f"  battery {st['voltage']:.2f} V, " + SURFACE + "\n")
 
     b.step_trial(step_deg=90, hold_s=2.0, label="gate-discard", save=False)
 
@@ -93,7 +101,10 @@ def main() -> None:
     volts = b.voltage()
 
     all_steps = s90 + s45 + s15
-    m90, sd90, frac90 = settle_stats(s90, "settle_1_0")
+    # Criterion 1 was re-spec'd to "enter and STAY within +/-2.0 deg". This scored against
+    # settle_1_0 for a while after that, which is a stricter bar than the one agreed and made
+    # every run look worse than it was.
+    m90, sd90, frac90 = settle_stats(s90, "settle_2_0")
     m15, sd15, frac15 = settle_stats(s15, "settle_0_5")
 
     ss_all = [abs(x) for x in col(all_steps, "steady_state_deg")]
@@ -108,7 +119,7 @@ def main() -> None:
     print(f"  {'#':>2}  {'criterion':<34} {'target':<18} {'achieved':<26} verdict")
     print("  " + "-" * 86)
 
-    print(line(1, "90 deg settle to +/-1.0 deg", "<= 350 ms",
+    print(line(1, "90 deg settle to +/-2.0 deg", "<= 350 ms",
                f"{1000*m90:.0f} ms ({100*frac90:.0f}% settled)", m90 <= 0.350 and frac90 == 1.0))
     print(line(2, "90 deg overshoot", "<= 5%",
                f"{_mean(over90):.1f}% mean, {max(over90):.1f}% max", max(over90) <= 5.0))
@@ -127,7 +138,7 @@ def main() -> None:
                f"{_mean(rest90):.4f} mean, {max(rest90):.4f} max",
                max(rest90) < BREAKAWAY_MIN))
     print(line(10, "pod-to-pod settle spread", "<= 15%",
-               f"{pod_spread(s90, 'settle_1_0'):.0f}%", pod_spread(s90, "settle_1_0") <= 15.0))
+               f"{pod_spread(s90, 'settle_2_0'):.0f}%", pod_spread(s90, "settle_2_0") <= 15.0))
     print(line(11, "repeatability, sigma of settle", "<= 20% of mean",
                f"{100*sd90/m90 if m90 else float('nan'):.0f}%",
                m90 > 0 and sd90 / m90 <= 0.20))
