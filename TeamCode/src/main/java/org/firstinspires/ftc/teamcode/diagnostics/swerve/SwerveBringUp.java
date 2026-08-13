@@ -574,6 +574,10 @@ public class SwerveBringUp extends OpMode {
         } catch (RuntimeException e) {
             hwErrors.add("No voltage sensor found.");
         }
+        // Seed the cache: the idle-sensor timer does not fire for another IDLE_SENSOR_INTERVAL_S,
+        // and until it does every reader - dashboard, telemetry, and any recording started
+        // immediately - would see 0 V and have no way to tell that from a dead battery.
+        refreshBatteryVolts();
 
         SwerveBench.INSTANCE.clearCommands();
         SwerveBench.INSTANCE.setRecorder(recorder);
@@ -627,8 +631,11 @@ public class SwerveBringUp extends OpMode {
 
         mark = System.nanoTime();
         readHeading(refreshIdleSensors);
-        if (refreshIdleSensors) {
+        if (refreshIdleSensors || fastCurrent) {
             readServoRailCurrent();
+        }
+        if (refreshIdleSensors) {
+            refreshBatteryVolts();
         }
         msHeading = smooth(msHeading, System.nanoTime() - mark);
 
@@ -769,6 +776,18 @@ public class SwerveBringUp extends OpMode {
     private boolean headingInUse() {
         return mode == Mode.HEADING || (mode == Mode.DRIVE && headingHold);
     }
+
+    /**
+     * When set, the servo rail current is read every loop instead of on the 5 Hz idle path.
+     *
+     * <p>Off by default and deliberately so: each read is three Lynx transactions, which is
+     * exactly the cost that made {@code publish()} expensive. It exists because current is the
+     * only torque proxy available here, and a 5 Hz sample cannot see the peak of a 0.37 s rise -
+     * the "max" it reports is wherever the sampler happened to land. Turn it on for a current
+     * measurement, off again afterwards, and do not read pod-tracking numbers off a trace
+     * recorded with it on.
+     */
+    private volatile boolean fastCurrent;
 
     /** Reads the hub's servo rail current in milliamps, or leaves the last value on failure. */
     private void readServoRailCurrent() {
@@ -1991,6 +2010,15 @@ public class SwerveBringUp extends OpMode {
                 saveCalibration();
                 break;
             }
+            case "setFastCurrent": {
+                fastCurrent = boolArg(cmd, "value", !fastCurrent);
+                message = fastCurrent
+                        ? "Servo rail current now read EVERY LOOP. This costs loop rate - it is a "
+                                + "measurement mode, not a monitoring mode. Turn it off after."
+                        : "Servo rail current back on the idle-sensor path.";
+                break;
+            }
+
             case "setPublishHz": {
                 // Clamped, not validated-and-rejected: 0 would stall the dashboard into looking
                 // like a dead robot, and anything above the loop rate just publishes every loop.
@@ -2603,6 +2631,7 @@ public class SwerveBringUp extends OpMode {
         sb.append(",\"loopHz\":").append(fmt(loopHz));
         sb.append(",\"voltage\":").append(fmt(batteryVolts()));
         sb.append(",\"servoMa\":").append(fmt(servoRailMa));
+        sb.append(",\"fastCurrent\":").append(fastCurrent);
         sb.append(",\"posCoverage\":")
                 .append(Double.isNaN(positionalCoverageDeg)
                         ? "null" : fmt(positionalCoverageDeg));
@@ -2800,15 +2829,40 @@ public class SwerveBringUp extends OpMode {
         return a < 0 ? a + 2 * Math.PI : a;
     }
 
-    private double batteryVolts() {
+    /**
+     * Last cached battery reading. See {@link #refreshBatteryVolts()} for why this is not read on
+     * demand.
+     */
+    private volatile double cachedVolts;
+
+    /**
+     * Reads the battery and caches it. Called only from the slow idle-sensor path.
+     *
+     * <p>{@code getVoltage()} is a Lynx ADC transaction, not something bulk caching covers. It used
+     * to be called inline from {@code record()} - every loop - and again from {@code publish()} and
+     * {@code pushTelemetry()}. In IDLE that is nearly free, but in DRIVE the bus is already
+     * carrying eight actuator writes per loop and the read queues behind them: publish() measured
+     * 37-56 ms in DRIVE against 9-13 ms in IDLE, which dragged the control loop down to 20-27 Hz.
+     *
+     * <p>Battery voltage does not change at loop rate, so sampling it at the idle-sensor rate costs
+     * nothing real. The trade is that the recorder's volts column is now stair-stepped at that
+     * rate rather than per-sample, which is ample for sag across a step but too coarse to catch a
+     * sub-200 ms transient - measure that deliberately if it is ever the question.
+     */
+    private void refreshBatteryVolts() {
         if (voltageSensor == null) {
-            return 0;
+            cachedVolts = 0;
+            return;
         }
         try {
-            return voltageSensor.getVoltage();
+            cachedVolts = voltageSensor.getVoltage();
         } catch (RuntimeException e) {
-            return 0;
+            cachedVolts = 0;
         }
+    }
+
+    private double batteryVolts() {
+        return cachedVolts;
     }
 
     private static String fmt(double v) {
