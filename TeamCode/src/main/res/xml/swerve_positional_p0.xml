@@ -1,5 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
+    SHELVED - DO NOT ACTIVATE. See tools/swervetune/POSITIONAL_SHELVED.md.
+
+    Activating this declares ss0 as a positional Servo, which the continuous-rotation
+    code cannot drive; pod 0 will fail to build and report that it is neither a
+    ContinuousRotationServo nor a Servo it can use. Use swerve_bringup.xml.
+
     Swerve hardware configuration for the positional A/B: pod 0 only, on a Servo port.
 
     Identical to swerve_bringup.xml except that ss0 is declared <Servo> rather than

@@ -24,6 +24,21 @@ import java.util.Locale;
  * {@link SwerveExport#generate}.
  */
 public class PodCal {
+
+    /**
+     * Master switch for positional steering mode. <b>Off, deliberately.</b>
+     *
+     * <p>The drivetrain is continuous-rotation only as of 2026-08-12. Positional mode was built,
+     * a pod was flashed and calibrated, and it was then shelved - not because it failed, but
+     * because its permanent operational cost was judged disproportionate to evidence it never got
+     * the chance to produce. Read {@code tools/swervetune/POSITIONAL_SHELVED.md} before changing
+     * this: it records the traverse cost, the endpoint stall, and the maintenance burden, which
+     * are the things the decision actually turned on.
+     *
+     * <p>While false, {@link #toSwervePod} can only ever build a {@link CoaxialPod}, whatever the
+     * per-pod {@code positional} flag says.
+     */
+    public static final boolean POSITIONAL_ENABLED = false;
     /** Hardware index, matching the {@code sm#/ss#/se#} naming convention. */
     public final int index;
 
@@ -131,8 +146,20 @@ public class PodCal {
     /** Degrees held back from each programmed endpoint, so a command cannot reach a stop. */
     public double clampMarginDeg = 3.0;
 
-    /** True once both endpoints have been measured on this servo. Until then it will not drive. */
+    /**
+     * True once both endpoints have been measured on this servo. Until then it will not drive.
+     *
+     * <p>Derived from {@link #posMarked0} and {@link #posMarked1}, never inferred from the span.
+     * Inferring it was a real bug: marking one endpoint against a stale default for the other
+     * produced a span wide enough to look plausible and flipped this true on a calibration that
+     * described nothing. The coverage proof caught it, but only because the bogus band happened to
+     * be too narrow - a stale default on the other side of the travel would have passed.
+     */
     public boolean posCalibrated = false;
+
+    /** Which endpoints have actually been measured. Both required before the pod may drive. */
+    public boolean posMarked0 = false;
+    public boolean posMarked1 = false;
 
     /**
      * Minimum change in servo power before CoaxialPod actually writes it.
@@ -214,7 +241,7 @@ public class PodCal {
 
     /** Builds whichever pod type this calibration asks for. */
     public SwervePod toSwervePod(HardwareMap hardwareMap) {
-        if (positional) {
+        if (POSITIONAL_ENABLED && positional) {
             PositionalPod pod = new PositionalPod(hardwareMap, motorName, servoName, encoderName,
                     driveDirection, rawDegAtPos0, rawDegAtPos1, angleOffsetRad,
                     new Pose(podX, podY), analogMin, analogMax, encoderReversed);
@@ -339,7 +366,9 @@ public class PodCal {
                 + "|" + rawDegAtPos1
                 + "|" + clampMarginDeg
                 + "|" + posCalibrated
-                + "|" + discoveredEncoderIndex;
+                + "|" + discoveredEncoderIndex
+                + "|" + posMarked0
+                + "|" + posMarked1;
     }
 
     /** Applies a line previously produced by {@link #serialize()}. Returns false if unusable. */
@@ -393,6 +422,8 @@ public class PodCal {
             clampMarginDeg = p.length > 34 ? Double.parseDouble(p[34]) : 3.0;
             posCalibrated = p.length > 35 && Boolean.parseBoolean(p[35]);
             discoveredEncoderIndex = p.length > 36 ? Integer.parseInt(p[36]) : -1;
+            posMarked0 = p.length > 37 && Boolean.parseBoolean(p[37]);
+            posMarked1 = p.length > 38 && Boolean.parseBoolean(p[38]);
             return true;
         } catch (NumberFormatException e) {
             return false;

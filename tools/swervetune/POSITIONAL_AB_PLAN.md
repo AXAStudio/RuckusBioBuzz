@@ -1,5 +1,11 @@
 # One-servo positional A/B — bench plan
 
+> **SHELVED, 2026-08-12.** The drivetrain is continuous-rotation only. This plan is retained
+> because it is accurate and is the right way to obtain the evidence this work never got, but it
+> is not live. Read `POSITIONAL_SHELVED.md` first — it records what the approach costs, which is
+> what the decision turned on.
+
+
 Reflash one servo to Servo Mode, fit it to one pod, and score it against the other three still in
 CR mode. Same conditions, same scripts where they apply. Reversible: one unit at risk, and
 `CoaxialPod` stays live as the fallback.

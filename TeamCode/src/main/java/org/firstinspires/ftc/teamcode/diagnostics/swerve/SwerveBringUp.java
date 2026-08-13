@@ -151,7 +151,8 @@ public class SwerveBringUp extends OpMode {
                 || "headingStep".equals(action)
                 || "headingGoto".equals(action)
                 || "drive".equals(action)
-                || "calGoto".equals(action);
+                || "calGoto".equals(action)
+                || "calHome".equals(action);
     }
 
     // ---------------------------------------------------------------- state
@@ -236,10 +237,19 @@ public class SwerveBringUp extends OpMode {
      * servo's programmed travel, so this walks there in small steps and stops the moment the
      * encoder stops following - the difference between measuring a limit and grinding into one.
      */
-    private static final double CAL_STEP = 0.02;
+    private static final double CAL_STEP = 0.01;
     private static final double CAL_DWELL_S = 0.15;
     private static final double CAL_MIN_MOVE_DEG = 1.0;
-    private static final int CAL_MAX_STALLS = 2;
+
+    /**
+     * Dwells at an unchanged command before calling it a mechanical limit.
+     *
+     * <p>calHome measured a genuine 0.38 s stiction stall mid-travel, so a couple of dwells is far
+     * too eager - it would abort on ordinary friction and never reach an end. Twelve dwells is
+     * 1.8 s, five times that stall, and still well inside the servo's first overload stage at
+     * 5.1 s, so a real end stop is caught long before anything is stressed.
+     */
+    private static final int CAL_MAX_STALLS = 12;
 
     private double calPos;
     private double calTargetPos;
@@ -1480,8 +1490,12 @@ public class SwerveBringUp extends OpMode {
     /** One guarded step per dwell toward {@link #calTargetPos}, aborting on a stall. */
     private void runCalPos() {
         int i = selected;
-        if (!(pods != null && pods[i] instanceof PositionalPod) || posServos[i] == null) {
-            message = "Pod " + i + " is not a positional pod on a Servo port.";
+        // Deliberately the raw Servo, not the pod object. Calibration is what produces the
+        // endpoints a PositionalPod needs in order to exist, so requiring one here deadlocks:
+        // the pod will not build without a valid band, and the band cannot be measured without
+        // moving the servo.
+        if (posServos[i] == null) {
+            message = "Pod " + i + " is not on a Servo-configured port.";
             setMode(Mode.IDLE);
             return;
         }
@@ -1491,34 +1505,39 @@ public class SwerveBringUp extends OpMode {
         phaseTimer.reset();
 
         double raw = Math.toDegrees(cals[i].rawAngleRad(volts[i]));
-        if (calSteps > 0) {
-            double moved = Math.abs(((raw - calLastRaw) + 540.0) % 360.0 - 180.0);
-            if (moved < CAL_MIN_MOVE_DEG) {
-                calStalls++;
-                if (calStalls >= CAL_MAX_STALLS) {
-                    message = String.format(Locale.US,
-                            "Calibration STOPPED at position %.3f: encoder moved %.2f deg over the "
-                                    + "last two steps. The pod is against something - do not push "
-                                    + "further. Mark here if this is the mechanical limit.",
-                            calPos, moved);
-                    setMode(Mode.IDLE);
-                    return;
-                }
-            } else {
-                calStalls = 0;
+        boolean moved = calSteps == 0
+                || Math.abs(((raw - calLastRaw) + 540.0) % 360.0 - 180.0) >= CAL_MIN_MOVE_DEG;
+
+        // Hold the command when the pod is not following, rather than advancing anyway. Advancing
+        // through a stall winds the servo's internal loop up against stiction, and calHome showed
+        // what that produces: 25 degrees of accumulated error released at 390 deg/s. Waiting
+        // instead keeps the command at most one step ahead of the pod, so a break is one step.
+        if (!moved) {
+            calStalls++;
+            if (calStalls >= CAL_MAX_STALLS) {
+                message = String.format(Locale.US,
+                        "Calibration STOPPED at position %.3f, encoder %.2f deg: no movement for "
+                                + "%.1f s at an unchanged command. This is a mechanical limit, not "
+                                + "stiction. Mark it with calMark.",
+                        calPos, raw, CAL_MAX_STALLS * CAL_DWELL_S);
+                setMode(Mode.IDLE);
             }
+            return;
         }
+
+        calStalls = 0;
         calLastRaw = raw;
 
         if (Math.abs(calTargetPos - calPos) < 1e-6) {
             message = String.format(Locale.US,
-                    "Reached position %.3f, encoder %.2f deg. Mark it with calMark.", calPos, raw);
+                    "Reached commanded position %.3f, encoder %.2f deg. Mark it with calMark.",
+                    calPos, raw);
             setMode(Mode.IDLE);
             return;
         }
 
         calPos += MathFunctions.clamp(calTargetPos - calPos, -CAL_STEP, CAL_STEP);
-        ((PositionalPod) pods[i]).setRawPositionForCalibration(calPos);
+        posServos[i].setPosition(MathFunctions.clamp(calPos, 0.0, 1.0));
         calSteps++;
     }
 
@@ -1975,10 +1994,26 @@ public class SwerveBringUp extends OpMode {
                 saveCalibration();
                 break;
             case "setPositional": {
+                if (!PodCal.POSITIONAL_ENABLED && boolArg(cmd, "value", true)) {
+                    message = "Positional mode is shelved - see "
+                            + "tools/swervetune/POSITIONAL_SHELVED.md. The drivetrain is "
+                            + "continuous-rotation only; enabling this needs a source change to "
+                            + "PodCal.POSITIONAL_ENABLED, not a command.";
+                    break;
+                }
                 cals[selected].positional = boolArg(cmd, "value", !cals[selected].positional);
                 cals[selected].rawDegAtPos0 = doubleArg(cmd, "raw0", cals[selected].rawDegAtPos0);
                 cals[selected].rawDegAtPos1 = doubleArg(cmd, "raw1", cals[selected].rawDegAtPos1);
                 cals[selected].posCalibrated = boolArg(cmd, "cal", cals[selected].posCalibrated);
+                if (boolArg(cmd, "clearmarks", false)) {
+                    cals[selected].posMarked0 = false;
+                    cals[selected].posMarked1 = false;
+                    cals[selected].posCalibrated = false;
+                    // Drop the endpoints too. Leaving one real and one stale is what let a
+                    // half-finished calibration present a 112 degree band as if it meant something.
+                    cals[selected].rawDegAtPos0 = 0.0;
+                    cals[selected].rawDegAtPos1 = 270.0;
+                }
                 calHomed = false;
                 podsDirty = true;
                 saveCalibration();
@@ -2009,7 +2044,6 @@ public class SwerveBringUp extends OpMode {
                 // servo physically is until it has been commanded somewhere, so this commands
                 // mid-travel - at most half the travel away from anywhere in the band, and Soft
                 // Start bounds how fast. Everything after it walks from a known position.
-                ensurePods();
                 if (posServos[selected] == null) {
                     message = "Pod " + selected + " is not on a Servo-configured port.";
                     break;
@@ -2030,21 +2064,20 @@ public class SwerveBringUp extends OpMode {
                 break;
             }
             case "calGoto": {
-                ensurePods();
+                if (posServos[selected] == null) {
+                    message = "Pod " + selected + " is not on a Servo-configured port.";
+                    break;
+                }
                 if (!calHomed) {
                     message = "Run calHome first: without it the starting position is the "
                             + "controller's cached default, not where the pod is, and the first "
                             + "step would be an absolute jump.";
                     break;
                 }
-                if (!(pods != null && pods[selected] instanceof PositionalPod)
-                        || posServos[selected] == null) {
-                    message = "Pod " + selected + " is not a positional pod on a Servo port.";
-                    break;
-                }
                 allStop();
                 // calPos is carried forward from calHome and each completed walk, so it tracks
                 // where the servo actually is rather than what the controller last cached.
+                // No ensurePods() here: see runCalPos.
                 calTargetPos = MathFunctions.clamp(doubleArg(cmd, "pos", 0.5), 0.0, 1.0);
                 calStalls = 0;
                 calSteps = 0;
@@ -2063,19 +2096,26 @@ public class SwerveBringUp extends OpMode {
                     break;
                 }
                 double raw = Math.toDegrees(cals[selected].rawAngleRad(volts[selected]));
+                PodCal mc = cals[selected];
                 if (intArg(cmd, "which", 0) == 0) {
-                    cals[selected].rawDegAtPos0 = raw;
+                    mc.rawDegAtPos0 = raw;
+                    mc.posMarked0 = true;
                 } else {
-                    cals[selected].rawDegAtPos1 = raw;
+                    mc.rawDegAtPos1 = raw;
+                    mc.posMarked1 = true;
                 }
-                // Both endpoints known means the mapping is real and the pod may drive.
-                double span = Math.abs(cals[selected].rawDegAtPos1 - cals[selected].rawDegAtPos0);
-                cals[selected].posCalibrated = span > 100.0;
+                // Both endpoints actually measured - not a span wide enough to look plausible.
+                // One real endpoint against the other's stale default can span over 100 degrees
+                // and would otherwise have declared the pod calibrated on a fiction.
+                double span = Math.abs(mc.rawDegAtPos1 - mc.rawDegAtPos0);
+                mc.posCalibrated = mc.posMarked0 && mc.posMarked1 && span > 100.0;
                 podsDirty = true;
                 saveCalibration();
                 message = String.format(Locale.US,
-                        "Marked endpoint %d at %.2f deg. Span now %.1f deg; calibrated=%s.",
-                        intArg(cmd, "which", 0), raw, span, cals[selected].posCalibrated);
+                        "Marked endpoint %d at %.2f deg. Marked: pos0=%s pos1=%s. Span %.1f deg. "
+                                + "calibrated=%s.",
+                        intArg(cmd, "which", 0), raw, mc.posMarked0, mc.posMarked1, span,
+                        mc.posCalibrated);
                 break;
             }
             case "probeClamp": {
@@ -2643,6 +2683,8 @@ public class SwerveBringUp extends OpMode {
         sb.append(",\"pcoast\":").append(fmt(c.pulseCoastMs));
         sb.append(",\"positional\":").append(c.positional);
         sb.append(",\"posCalibrated\":").append(c.posCalibrated);
+        sb.append(",\"posMarked0\":").append(c.posMarked0);
+        sb.append(",\"posMarked1\":").append(c.posMarked1);
         sb.append(",\"clampMargin\":").append(fmt(c.clampMarginDeg));
         sb.append(",\"raw0\":").append(fmt(c.rawDegAtPos0));
         sb.append(",\"raw1\":").append(fmt(c.rawDegAtPos1));
