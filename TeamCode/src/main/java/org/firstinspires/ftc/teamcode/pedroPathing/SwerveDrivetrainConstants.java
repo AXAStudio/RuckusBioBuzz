@@ -156,7 +156,38 @@ public class SwerveDrivetrainConstants {
     public static final double turnKP = 0.200;
     public static final double turnKD = 0.022;
 
-    /** Static-friction feed-forward, set to the measured breakaway. Replaces the kF relay. */
+    /**
+     * Static-friction feed-forward, set to the measured breakaway. Replaces the kF relay.
+     *
+     * 0.035 is the OFF-GROUND breakaway. A carpet re-fit on the competition surface, at
+     * competition weight, produced a rival value of 0.045 - measured, not estimated, and the
+     * two INVERT between surfaces. Randomised, 10 repeats, n=40 pod-runs per cell, kP 0.200 /
+     * kD 0.022 / cache 0.01, 12.5 V:
+     *
+     *                        kS 0.035                      kS 0.045
+     *   game surface   |ss| 2.92 / 7.37 deg           |ss| 1.48 / 4.59 deg
+     *                  rings 1.57, p-p max 1.80       rings 2.38, p-p max 3.04
+     *   off ground     |ss| 0.56 / 2.22 deg           |ss| 1.23 / 7.26 deg
+     *                  rings 1.40, p-p max 9.00       rings 11.43, p-p max 49.31
+     *                  1/40 loose                     13/40 loose
+     *
+     * So 0.045 roughly halves the residual on the surface we actually compete on, and falls
+     * apart off the ground. Note the two failures are not the same size: on carpet 0.045's
+     * worst peak-to-peak is 3.04 deg, a wiggle; off the ground it is 49 deg.
+     *
+     * Staying at 0.035 for now, deliberately. A mechanical pass (clean and lubricate the
+     * steering path) is planned, and reducing friction moves the plant TOWARD the off-ground
+     * condition, which is exactly where 0.045 breaks. 0.035 is the value that holds across the
+     * whole friction range measured so far; 0.045 is fitted to the friction the pods have
+     * today. Re-fit kS after the mechanical pass and revisit this - if friction ends up low and
+     * stable, 0.045 may no longer be the right rival either.
+     *
+     * Criterion 7 (surface robustness) was written to guard against venue-to-venue variation.
+     * That rationale is weaker than assumed: the carpet tested on is the official FTC game
+     * surface, the same tiles used at competition. Off-ground robustness is a bench convenience,
+     * not an operating condition - it is being weighted here only because of the pending
+     * mechanical change.
+     */
     public static final double turnKS = 0.035;
     public static final double turnKSBandDeg = 2.0;
 
