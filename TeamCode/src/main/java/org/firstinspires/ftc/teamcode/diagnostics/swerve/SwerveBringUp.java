@@ -312,6 +312,7 @@ public class SwerveBringUp extends OpMode {
     private double msHeading;
     private double msMode;
     private double msPublish;
+    private double msTelemetry;
 
     /**
      * Turn gains this tool is holding that differ from the ones the robot actually ships with.
@@ -360,8 +361,18 @@ public class SwerveBringUp extends OpMode {
      * the dashboard was consuming half the control bandwidth. 20 Hz is far faster than anyone reads
      * a web page, well inside {@code SwerveBench}'s 1500 ms liveness window, and irrelevant to the
      * recorder, which samples every loop regardless.
+     *
+     * <p>NOT a constant any more, and the 8-13 ms above no longer holds: measured on 2026-08-13
+     * the two together cost 42.7 ms of a 53.6 ms loop, so the dashboard is now eating four fifths
+     * of the control bandwidth rather than half. publish() has grown a lot of fields since that
+     * note was written. {@code setPublishHz} makes the rate switchable at runtime so the effect of
+     * loop rate on pod tracking can be A/B'd without reflashing, and so a driving session can buy
+     * control bandwidth back by giving up dashboard refresh.
      */
-    private static final double PUBLISH_INTERVAL_S = 0.05;
+    private static final double PUBLISH_INTERVAL_DEFAULT_S = 0.05;
+
+    /** Live publish period, seconds. Changed by {@code setPublishHz}. */
+    private volatile double publishIntervalS = PUBLISH_INTERVAL_DEFAULT_S;
 
     /**
      * How often the Pinpoint and the raw analog channels are read when nothing needs them.
@@ -631,12 +642,17 @@ public class SwerveBringUp extends OpMode {
         computeTargets();
         record(dt);
 
-        if (publishTimer.seconds() >= PUBLISH_INTERVAL_S) {
+        if (publishTimer.seconds() >= publishIntervalS) {
             publishTimer.reset();
+            // Timed separately: msPublish used to cover both, which meant a 42 ms reading could
+            // not distinguish "the JSON got too big" from "the SDK's telemetry push is slow".
             mark = System.nanoTime();
             publish();
-            pushTelemetry();
             msPublish = smooth(msPublish, System.nanoTime() - mark);
+
+            mark = System.nanoTime();
+            pushTelemetry();
+            msTelemetry = smooth(msTelemetry, System.nanoTime() - mark);
         }
     }
 
@@ -1975,6 +1991,18 @@ public class SwerveBringUp extends OpMode {
                 saveCalibration();
                 break;
             }
+            case "setPublishHz": {
+                // Clamped, not validated-and-rejected: 0 would stall the dashboard into looking
+                // like a dead robot, and anything above the loop rate just publishes every loop.
+                double hz = doubleArg(cmd, "value", 1 / PUBLISH_INTERVAL_DEFAULT_S);
+                hz = Math.max(1.0, Math.min(200.0, hz));
+                publishIntervalS = 1.0 / hz;
+                message = String.format(Locale.US,
+                        "Publish rate %.1f Hz. Lower frees control bandwidth; the recorder is "
+                                + "unaffected because it samples every loop.", hz);
+                break;
+            }
+
             case "setPidf": {
                 PodCal c = cals[selected];
                 if ("all".equals(cmd.get("scope"))) {
@@ -2598,6 +2626,8 @@ public class SwerveBringUp extends OpMode {
                 .append(",\"heading\":").append(fmt(msHeading))
                 .append(",\"mode\":").append(fmt(msMode))
                 .append(",\"publish\":").append(fmt(msPublish))
+                .append(",\"telemetry\":").append(fmt(msTelemetry))
+                .append(",\"publishHz\":").append(fmt(publishIntervalS > 0 ? 1 / publishIntervalS : 0))
                 .append('}');
         sb.append(",\"rec\":{\"recording\":").append(recorder.recording())
                 .append(",\"runId\":").append(recorder.runId())

@@ -279,6 +279,18 @@ def score_step(
     volts = [x for x in trace["volts"] if not math.isnan(x)]
     out["loopHz_mean"] = _mean(loop)
     out["loopHz_min"] = min(loop) if loop else float("nan")
+
+    # loopHz is instantaneous 1/dt, so averaging it is a harmonic-vs-arithmetic error: the short
+    # loops dominate and the answer comes out ~1.8x optimistic on every trace in runs/. Loop rate
+    # is the quantity this project has cared about most, and every figure quoted before
+    # 2026-08-13 was the inflated one. loop_hz_true is throughput - samples per second of wall
+    # clock - which is what actually sets how far a pod travels between control updates.
+    dts = [x for x in trace.get("dt", []) if not math.isnan(x) and x > 0]
+    out["loop_hz_true"] = (1.0 / _mean(dts)) if dts else float("nan")
+    out["loop_dt_mean_ms"] = (_mean(dts) * 1000.0) if dts else float("nan")
+    out["loop_dt_p90_ms"] = (
+        sorted(dts)[int(0.9 * (len(dts) - 1))] * 1000.0 if dts else float("nan")
+    )
     out["voltage_mean"] = _mean(volts)
     out["voltage_min"] = min(volts) if volts else float("nan")
 
@@ -575,7 +587,8 @@ def format_step(result: dict) -> str:
     lines = []
     lines.append(
         f"{result.get('label','')}  step={result.get('step_deg_commanded')}deg  "
-        f"loop={result['loopHz_mean']:.0f}Hz (min {result['loopHz_min']:.0f})  "
+        f"loop={result.get('loop_hz_true', float('nan')):.0f}Hz true "
+        f"({result['loopHz_mean']:.0f} inflated)  "
         f"V={result['voltage_mean']:.2f}"
     )
     g = result.get("gains") or [{}]

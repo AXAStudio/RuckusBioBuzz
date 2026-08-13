@@ -142,6 +142,22 @@ public class SwerveDrivetrainConstants {
     //     four, statistically one band.
     //   - kI is still 0, but the old "30-45 degrees of hunting" result is not why. That predates
     //     both the caching fix and PIDFController's integral band and reset threshold. Re-testable.
+    //   - Loop rate ABOVE ~48 Hz buys nothing. Randomised interleaved A/B on 2026-08-13, 40
+    //     pod-runs per arm, 47.8 Hz against 92.1 Hz with only the dashboard publish rate changed:
+    //     steady state 2.65 -> 2.77 deg (95% CI -0.51 to +0.71, p 0.70), err at 3 s 2.80 -> 2.93
+    //     (p 0.69), rings 3.95 -> 6.22 (p 0.39), post-settle p-p 0.84 -> 1.02 (p 0.46), rise
+    //     10-90% unchanged at 0.37 s. Nothing moved. The servos' own 20 ms PWM frame is ~50 Hz, so
+    //     updating faster than that cannot reach them. This does NOT contradict the loop-rate win
+    //     recorded above, which was climbing out of ~18 Hz; it bounds where that win stops. It
+    //     also kills the tempting story that the residual is "one control period of pod travel" -
+    //     per-update travel went 4.5 -> 2.3 deg and the residual did not follow.
+
+    // IMPORTANT, loop rate figures: every rate quoted in this file before 2026-08-13 was computed
+    // as the mean of an instantaneous 1/dt column, which overweights short loops and reads ~1.8x
+    // optimistic on every trace in tools/swervetune/runs. True throughput is 1/mean(dt). The
+    // "33 Hz" and "~100 Hz" above are that inflated statistic; the honest pair is roughly 18 Hz
+    // and 50 Hz. The direction and the ranking of the fixes are unaffected - the absolute numbers
+    // were wrong. The scorer now records loop_hz_true alongside the old figure.
     //
     // Known not met, off the ground: 90 degree settle to +/-2.0 deg is ~0.5 s against a 350 ms
     // target; residual at t=3 s is 0.54-1.0 deg mean but up to 2.5 deg worst case; pod-to-pod
