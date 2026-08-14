@@ -120,7 +120,8 @@ def main():
     # every iteration and simply overwrites it. In DRIVE with zero sticks that is X-lock, which
     # silently reduced a whole staircase to a handful of stray samples and looked like "the pod
     # never moved" rather than like a mistake. Force IDLE, then verify it took.
-    b.cmd("setMode", value="IDLE")
+    # "stop" is the real command; there is no "setMode" action - sending it lands in the
+    # unknown-command branch and latches a phantom error into /state for the whole session.
     b.cmd("stop")
     time.sleep(0.8)
     mode = b.state().get("mode")

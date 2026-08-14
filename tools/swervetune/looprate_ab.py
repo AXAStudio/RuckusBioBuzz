@@ -32,7 +32,11 @@ BASE_DEG = 0.0
 
 
 def summarise(tag, results):
-    pods = [p for r in results for p in r["pods"] if not p.get("parked")]
+    # ok, not `not parked`: "parked" flags a GOOD run, so the old filter compared the two arms
+    # using only their badly-behaved pod-runs. (The 2026-08-13 A/B's null result survives this
+    # fix - rescoring both arms over all ok runs still shows no separation - but the filter was
+    # wrong all the same.)
+    pods = [p for r in results for p in r["pods"] if p.get("ok")]
     if not pods:
         return f"{tag}: no usable pod-runs"
     ss = [abs(p["steady_state_abs_deg"]) for p in pods if p["steady_state_abs_deg"] == p["steady_state_abs_deg"]]

@@ -480,6 +480,11 @@ public class PositionalPod implements SwervePod {
         return Double.NaN;
     }
 
+    /** Last drive power written to the motor, cached so display never pays a Lynx read. */
+    public double getLastDrivePower() {
+        return lastDrivePower;
+    }
+
     public boolean wasLastMoveFlipped() {
         return lastMoveFlipped;
     }

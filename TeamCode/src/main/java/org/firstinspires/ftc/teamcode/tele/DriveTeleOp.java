@@ -19,8 +19,13 @@ public class DriveTeleOp extends OpMode {
 
     private Follower follower;
 
+    private final java.util.List<LynxModule> hubs = new java.util.ArrayList<>();
+
     private final ElapsedTime loopTimer = new ElapsedTime();
     private double loopHz;
+
+    /** Smoothed loop period. Smoothing 1/dt instead overweights fast loops (~1.8x optimistic). */
+    private double loopDtEma;
 
     /** Telemetry is for a human reading a screen; 10 Hz is already faster than anyone reads. */
     private static final double TELEMETRY_INTERVAL_S = 0.1;
@@ -34,8 +39,14 @@ public class DriveTeleOp extends OpMode {
         // updating less often than the hardware could accept commands. Pedro does not configure
         // caching itself (nothing in the vendored tree touches LynxModule), so it defaults to off
         // and every encoder read is a separate bus transaction.
+        // MANUAL rather than AUTO, cleared once per loop below. AUTO re-fetches a whole bulk
+        // packet whenever the SAME channel is read twice in one loop, and this loop reads every
+        // pod encoder at least twice (Swerve's avgScaling pass and CoaxialPod.move) - so AUTO
+        // was still paying several bulk transactions per loop. MANUAL pins one snapshot per
+        // loop: every repeat is served from cache, and all pods act on the same reading.
         for (LynxModule module : hardwareMap.getAll(LynxModule.class)) {
-            module.setBulkCachingMode(LynxModule.BulkCachingMode.AUTO);
+            module.setBulkCachingMode(LynxModule.BulkCachingMode.MANUAL);
+            hubs.add(module);
         }
 
         follower = Constants.createFollower(hardwareMap);
@@ -50,10 +61,15 @@ public class DriveTeleOp extends OpMode {
 
     @Override
     public void loop() {
+        for (int i = 0; i < hubs.size(); i++) {
+            hubs.get(i).clearBulkCache();
+        }
+
         double dt = loopTimer.seconds();
         loopTimer.reset();
         if (dt > 0) {
-            loopHz = 0.9 * loopHz + 0.1 * (1.0 / dt);
+            loopDtEma = loopDtEma == 0 ? dt : 0.9 * loopDtEma + 0.1 * dt;
+            loopHz = 1.0 / loopDtEma;
         }
 
         double speed = gamepad1.left_bumper ? SLOW_SPEED : NORMAL_SPEED;

@@ -153,7 +153,9 @@ public class SwerveBringUp extends OpMode {
                 || "headingGoto".equals(action)
                 || "drive".equals(action)
                 || "calGoto".equals(action)
-                || "calHome".equals(action);
+                || "calHome".equals(action)
+                // Drives the servo to an endpoint - physical motion, same as calGoto.
+                || "calPositional".equals(action);
     }
 
     // ---------------------------------------------------------------- state
@@ -184,6 +186,13 @@ public class SwerveBringUp extends OpMode {
      * wants the held one.
      */
     private final double[] servoCmd = new double[POD_COUNT];
+
+    /**
+     * Drive-motor power actually commanded this loop, per pod, for the same reason as
+     * {@link #servoCmd}: {@code DcMotorEx.getPower()} is a live Lynx transaction, not a cached
+     * field, and the dashboard was paying eight of those per publish just to display two numbers.
+     */
+    private final double[] motorCmd = new double[POD_COUNT];
 
     /** Loop-rate recording of every pod, pulled as CSV from {@code /swerve/rec.csv}. */
     private final PodRecorder recorder = new PodRecorder();
@@ -299,6 +308,23 @@ public class SwerveBringUp extends OpMode {
     private final ElapsedTime loopTimer = new ElapsedTime();
     private final ElapsedTime phaseTimer = new ElapsedTime();
     private double loopHz;
+
+    /** Smoothed loop period, seconds. {@link #loopHz} is derived as its inverse. */
+    private double loopDtEma;
+
+    /** Hubs with MANUAL bulk caching, cleared once per loop at the top of serviceLoop. */
+    private final List<LynxModule> lynxModules = new ArrayList<>();
+
+    /**
+     * The rotation value actually handed to {@code arcadeDrive} this loop. With heading hold on
+     * this is the heading PID's output, not the stick - and the visualizer/recorder mirror in
+     * {@link #computeTargets} has to use the same number or the recorded targets describe a
+     * command that was never sent.
+     */
+    private double appliedTurn;
+
+    /** Whether the heading was usable last DRIVE loop, to catch the sensor coming back. */
+    private boolean headingWasOkInDrive;
 
     /**
      * Smoothed per-stage loop cost in milliseconds.
@@ -582,7 +608,14 @@ public class SwerveBringUp extends OpMode {
         loadCalibration();
 
         for (LynxModule module : hardwareMap.getAll(LynxModule.class)) {
-            module.setBulkCachingMode(LynxModule.BulkCachingMode.AUTO);
+            // MANUAL, cleared once at the top of every loop, not AUTO. Under AUTO a REPEATED read
+            // of the same channel inside one loop forces a fresh bulk transaction, and DRIVE reads
+            // every pod encoder three times per loop (readEncoders, Swerve's avgScaling, and
+            // CoaxialPod.move) - roughly eight extra bus round-trips per loop that MANUAL serves
+            // from the cache. Within-loop consistency is a feature here: the recorded volts[] and
+            // the error the pod acted on come from the same snapshot.
+            module.setBulkCachingMode(LynxModule.BulkCachingMode.MANUAL);
+            lynxModules.add(module);
             // The servos are all on the Control Hub itself, so the parent module owns the rail.
             if (servoRailModule == null || module.isParent()) {
                 servoRailModule = module;
@@ -650,10 +683,19 @@ public class SwerveBringUp extends OpMode {
 
     /** Shared body so the dashboard is fully usable during init, before START is pressed. */
     private void serviceLoop() {
+        // MANUAL bulk caching: one fresh snapshot per loop, repeats served from cache.
+        for (int i = 0; i < lynxModules.size(); i++) {
+            lynxModules.get(i).clearBulkCache();
+        }
+
         double dt = loopTimer.seconds();
         loopTimer.reset();
         if (dt > 0) {
-            loopHz = 0.9 * loopHz + 0.1 * (1.0 / dt);
+            // Smooth dt and invert, not smooth 1/dt. Averaging instantaneous rates overweights
+            // the short loops - the exact Jensen error that had every rate in this project
+            // reading ~1.8x optimistic until 2026-08-13.
+            loopDtEma = loopDtEma == 0 ? dt : 0.9 * loopDtEma + 0.1 * dt;
+            loopHz = 1.0 / loopDtEma;
         }
 
         drainCommands();
@@ -1061,14 +1103,20 @@ public class SwerveBringUp extends OpMode {
         }
     }
 
+    /** Every open-loop drive-motor write goes through here so {@link #motorCmd} stays faithful. */
+    private void setMotor(int i, double power) {
+        motorCmd[i] = power;
+        if (motors[i] != null) {
+            motors[i].setPower(power);
+        }
+    }
+
     private void allStop() {
         for (int i = 0; i < POD_COUNT; i++) {
             if (servos[i] != null) {
                 setServo(i, 0);
             }
-            if (motors[i] != null) {
-                motors[i].setPower(0);
-            }
+            setMotor(i, 0);
         }
         driveForward = 0;
         driveStrafe = 0;
@@ -1125,15 +1173,28 @@ public class SwerveBringUp extends OpMode {
                     if (servos[i] != null) {
                         setServo(i, 0);
                     }
-                    if (motors[i] != null) {
-                        motors[i].setPower(0);
-                    }
+                    setMotor(i, 0);
                 }
                 break;
         }
     }
 
     private void setMode(Mode next) {
+        // Leaving AUTOTUNE any way other than the tuner finishing must tell the tuner: its
+        // update() simply stops being called, so without this isRunning() stays true forever.
+        if (mode == Mode.AUTOTUNE && next != Mode.AUTOTUNE && tuner.isRunning()) {
+            tuner.abort("mode changed to " + next);
+        }
+        // A wiring scan forces every turn servo to Direction.FORWARD so "positive power" is
+        // unambiguous. Only finishWireScan restored them, so aborting a scan (STOP, another
+        // mode) left reversed pods with a flipped feedback sign - closed loop runs away.
+        if (mode == Mode.WIRE_SCAN && next != Mode.WIRE_SCAN) {
+            for (int i = 0; i < POD_COUNT; i++) {
+                if (servos[i] != null) {
+                    servos[i].setDirection(cals[i].servoDirection);
+                }
+            }
+        }
         allStop();
         mode = next;
         routineActive = false;
@@ -1390,9 +1451,7 @@ public class SwerveBringUp extends OpMode {
             message = "Pulsing " + cals[routinePod].motorName + " - watch which wheel spins.";
         }
         if (phaseTimer.seconds() < MOTOR_PULSE_S) {
-            if (motors[routinePod] != null) {
-                motors[routinePod].setPower(MOTOR_PULSE_POWER);
-            }
+            setMotor(routinePod, MOTOR_PULSE_POWER);
         } else {
             allStop();
             routineActive = false;
@@ -1406,9 +1465,7 @@ public class SwerveBringUp extends OpMode {
      */
     private void runJog() {
         for (int i = 0; i < POD_COUNT; i++) {
-            if (motors[i] != null) {
-                motors[i].setPower(0);
-            }
+            setMotor(i, 0);
         }
         if (phaseTimer.seconds() >= jogSeconds) {
             allStop();
@@ -1423,11 +1480,13 @@ public class SwerveBringUp extends OpMode {
             message = "Pod " + selected + " has no turn servo.";
             return;
         }
-        allStop();
+        // Through setMode, not a bare assignment: setMode owns the transition cleanup (aborting
+        // a live autotune, restoring scan-forced servo directions) and a jog can be commanded
+        // from any mode.
+        setMode(Mode.JOG);
         servos[selected].setDirection(cals[selected].servoDirection);
         setServo(selected, power);
         jogSeconds = seconds;
-        mode = Mode.JOG;
         routineActive = true;
         phaseTimer.reset();
         message = note;
@@ -1444,9 +1503,7 @@ public class SwerveBringUp extends OpMode {
         }
 
         for (int i = 0; i < POD_COUNT; i++) {
-            if (motors[i] != null) {
-                motors[i].setPower(0);
-            }
+            setMotor(i, 0);
             // Pods not under test stay limp, unless every pod is being stepped together.
             if (!pidAllPods && i != selected && servos[i] != null) {
                 setServo(i, 0);
@@ -1550,9 +1607,7 @@ public class SwerveBringUp extends OpMode {
                     setServo(i, 0);
                 }
             }
-            if (motors[i] != null) {
-                motors[i].setPower(0);
-            }
+            setMotor(i, 0);
         }
 
         PodCal c = cals[pod];
@@ -1822,8 +1877,25 @@ public class SwerveBringUp extends OpMode {
             driveForward = 0;
             driveStrafe = 0;
             driveTurn = 0;
+            // Zeroing the sticks is not enough under heading hold: the setpoint may still be up
+            // to the lead cap ahead of the robot, and the heading PID would finish that rotation
+            // with nobody at the controls. A watchdog trip means stop, so the setpoint comes back
+            // to wherever the robot is.
+            if (headingHold && headingOk) {
+                headingTargetRad = headingRad;
+                headingPidf.reset();
+            }
             message = "Drive watchdog tripped - no command from the dashboard.";
         }
+
+        // Heading source recovering mid-drive: the target still says whatever it said when the
+        // sensor died, anywhere up to 180 degrees away, and resuming the PID against it would
+        // spin the robot at full power with no stick input. Adopt the current heading instead.
+        if (headingHold && headingOk && !headingWasOkInDrive) {
+            headingTargetRad = headingRad;
+            headingPidf.reset();
+        }
+        headingWasOkInDrive = headingOk;
 
         double turn = driveTurn;
 
@@ -1876,6 +1948,7 @@ public class SwerveBringUp extends OpMode {
                     headingStuckSeconds = 0;
                     message = "Heading has not changed while turning - sensor looks dead. "
                             + "Heading hold disabled; recalibrate the Pinpoint.";
+                    appliedTurn = 0;
                     arcade(0, 0, 0);
                     return;
                 }
@@ -1885,6 +1958,7 @@ public class SwerveBringUp extends OpMode {
             headingLastSeen = headingRad;
         }
 
+        appliedTurn = turn;
         arcade(driveForward, driveStrafe, turn);
 
         if (headingHold && headingOk) {
@@ -1904,18 +1978,27 @@ public class SwerveBringUp extends OpMode {
     private void captureZeros(boolean allPods) {
         int from = allPods ? 0 : selected;
         int to = allPods ? POD_COUNT : selected + 1;
+        List<String> failed = new ArrayList<>();
         for (int i = from; i < to; i++) {
             if (Double.isNaN(volts[i])) {
-                message = "Pod " + i + " encoder is not readable; zero not captured.";
+                failed.add(String.valueOf(i));
                 continue;
             }
             cals[i].angleOffsetRad = cals[i].rawAngleRad(volts[i]);
         }
         podsDirty = true;
         saveCalibration();
-        message = allPods
-                ? "Captured forward zero for all pods."
-                : "Captured forward zero for pod " + selected + ".";
+        // The success line must not paper over a failure: it used to overwrite the "encoder not
+        // readable" message, so zeroAll reported success while a dead pod silently kept its old
+        // zero - the kind of thing that points a wheel the wrong way with no warning anywhere.
+        if (!failed.isEmpty()) {
+            message = "Zero NOT captured for pod(s) " + String.join(", ", failed)
+                    + " - encoder unreadable. Their old zeros are still in effect.";
+        } else {
+            message = allPods
+                    ? "Captured forward zero for all pods."
+                    : "Captured forward zero for pod " + selected + ".";
+        }
     }
 
     // ---------------------------------------------------------------- commands
@@ -2332,6 +2415,10 @@ public class SwerveBringUp extends OpMode {
                         headingRad + Math.toRadians(doubleArg(cmd, "deg", 90)));
                 headingPidf.reset();
                 headingHold = true;
+                // Clear the stick-release latch: if the stick was active on the previous DRIVE
+                // loop, the next loop would see it "just released" and latch the target back to
+                // the current heading, silently cancelling this command.
+                headingStickActive = false;
                 podsDirty = true;
                 driveForward = 0;
                 driveStrafe = 0;
@@ -2339,9 +2426,12 @@ public class SwerveBringUp extends OpMode {
                 lastDriveCmdMs = System.currentTimeMillis();
                 clearTrace(selected);
                 tracePod = -2;
+                // setMode, not a bare assignment: it stops whatever routine was mid-flight and
+                // restores scan-forced servo directions. It re-zeroes the drive inputs, which
+                // this command already set to zero, so ordering is safe.
+                setMode(Mode.DRIVE);
                 phaseTimer.reset();
                 headingStickTimer.reset();
-                mode = Mode.DRIVE;
                 message = String.format(Locale.US, "Turning %.0f deg and holding.",
                         doubleArg(cmd, "deg", 90));
                 break;
@@ -2395,17 +2485,24 @@ public class SwerveBringUp extends OpMode {
                         : "Zero input holds pod headings (easier to read while tuning).";
                 break;
             case "drive":
-                if (mode != Mode.DRIVE && headingOk) {
-                    // Adopt the heading we are already at, so enabling drive never snaps the robot.
-                    headingTargetRad = headingRad;
-                    headingPidf.reset();
-                    headingStickTimer.reset();
+                if (mode != Mode.DRIVE) {
+                    // Entering drive from any other mode goes through setMode so a routine that
+                    // was mid-flight (wire scan, pulse, autotune) is actually stopped and its
+                    // busy flag cleared, instead of leaving routineActive latched true and its
+                    // last servo powers held. Assigning mode directly skipped all of that.
+                    // setMode also zeroes the drive inputs, so it must run before they are set.
+                    setMode(Mode.DRIVE);
+                    if (headingOk) {
+                        // Adopt the heading we are already at, so enabling drive never snaps.
+                        headingTargetRad = headingRad;
+                        headingPidf.reset();
+                        headingStickTimer.reset();
+                    }
                 }
                 driveForward = doubleArg(cmd, "f", 0);
                 driveStrafe = doubleArg(cmd, "s", 0);
                 driveTurn = doubleArg(cmd, "t", 0);
                 lastDriveCmdMs = System.currentTimeMillis();
-                mode = Mode.DRIVE;
                 message = "Drive test active.";
                 break;
             case "export":
@@ -2524,7 +2621,10 @@ public class SwerveBringUp extends OpMode {
         prevStart = gamepad1.start;
 
         // Bumpers jog the selected pod, but must not hijack an automatic routine mid-run.
-        boolean scanning = mode == Mode.WIRE_SCAN || mode == Mode.ENC_SWEEP;
+        // That includes every automatic mode, not just the scans: a bumper press during
+        // AUTOTUNE stranded the tuner mid-run, and during CAL_POS it abandoned a guarded walk.
+        boolean scanning = mode == Mode.WIRE_SCAN || mode == Mode.ENC_SWEEP
+                || mode == Mode.AUTOTUNE || mode == Mode.CAL_POS || mode == Mode.HEADING;
         if ((gamepad1.left_bumper || gamepad1.right_bumper) && canMove && !scanning) {
             beginJog(gamepad1.right_bumper ? NUDGE_POWER : -NUDGE_POWER,
                     NUDGE_SECONDS, "Jogging pod " + selected + ".");
@@ -2622,7 +2722,10 @@ public class SwerveBringUp extends OpMode {
 
         double forward = driveForward;
         double strafe = -driveStrafe; // arcadeDrive negates strafe before building the vector
-        double rotation = driveTurn;
+        // The rotation arcadeDrive actually received this loop. Under heading hold that is the
+        // heading PID's output, and mirroring the raw stick here instead put targets in the
+        // recorder that were never commanded - smooth stick, wild "demand".
+        double rotation = appliedTurn;
 
         double transMag = Math.min(1.0, Math.hypot(strafe, forward));
         double transTheta = Math.atan2(forward, strafe);
@@ -2630,7 +2733,10 @@ public class SwerveBringUp extends OpMode {
         boolean zeroRot = Math.abs(rotation) < SWERVE_EPSILON;
 
         if (zeroTrans && zeroRot) {
-            if (!xLock) {
+            // Mirror the behaviour the drivetrain was actually built with: rebuildPods only
+            // engages X_LOCK when xLock is on AND heading hold is off. Keying this on xLock
+            // alone recorded X-lock targets while the pods were in fact released.
+            if (!(xLock && !headingHold)) {
                 // Pods just hold their heading, so there is nothing being commanded to show.
                 return;
             }
@@ -2859,10 +2965,23 @@ public class SwerveBringUp extends OpMode {
         sb.append(",\"pwmHi\":").append(fmt(pwmUpper[i]));
         sb.append(",\"pwmFrame\":").append(fmt(pwmFrame[i]));
         sb.append(",\"discovered\":").append(c.discoveredEncoderIndex);
-        sb.append(",\"servoPower\":")
-                .append(servos[i] != null ? fmt(servos[i].getPower()) : "0");
-        sb.append(",\"drivePower\":")
-                .append(motors[i] != null ? fmt(motors[i].getPower()) : "0");
+
+        // Cached command values, never hardware reads. getPower() on a CRServo or DcMotorEx is a
+        // live Lynx transaction, and eight of them per publish was 30+ ms of the 38 ms publish
+        // cost - the "publish is slow in DRIVE" mystery from 2026-08-13 in its entirety. In
+        // closed-loop modes the pod's own cache is the truth (it writes through its own device
+        // object); everywhere else the bench's shadow of its last write is.
+        double shownServo = servoCmd[i];
+        double shownDrive = motorCmd[i];
+        if (podMoved[i] && pods != null && pods[i] instanceof CoaxialPod) {
+            shownServo = ((CoaxialPod) pods[i]).getLastTurnPower();
+            shownDrive = ((CoaxialPod) pods[i]).getLastDrivePower();
+        } else if (podMoved[i] && pods != null && pods[i] instanceof PositionalPod) {
+            shownServo = ((PositionalPod) pods[i]).getLastTurnPower();
+            shownDrive = ((PositionalPod) pods[i]).getLastDrivePower();
+        }
+        sb.append(",\"servoPower\":").append(fmt(shownServo));
+        sb.append(",\"drivePower\":").append(fmt(shownDrive));
         sb.append('}');
     }
 

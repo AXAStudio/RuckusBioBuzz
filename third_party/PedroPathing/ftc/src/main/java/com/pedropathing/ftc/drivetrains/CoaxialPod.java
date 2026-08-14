@@ -488,6 +488,17 @@ public class CoaxialPod implements SwervePod {
     }
 
     /**
+     * RUCKUS PATCH: the drive power most recently written to the motor, same caching caveat as
+     * {@link #getLastTurnPower}. Exists so diagnostics can display it without paying a live
+     * {@code DcMotorEx.getPower()} Lynx transaction.
+     *
+     * @return last written drive motor power, in [-1, 1]
+     */
+    public double getLastDrivePower() {
+        return lastDrivePower;
+    }
+
+    /**
      * RUCKUS PATCH: signed pod heading error from the last {@link #move} call, in radians.
      *
      * <p>Measured after the 180 degree flip is resolved, so it is the error the PID actually acted

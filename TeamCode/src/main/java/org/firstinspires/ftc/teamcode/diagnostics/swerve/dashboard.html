@@ -142,7 +142,7 @@
   <span class="stat">battery <b id="volt">-</b> V</span>
   <span class="stat">loop <b id="hz">-</b> Hz</span>
   <span class="spacer"></span>
-  <button class="stop" onclick="cmd('stop')">STOP ALL</button>
+  <button class="stop" onclick="stopEverything()">STOP ALL</button>
 </header>
 
 <main>
@@ -500,13 +500,47 @@ function cmd(action, args) {
   fetch(q).catch(function () { /* transient WiFi drop; the poller reports connection state */ });
 }
 
-function drive(f, s, t) { cmd('drive', {f: f, s: s, t: t}); }
+// Drive commands go through a single-in-flight sender rather than fire-and-forget fetches.
+// During a WiFi stall the browser otherwise queues every drive fetch and flushes the backlog
+// when the link revives - seconds-old nonzero stick values arriving after the operator let go.
+// Here at most one request is on the wire and only the NEWEST command waits behind it; stale
+// intermediates are simply dropped.
+var driveInFlight = false;
+var drivePending = null;
+
+function drive(f, s, t) {
+  drivePending = {f: f, s: s, t: t};
+  pumpDrive();
+}
+
+function pumpDrive() {
+  if (driveInFlight || drivePending === null) return;
+  var p = drivePending;
+  drivePending = null;
+  driveInFlight = true;
+  var done = function () { driveInFlight = false; pumpDrive(); };
+  fetch('/swerve/cmd?action=drive&pod=' + selected + '&f=' + p.f + '&s=' + p.s + '&t=' + p.t)
+      .then(done, done);
+}
+
+// One stop to rule out every sender: the pad loop, the hold-buttons and the circle test all
+// re-send within 60-150 ms, so a bare cmd('stop') used to be overridden almost immediately -
+// STOP ALL visibly did not stop the robot while gamepad driving was on.
+function stopEverything() {
+  if (typeof padDriving !== 'undefined' && padDriving) setPadDriving(false);
+  if (typeof circleTimer !== 'undefined' && circleTimer !== null) toggleCircle();
+  driveStop();
+  cmd('stop');
+}
 
 // The robot runs a 400 ms drive watchdog, so a held button must keep re-sending. This also means
 // that if this page dies mid-drive, the robot stops on its own.
 var driveTimer = null;
 
 function driveStart(f, s, t) {
+  // Only one sender may own the drive stream. With the pad loop also sending every 60 ms, a
+  // held button and the gamepad used to interleave conflicting commands many times per second.
+  if (typeof padDriving !== 'undefined' && padDriving) setPadDriving(false);
   driveStop();
   drive(f, s, t);
   driveTimer = setInterval(function () { drive(f, s, t); }, 150);
@@ -544,6 +578,17 @@ function driveStop() {
 window.addEventListener('mouseup', driveStop);
 window.addEventListener('blur', driveStop);
 
+// Gamepad driving must stop on blur too. A backgrounded tab keeps its intervals (throttled to
+// ~1 Hz) while the Gamepad API freezes at the last-reported axes, so without this the page
+// re-sends stale stick values once a second and the robot lurches between watchdog trips
+// instead of stopping. setPadDriving(false) also sends one final zero-drive command.
+window.addEventListener('blur', function () {
+  if (padDriving) setPadDriving(false);
+});
+document.addEventListener('visibilitychange', function () {
+  if (document.hidden && padDriving) setPadDriving(false);
+});
+
 // Every tunable CoaxialPod exposes, so a manual session never has to drop to the Python tool
 // and never has to guess which coefficient the robot is actually holding. The backend already
 // accepted all of these; only the UI was short.
@@ -554,7 +599,13 @@ var PIDF_BOOL = ['dom', 'pulsed'];
 
 // Input ids match the robot-side field names in the pod state, so no id-to-key mapping is needed.
 
+var pidfHoldUntil = 0;
+
 function applyPidf(all) {
+  // Hold off live mirroring briefly: the next poll or two still carries the PRE-apply gains,
+  // and letting them rewrite the boxes made a fast follow-up "Apply to all" propagate stale
+  // values to every pod.
+  pidfHoldUntil = Date.now() + 700;
   var p = {scope: all ? 'all' : 'one'};
   PIDF_NUM.forEach(function (n) {
     var e = document.getElementById(n);
@@ -931,6 +982,10 @@ function toggleCircle() {
     circleTimer = null;
     drive(0, 0, 0);
   } else {
+    // The circle test owns the drive stream while it runs; a live pad loop or a held button
+    // would interleave conflicting commands with it at 60-150 ms.
+    if (padDriving) setPadDriving(false);
+    driveStop();
     var amp = parseFloat(document.getElementById('circAmp').value) || 0.22;
     var period = Math.max(0.5, parseFloat(document.getElementById('circPeriod').value) || 3.0);
     circleStart = Date.now();
@@ -947,6 +1002,8 @@ function toggleCircle() {
 
 function stopAllTests() {
   if (circleTimer !== null) toggleCircle();
+  if (padDriving) setPadDriving(false);
+  driveStop();
   cmd('stop');
 }
 
@@ -1037,7 +1094,7 @@ function render() {
   renderPods(pods);
 
   var cur = pods[selected];
-  if (cur && !pidfDirty) {
+  if (cur && !pidfDirty && Date.now() > pidfHoldUntil) {
     PIDF_NUM.forEach(function (n) {
       var e = document.getElementById(n);
       // Only mirror fields the robot actually reports. Blanking an input because a key was

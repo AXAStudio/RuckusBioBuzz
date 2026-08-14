@@ -96,12 +96,19 @@ public class Swerve extends CustomDrivetrain {
         }
 
         // finding if any vector has magnitude > maxPowerScaling
+        //
+        // RUCKUS PATCH: voltage compensation used to call podVector.times(...) and discard the
+        // result - Vector.times returns a new Vector - so the feature was a silent no-op that
+        // still paid one blocking getVoltage() ADC read per pod per call. Read the sensor once
+        // and actually apply the scale.
         double maxMagnitude = maxPowerScaling;
-        for (Vector podVector : podVectors) {
-            if (voltageCompensation) {
-                double voltageNormalized = getVoltageNormalized();
-                podVector.times(voltageNormalized);
+        if (voltageCompensation) {
+            double voltageNormalized = getVoltageNormalized();
+            for (int i = 0; i < podVectors.length; i++) {
+                podVectors[i] = podVectors[i].times(voltageNormalized);
             }
+        }
+        for (Vector podVector : podVectors) {
             maxMagnitude = Math.max(maxMagnitude, podVector.getMagnitude());
         }
 

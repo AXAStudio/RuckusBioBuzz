@@ -33,7 +33,10 @@ LOOSE_PP_DEG = 5.0
 
 
 def summarise(tag, pods, hz, volts):
-    ok = [p for p in pods if not p.get("parked")]
+    # Filter on ok, NOT on `not parked`. "parked" is the composite for a GOOD pod-run
+    # (|ss| <= 0.34, p-p <= 0.34, no post pulses), so `not parked` threw the best runs out of
+    # every statistic and each arm was judged only on its failures.
+    ok = [p for p in pods if p.get("ok")]
     if not ok:
         return f"{tag}: no usable pod-runs"
     ss = [abs(p["steady_state_abs_deg"]) for p in ok
@@ -83,7 +86,7 @@ def main():
         acc[ks]["pods"] += r["pods"]
         acc[ks]["hz"].append(r["loop_hz_true"])
         acc[ks]["v"].append(r["voltage_mean"])
-        usable = [p for p in r["pods"] if not p.get("parked")]
+        usable = [p for p in r["pods"] if p.get("ok")]
         worst = max((p["post_settle_pp_deg"] for p in usable
                      if p["post_settle_pp_deg"] == p["post_settle_pp_deg"]), default=float("nan"))
         print(f"[{n:3d}/{len(order)}] {PARAM} {ks:.3f}  V {r['voltage_mean']:.2f}  "

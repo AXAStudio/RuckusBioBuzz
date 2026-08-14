@@ -57,8 +57,13 @@ def main() -> int:
     st = retry(b.state) or {}
     if st.get("mode") != "DRIVE":
         print(f"warning: mode is {st.get('mode')}, not DRIVE", flush=True)
-    print(f"session {label}  |  V {st['voltage']:.2f}  |  "
-          f"kS {st['pods'][0]['ks']}  kP {st['pods'][0]['kp']}  kD {st['pods'][0]['kd']}",
+    # Tolerant of an empty snapshot: if the state fetch exhausted its retries, st is {} and
+    # hard-indexing it killed the capture session before the first chunk - the exact failure
+    # the retry wrapper exists to survive.
+    p0 = (st.get("pods") or [{}])[0]
+    volts = st.get("voltage")
+    print(f"session {label}  |  V {volts if volts is None else format(volts, '.2f')}  |  "
+          f"kS {p0.get('ks')}  kP {p0.get('kp')}  kD {p0.get('kd')}",
           flush=True)
     print(f"stop with: touch {STOP}", flush=True)
 
