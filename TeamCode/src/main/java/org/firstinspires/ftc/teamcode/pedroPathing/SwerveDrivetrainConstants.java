@@ -49,7 +49,15 @@ public class SwerveDrivetrainConstants {
             // file; it sat at the pre-tuning 1.75/0.003 for a week after this line moved to
             // 1.20/0.030, so anyone opening the heading routine was measuring against a
             // baseline the robot had stopped using.
-            .headingPIDFCoefficients(new PIDFCoefficients(1.20, 0, 0.030, 0))
+            //
+            // kD 0.030 -> 0.080 on 2026-08-13 late: the loop now runs ~2-3x faster and the pod
+            // turn loop underneath is much snappier (per-pod kP 0.38-0.44 vs 0.20), so 0.030
+            // overshot a 90 deg heading step by 11-15 deg. At 0.080 the same step settles in
+            // 0.56 s with 2.3 deg worst overshoot and 20 deg steps do not overshoot at all.
+            // Measured through the bring-up tool's headingGoto harness (tools/swervetune/
+            // headtune.py, results in current_runs/headtune.jsonl); path-following has not yet
+            // been re-validated at this value.
+            .headingPIDFCoefficients(new PIDFCoefficients(1.20, 0, 0.080, 0))
             //.secondaryHeadingPIDFCoefficients(new PIDFCoefficients(0.8, 0, 0.015, 0))
 
             .drivePIDFCoefficients(new FilteredPIDFCoefficients(0.005, 0, 0.00003, 0.6, 0.13))

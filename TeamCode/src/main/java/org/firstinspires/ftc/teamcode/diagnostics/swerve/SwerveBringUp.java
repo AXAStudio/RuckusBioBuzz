@@ -529,8 +529,15 @@ public class SwerveBringUp extends OpMode {
     // against the wrong baseline. Not persisted, deliberately: the source of truth is
     // FollowerConstants.headingPIDFCoefficients, and a copy that outlived a session would just be
     // a second place to disagree.
+    // Retuned 2026-08-13 late with the per-pod turn gains and the hold/correct hysteresis in
+    // place: kD 0.030 (the 08-11 value, tuned at roughly a third of today's loop rate against a
+    // slower inner loop) overshot 11-15 deg on a 90 deg step; 0.080 settles the same step in
+    // 0.56 s with 2.3 deg worst overshoot, zero overshoot at 20 deg, and holds heading to 2.3
+    // deg worst-case while translating with direction flips. kP above 1.2 bought no settle -
+    // the swing is inertia-limited - and only overshoot. Keep in sync with
+    // FollowerConstants.headingPIDFCoefficients, same as ever.
     private double headingKp = 1.20;
-    private double headingKd = 0.030;
+    private double headingKd = 0.080;
     private double headingKf = 0.0;
 
     private double headingTargetRad;
@@ -559,14 +566,44 @@ public class SwerveBringUp extends OpMode {
     /**
      * Right stick sweeps a heading SETPOINT rather than commanding rotation power directly.
      *
-     * <p>OFF by default as of 2026-08-13 late: with the pod turn loop at its current gains the
-     * heading PIDF (kP 1.20 / kD 0.030, tuned 2026-08-11 at a much slower loop rate) shakes the
-     * whole robot violently while driving. Raw right-stick rotation is the usable mode until the
-     * heading loop is retuned at the current loop rate; the dashboard's drive panel has the
-     * toggle for when that work happens.
+     * <p>Back ON by default. It was disabled 2026-08-13 late because it shook the robot
+     * violently; the shake turned out to be the epsilon release/re-engage relay in the
+     * actuation path (see {@link #headingCorrecting}), not the gains - though the gains were
+     * also stale (kD retuned 0.030 -> 0.080 for the faster loop and inner turn loop). With the
+     * hysteresis and the retune it settles a 90 degree step in 0.56 s with 2.3 deg worst
+     * overshoot and disengages cleanly. The dashboard drive panel has the toggle.
      */
-    private boolean headingHold = false;
+    private boolean headingHold = true;
     private boolean headingStickActive;
+
+    /**
+     * Hold/correct hysteresis for the heading loop at rest.
+     *
+     * <p>With heading hold on, the drivetrain's zero-power behaviour is IGNORE_ANGLE_CHANGES,
+     * so {@code arcade()} releases the pods whenever |rotation| drops under epsilon (0.05) and
+     * re-engages them - a 90 degree pod swing - the moment it rises again. At kP 1.20 the
+     * boundary sits at 2.4 degrees of heading error, which the robot wobbles across
+     * perpetually: all four pods snapping between released and rotation pose several times a
+     * second was the "violent shake" heading hold produced. No gain fixes a relay in the
+     * actuation path.
+     *
+     * <p>So the loop is a two-state machine when stationary: HOLDING passes zero rotation (pods
+     * released, chassis held by friction) until the error exceeds the enter band; CORRECTING
+     * runs the PIDF with its output floored just above epsilon so the pods stay engaged through
+     * the tail, and disengages only once the error is inside the exit band with the rotation
+     * rate low. Stick input or translation always runs closed loop - the boundary problem only
+     * exists at rest.
+     */
+    private boolean headingCorrecting;
+    private static final double HEADING_ENTER_RAD = Math.toRadians(2.5);
+    private static final double HEADING_EXIT_RAD = Math.toRadians(1.0);
+    private static final double HEADING_EXIT_RATE_RAD_S = Math.toRadians(25);
+    private static final double HEADING_MIN_ENGAGED_TURN = 0.06;
+
+    /** Measured heading rate, rad/s, for the CORRECTING exit gate. */
+    private double headingRateRadS;
+    private double headingPrevForRate = Double.NaN;
+    private final ElapsedTime headingRateTimer = new ElapsedTime();
 
     /** Frozen-heading watchdog: a dead sensor plus a heading controller means a full-power spin. */
     private double headingLastSeen;
@@ -1950,7 +1987,48 @@ public class SwerveBringUp extends OpMode {
             }
 
             headingStickActive = stickActive;
-            turn = headingCorrection();
+
+            // Heading rate for the CORRECTING exit gate, wrap-aware.
+            double rateDt = Math.min(0.25, Math.max(1e-3, headingRateTimer.seconds()));
+            headingRateTimer.reset();
+            if (!Double.isNaN(headingPrevForRate)) {
+                headingRateRadS = MathFunctions.normalizeAngleSigned(
+                        headingRad - headingPrevForRate) / rateDt;
+            }
+            headingPrevForRate = headingRad;
+
+            boolean translating = Math.abs(driveForward) >= SWERVE_EPSILON
+                    || Math.abs(driveStrafe) >= SWERVE_EPSILON;
+            double headingAbsErr =
+                    MathFunctions.getSmallestAngleDifference(headingRad, headingTargetRad);
+
+            // Hold/correct hysteresis - see the field comment. Demand always runs closed loop;
+            // at rest the loop either holds quietly or corrects decisively, never dithers on
+            // the epsilon boundary.
+            if (stickActive || translating) {
+                headingCorrecting = true;
+            } else if (headingCorrecting) {
+                if (headingAbsErr < HEADING_EXIT_RAD
+                        && Math.abs(headingRateRadS) < HEADING_EXIT_RATE_RAD_S) {
+                    headingCorrecting = false;
+                }
+            } else if (headingAbsErr > HEADING_ENTER_RAD) {
+                headingCorrecting = true;
+                headingPidf.reset();
+            }
+
+            if (headingCorrecting) {
+                turn = headingCorrection();
+                if (!translating && Math.abs(turn) < HEADING_MIN_ENGAGED_TURN) {
+                    // Keep the pods engaged through the tail of a stationary correction: below
+                    // epsilon arcade() would release them mid-move, which is the chatter this
+                    // state machine exists to prevent.
+                    double dir = MathFunctions.getTurnDirection(headingRad, headingTargetRad);
+                    turn = HEADING_MIN_ENGAGED_TURN * (turn != 0 ? Math.signum(turn) : dir);
+                }
+            } else {
+                turn = 0;
+            }
 
             // If we are commanding real rotation but the measured heading has not moved at all,
             // the sensor is dead and this loop would happily spin the robot at full power.
@@ -2819,6 +2897,8 @@ public class SwerveBringUp extends OpMode {
                 .append(",\"kf\":").append(fmt(headingKf))
                 .append(",\"closedLoop\":").append(headingClosedLoop)
                 .append(",\"hold\":").append(headingHold)
+                .append(",\"correcting\":").append(headingCorrecting)
+                .append(",\"rate\":").append(fmt(Math.toDegrees(headingRateRadS)))
                 .append('}');
         sb.append(",\"message\":\"").append(esc(message)).append('"');
         sb.append(",\"phase\":").append(fmt(phaseTimer.seconds()));
