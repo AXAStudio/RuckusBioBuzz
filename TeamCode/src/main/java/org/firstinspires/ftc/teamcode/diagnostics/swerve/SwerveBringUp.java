@@ -388,6 +388,17 @@ public class SwerveBringUp extends OpMode {
                     SwerveDrivetrainConstants.podMinV[i], 0.01, "V");
             appendIfDifferentTol(out, i, "max V", c.analogMax,
                     SwerveDrivetrainConstants.podMaxV[i], 0.01, "V");
+
+            // Directions too. A flipped drive direction and a wrong zero produce the same
+            // haywire drive, and on 2026-08-13 the tool held two direction flips the shipped
+            // file knew nothing about - nothing compared them.
+            if (c.driveReversed() != SwerveDrivetrainConstants.podDriveReversed[i]) {
+                out.add(String.format(Locale.US,
+                        "pod %d drive direction: tool %s, shipped %s - this corner will push the "
+                                + "wrong way under competition code",
+                        i, c.driveReversed() ? "REVERSE" : "FORWARD",
+                        SwerveDrivetrainConstants.podDriveReversed[i] ? "REVERSE" : "FORWARD"));
+            }
         }
         return out;
     }
@@ -545,8 +556,16 @@ public class SwerveBringUp extends OpMode {
                 }
             });
 
-    /** Right stick sweeps a heading SETPOINT rather than commanding rotation power directly. */
-    private boolean headingHold = true;
+    /**
+     * Right stick sweeps a heading SETPOINT rather than commanding rotation power directly.
+     *
+     * <p>OFF by default as of 2026-08-13 late: with the pod turn loop at its current gains the
+     * heading PIDF (kP 1.20 / kD 0.030, tuned 2026-08-11 at a much slower loop rate) shakes the
+     * whole robot violently while driving. Raw right-stick rotation is the usable mode until the
+     * heading loop is retuned at the current loop rate; the dashboard's drive panel has the
+     * toggle for when that work happens.
+     */
+    private boolean headingHold = false;
     private boolean headingStickActive;
 
     /** Frozen-heading watchdog: a dead sensor plus a heading controller means a full-power spin. */

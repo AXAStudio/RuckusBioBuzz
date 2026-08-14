@@ -302,20 +302,39 @@ public class SwerveDrivetrainConstants {
      * <p>Keep these as the single source of truth - the factories below read them, and
      * SwerveBringUp compares against them.
      */
-    public static final double[] podZeroDeg = {222.67, 144.11, 163.24, 185.57};
+    // Re-captured 2026-08-13 late, after the first drive at the per-pod gains went haywire. The
+    // per-pod tuning session was pod-relative step scoring, which is completely blind to zeros:
+    // a mis-zeroed pod steps beautifully and still pushes the wrong way in the robot frame. The
+    // 2026-08-13 afternoon zeros were 4-175 degrees off by drive time (the analog ranges had
+    // also shifted, e.g. ss3 min 0.266 -> 0.106 V, which moves every angle that pod reports), so
+    // the operator re-zeroed and re-ranged all four on the ground and verified by driving.
+    // Values below are the tool's full-precision numbers, not the export's rounded ones.
+    public static final double[] podZeroDeg = {32.7686, 148.4663, 348.8555, 279.7869};
 
     /** Analog encoder low/high voltage per pod, same ss0..ss3 indexing as {@link #podZeroDeg}. */
-    public static final double[] podMinV = {0.075, 0.145, 0.136, 0.266};
-    public static final double[] podMaxV = {3.247, 3.350, 3.336, 3.467};
+    public static final double[] podMinV = {0.072, 0.094, 0.091, 0.106};
+    public static final double[] podMaxV = {3.236, 3.302, 3.289, 3.297};
+
+    /**
+     * Drive-motor reversal per pod, ss0..ss3, same indexing. The other half of "which way does
+     * this corner push": a wrong zero and a wrong drive direction produce the same haywire
+     * symptom, and until 2026-08-13 late the divergence guard compared neither directions nor
+     * zeros-at-drive-time - the factories hardcoded these and nothing could disagree out loud.
+     * Servo direction is REVERSE on all four (Axon MINI+ orientation) and the encoders read
+     * un-reversed; those stay literals in the builder until one actually varies per pod.
+     */
+    public static final boolean[] podDriveReversed = {true, true, false, false};
 
     // The encoder names do NOT follow the sm#/ss#/se# numbering. The Axon feedback wires are
     // spliced two per analog port, and the wiring scan found every pod landing on a different
     // channel than its own number. Do not "tidy" these to match.
     /** Shared body so a per-pod gain can never be wired to the wrong corner by hand. */
     private static CoaxialPod buildPod(HardwareMap hardwareMap, int ss, String motor, String servo,
-            String encoder, DcMotorSimple.Direction driveDir, Pose pose) {
+            String encoder, Pose pose) {
         CoaxialPod pod = new CoaxialPod(hardwareMap, motor, servo, encoder,
-                new PIDFCoefficients(turnKPPerPod[ss], 0, turnKDPerPod[ss], 0), driveDir,
+                new PIDFCoefficients(turnKPPerPod[ss], 0, turnKDPerPod[ss], 0),
+                podDriveReversed[ss] ? DcMotorSimple.Direction.REVERSE
+                        : DcMotorSimple.Direction.FORWARD,
                 DcMotorSimple.Direction.REVERSE, Math.toRadians(podZeroDeg[ss]), pose,
                 podMinV[ss], podMaxV[ss], false);
         pod.setMotorCachingThreshold(0.05);
@@ -325,23 +344,19 @@ public class SwerveDrivetrainConstants {
     }
 
     private static CoaxialPod leftFront(HardwareMap hardwareMap) {
-        return buildPod(hardwareMap, 2, "sm2", "ss2", "se3",
-                DcMotorSimple.Direction.FORWARD, new Pose(dtLength, dtWidth));
+        return buildPod(hardwareMap, 2, "sm2", "ss2", "se3", new Pose(dtLength, dtWidth));
     }
 
     private static CoaxialPod rightFront(HardwareMap hardwareMap) {
-        return buildPod(hardwareMap, 1, "sm1", "ss1", "se0",
-                DcMotorSimple.Direction.FORWARD, new Pose(dtLength, -dtWidth));
+        return buildPod(hardwareMap, 1, "sm1", "ss1", "se0", new Pose(dtLength, -dtWidth));
     }
 
     private static CoaxialPod leftBack(HardwareMap hardwareMap) {
-        return buildPod(hardwareMap, 3, "sm3", "ss3", "se2",
-                DcMotorSimple.Direction.REVERSE, new Pose(-dtLength, dtWidth));
+        return buildPod(hardwareMap, 3, "sm3", "ss3", "se2", new Pose(-dtLength, dtWidth));
     }
 
     private static CoaxialPod rightBack(HardwareMap hardwareMap) {
-        return buildPod(hardwareMap, 0, "sm0", "ss0", "se1",
-                DcMotorSimple.Direction.REVERSE, new Pose(-dtLength, -dtWidth));
+        return buildPod(hardwareMap, 0, "sm0", "ss0", "se1", new Pose(-dtLength, -dtWidth));
     }
 
     public static PathConstraints pathConstraints =

@@ -392,6 +392,13 @@
         </div>
         <div class="row" id="driveButtons"></div>
         <div class="row" style="margin-top:8px">
+          <button id="hdgPidfBtn" onclick="cmd('setHeadingHold')">heading PIDF: …</button>
+          <span class="hint">
+            OFF = right stick is raw rotation power. ON runs the heading hold PIDF, which at its
+            current gains shakes the robot &mdash; leave it off until that loop is retuned.
+          </span>
+        </div>
+        <div class="row" style="margin-top:8px">
           <button id="xlockBtn" onclick="cmd('setXLock')">zero input: …</button>
           <span class="hint">
             X-lock matches competition. Hold-heading is easier to read while tuning, because
@@ -1083,6 +1090,13 @@ function render() {
   if (xb) {
     xb.textContent = state.xLock ? 'zero input: X-lock' : 'zero input: hold heading';
     xb.className = state.xLock ? 'primary' : '';
+  }
+
+  var hb = document.getElementById('hdgPidfBtn');
+  if (hb && state.heading) {
+    hb.textContent = state.heading.hold ? 'heading PIDF: ON' : 'heading PIDF: off';
+    // Red when on: at the current heading gains this is the shake-the-robot setting.
+    hb.className = state.heading.hold ? 'stop' : '';
   }
 
   var issues = '';
