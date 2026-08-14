@@ -33,6 +33,21 @@ public class Swerve extends CustomDrivetrain {
     private double lastRotation = 0;
     private double lastAvgScaling = 0;
 
+    /** RUCKUS PATCH: when the drive inputs last carried a real command. See arcadeDrive. */
+    private long lastActiveInputNano = 0;
+
+    /**
+     * RUCKUS PATCH: how long zero input must persist before X_LOCK engages. Stick release at
+     * speed used to snap all four pods sideways against a still-rolling chassis - ground
+     * reaction torque then buffets the pod azimuths and the whole robot judders. Measured on
+     * 2026-08-13 with a scripted forward/pause/backward cycle: wheels reversed direction 6-7
+     * times per second against a commanded 0.8/s, invariant to every gain tried, and cutting the
+     * instant snap halved it. Within this window zero input holds pod headings (servos released,
+     * the IGNORE_ANGLE_CHANGES behaviour) so the robot rolls out straight; the X still engages
+     * once the chassis has had time to stop.
+     */
+    private static final double X_LOCK_ENGAGE_DELAY_S = 0.35;
+
     private final VoltageSensor voltageSensor;
 
     /**
@@ -72,6 +87,15 @@ public class Swerve extends CustomDrivetrain {
         boolean zeroTrans = rawTrans.getMagnitude() < epsilon;
         boolean zeroRotation = Math.abs(rotation) < epsilon;
 
+        // RUCKUS PATCH: X_LOCK only after zero input has persisted, so a stick release at speed
+        // does not snap the pods sideways under a rolling chassis. Until then zero input behaves
+        // like IGNORE_ANGLE_CHANGES: headings held, servos quiet, robot rolls out straight.
+        if (!(zeroTrans && zeroRotation)) {
+            lastActiveInputNano = System.nanoTime();
+        }
+        boolean xLockRipe = zeroTrans && zeroRotation
+                && (System.nanoTime() - lastActiveInputNano) / 1.0e9 >= X_LOCK_ENGAGE_DELAY_S;
+
         double rotationScalar = (zeroRotation) ? 0 : rotation;
 
         Vector[] podVectors = new Vector[pods.size()];
@@ -89,7 +113,7 @@ public class Swerve extends CustomDrivetrain {
 
             podVectors[i] = translationVector.plus(rotationVector);
             if (constants.getZeroPowerBehavior() == SwerveConstants.ZeroPowerBehavior.X_LOCK
-                    && zeroTrans && zeroRotation) {
+                    && xLockRipe) {
                     rotationVector.rotateVector(-Math.PI / 2);
                     podVectors[i] = rotationVector;
             }
@@ -136,8 +160,13 @@ public class Swerve extends CustomDrivetrain {
             // Normalizing if necessary while preserving relative sizes
             Vector finalVector = podVectors[podNum].times(maxPowerScaling / maxMagnitude);
 
+            // RUCKUS PATCH: inside the X_LOCK engage delay the pod vectors are still the
+            // degenerate zero vectors, so the pods must be released rather than sent chasing
+            // a meaningless theta - same treatment IGNORE_ANGLE_CHANGES always gets.
             pods.get(podNum).move(finalVector.getTheta(), finalVector.getMagnitude() * avgScaling,
-    zeroTrans && zeroRotation && constants.getZeroPowerBehavior() == SwerveConstants.ZeroPowerBehavior.IGNORE_ANGLE_CHANGES);
+    zeroTrans && zeroRotation
+            && (constants.getZeroPowerBehavior() == SwerveConstants.ZeroPowerBehavior.IGNORE_ANGLE_CHANGES
+                    || !xLockRipe));
         }
     }
 
