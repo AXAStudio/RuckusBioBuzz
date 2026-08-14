@@ -204,8 +204,50 @@ public class SwerveDrivetrainConstants {
     // copy. The tool is supposed to be able to hold different gains - that is what it is for - but
     // it should never be possible to measure at gains nobody intended, which is what happened when
     // its calibration file sat at kD 0.010 while this file said 0.022.
+    //
+    // PER-POD as of 2026-08-13 evening, indexed by servo number ss0..ss3 like podZeroDeg
+    // (0=RB, 1=RF, 2=LF, 3=LB). The pods are not interchangeable plants: re-scoring the day's
+    // 534-run kP sweep per pod shows pod 0 carrying the highest residual at every kP while almost
+    // never drawing the loose mode (1/159), and pod 3 the lowest residual while drawing it in a
+    // quarter of runs at kP 0.320. One shared gain set cannot serve both, which is why criterion
+    // 10 (pod-to-pod settle spread) never passed. The scalar turnKP/turnKD/turnKS survive as the
+    // pooled-tune values; the factories read the arrays.
+    //
+    // How the per-pod values were chosen (game tiles, 12.28-12.40 V, randomised interleaved
+    // 90-degree steps, n=15-25 per cell per pod, 210 sweep trials total, tools in
+    // tools/swervetune/current_runs/perpod_*.jsonl):
+    //
+    //   The controlling discovery: the wide mode (>=10 deg post-settle excursions) is fuelled by
+    //   kS, not tamed by kD. At kS 0.035, kP 0.44 drew 5/25 wide on pod 0; at kS 0.028 the same
+    //   kP drew 0/20 wide on pods 0 and 2 and 1/20 on pod 1 - and with the wide mode defuelled,
+    //   the extra P authority is free residual: pod 0 |e3| 1.31 -> 0.92, pod 1 0.57 -> 0.49,
+    //   pod 2 1.40 -> 0.57 versus their kP 0.320 / kS 0.035 cells. kS below the kinetic need
+    //   parks the pod short at low kP (pod 0 at kP .32 / kS .022: 2.84 deg) - the two must move
+    //   together.
+    //
+    //   Pod 3 is the outlier: it draws wide events at EVERY cell tested (kS 0.022-0.050, kP
+    //   0.32-0.44), best rate ~7% (1/15) at kS 0.022. Its assignment favours the smallest events
+    //   and residual among the tame cells, not zero events, because zero was not on the menu
+    //   today. If pod 3's wide mode matters at competition, the fix is mechanical (or the shelved
+    //   pulsed/dom experiments), not more gain search on these axes.
+    //
+    //   Second discovery, and the reason the final values lean conservative: the plant is not
+    //   stationary. Pod 0's kS 0.028 cell measured 0/20 wide, then 6/25 wide THIRTY MINUTES
+    //   later at the same gains - kinetic friction keeps falling as the pods warm through
+    //   sustained testing, so a kS fitted to the friction of the moment goes unstable as the
+    //   session runs on. The final choices reduce near-target feed-forward (lower kS, or the
+    //   same kS with a wider tanh band) because that direction FAILS SAFE: too little
+    //   feed-forward parks a cold pod slightly short; too much feeds the wide mode. Pod 0 takes
+    //   the wider band (0/15 wide, 0 wobbles, |e3| 0.79 on the hot plant), pods 1-2 take kS
+    //   0.024 (pod 2: 0/15 wide, 0 wobbles), measured per pod, not assumed transferable.
     public static final double turnKP = 0.320;
     public static final double turnKD = 0.022;
+
+    /** Per-pod turn gains, ss0..ss3 indexing (0=RB 1=RF 2=LF 3=LB). See block comment above. */
+    public static final double[] turnKPPerPod = {0.440, 0.440, 0.440, 0.380};
+    public static final double[] turnKDPerPod = {0.022, 0.022, 0.022, 0.022};
+    public static final double[] turnKSPerPod = {0.028, 0.024, 0.024, 0.022};
+    public static final double[] turnKSBandDegPerPod = {3.5, 2.0, 2.0, 2.0};
 
     /**
      * Static-friction feed-forward, set to the measured breakaway. Replaces the kF relay.
@@ -269,48 +311,37 @@ public class SwerveDrivetrainConstants {
     // The encoder names do NOT follow the sm#/ss#/se# numbering. The Axon feedback wires are
     // spliced two per analog port, and the wiring scan found every pod landing on a different
     // channel than its own number. Do not "tidy" these to match.
-    private static CoaxialPod leftFront(HardwareMap hardwareMap) {
-        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm2", "ss2", "se3",
-                new PIDFCoefficients(turnKP, 0, turnKD, 0), DcMotorSimple.Direction.FORWARD,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(podZeroDeg[2]), new Pose(dtLength, dtWidth),
-                podMinV[2], podMaxV[2], false);
+    /** Shared body so a per-pod gain can never be wired to the wrong corner by hand. */
+    private static CoaxialPod buildPod(HardwareMap hardwareMap, int ss, String motor, String servo,
+            String encoder, DcMotorSimple.Direction driveDir, Pose pose) {
+        CoaxialPod pod = new CoaxialPod(hardwareMap, motor, servo, encoder,
+                new PIDFCoefficients(turnKPPerPod[ss], 0, turnKDPerPod[ss], 0), driveDir,
+                DcMotorSimple.Direction.REVERSE, Math.toRadians(podZeroDeg[ss]), pose,
+                podMinV[ss], podMaxV[ss], false);
         pod.setMotorCachingThreshold(0.05);
         pod.setServoCachingThreshold(turnServoCaching);
-        pod.setStaticFriction(turnKS, Math.toRadians(turnKSBandDeg));
+        pod.setStaticFriction(turnKSPerPod[ss], Math.toRadians(turnKSBandDegPerPod[ss]));
         return pod;
+    }
+
+    private static CoaxialPod leftFront(HardwareMap hardwareMap) {
+        return buildPod(hardwareMap, 2, "sm2", "ss2", "se3",
+                DcMotorSimple.Direction.FORWARD, new Pose(dtLength, dtWidth));
     }
 
     private static CoaxialPod rightFront(HardwareMap hardwareMap) {
-        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm1", "ss1", "se0",
-                new PIDFCoefficients(turnKP, 0, turnKD, 0), DcMotorSimple.Direction.FORWARD,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(podZeroDeg[1]), new Pose(dtLength, -dtWidth),
-                podMinV[1], podMaxV[1], false);
-        pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(turnServoCaching);
-        pod.setStaticFriction(turnKS, Math.toRadians(turnKSBandDeg));
-        return pod;
+        return buildPod(hardwareMap, 1, "sm1", "ss1", "se0",
+                DcMotorSimple.Direction.FORWARD, new Pose(dtLength, -dtWidth));
     }
 
     private static CoaxialPod leftBack(HardwareMap hardwareMap) {
-        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm3", "ss3", "se2",
-                new PIDFCoefficients(turnKP, 0, turnKD, 0), DcMotorSimple.Direction.REVERSE,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(podZeroDeg[3]), new Pose(-dtLength, dtWidth),
-                podMinV[3], podMaxV[3], false);
-        pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(turnServoCaching);
-        pod.setStaticFriction(turnKS, Math.toRadians(turnKSBandDeg));
-        return pod;
+        return buildPod(hardwareMap, 3, "sm3", "ss3", "se2",
+                DcMotorSimple.Direction.REVERSE, new Pose(-dtLength, dtWidth));
     }
 
     private static CoaxialPod rightBack(HardwareMap hardwareMap) {
-        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm0", "ss0", "se1",
-                new PIDFCoefficients(turnKP, 0, turnKD, 0), DcMotorSimple.Direction.REVERSE,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(podZeroDeg[0]), new Pose(-dtLength, -dtWidth),
-                podMinV[0], podMaxV[0], false);
-        pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(turnServoCaching);
-        pod.setStaticFriction(turnKS, Math.toRadians(turnKSBandDeg));
-        return pod;
+        return buildPod(hardwareMap, 0, "sm0", "ss0", "se1",
+                DcMotorSimple.Direction.REVERSE, new Pose(-dtLength, -dtWidth));
     }
 
     public static PathConstraints pathConstraints =

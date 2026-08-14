@@ -358,10 +358,12 @@ public class SwerveBringUp extends OpMode {
         List<String> out = new ArrayList<>();
         for (int i = 0; i < POD_COUNT; i++) {
             PodCal c = cals[i];
-            appendIfDifferent(out, i, "kP", c.kP, SwerveDrivetrainConstants.turnKP);
-            appendIfDifferent(out, i, "kD", c.kD, SwerveDrivetrainConstants.turnKD);
-            appendIfDifferent(out, i, "kS", c.kS, SwerveDrivetrainConstants.turnKS);
-            appendIfDifferent(out, i, "kS band", c.kSBandDeg, SwerveDrivetrainConstants.turnKSBandDeg);
+            // Shipped gains are per-pod arrays (ss-indexed, same as this tool's pod index).
+            appendIfDifferent(out, i, "kP", c.kP, SwerveDrivetrainConstants.turnKPPerPod[i]);
+            appendIfDifferent(out, i, "kD", c.kD, SwerveDrivetrainConstants.turnKDPerPod[i]);
+            appendIfDifferent(out, i, "kS", c.kS, SwerveDrivetrainConstants.turnKSPerPod[i]);
+            appendIfDifferent(out, i, "kS band", c.kSBandDeg,
+                    SwerveDrivetrainConstants.turnKSBandDegPerPod[i]);
             appendIfDifferent(out, i, "cache", c.servoCaching,
                     SwerveDrivetrainConstants.turnServoCaching);
             appendIfDifferent(out, i, "kF", c.kF, 0.0);
@@ -2853,12 +2855,25 @@ public class SwerveBringUp extends OpMode {
         }
         sb.append(']');
 
+        // Scalars kept for old readers; the perPod arrays are what the guard actually compares.
         sb.append(",\"shipped\":{\"kp\":").append(fmt(SwerveDrivetrainConstants.turnKP))
                 .append(",\"kd\":").append(fmt(SwerveDrivetrainConstants.turnKD))
                 .append(",\"ks\":").append(fmt(SwerveDrivetrainConstants.turnKS))
                 .append(",\"ksband\":").append(fmt(SwerveDrivetrainConstants.turnKSBandDeg))
-                .append(",\"cache\":").append(fmt(SwerveDrivetrainConstants.turnServoCaching))
-                .append('}');
+                .append(",\"cache\":").append(fmt(SwerveDrivetrainConstants.turnServoCaching));
+        sb.append(",\"perPod\":[");
+        for (int i = 0; i < POD_COUNT; i++) {
+            if (i > 0) {
+                sb.append(',');
+            }
+            sb.append("{\"kp\":").append(fmt(SwerveDrivetrainConstants.turnKPPerPod[i]))
+                    .append(",\"kd\":").append(fmt(SwerveDrivetrainConstants.turnKDPerPod[i]))
+                    .append(",\"ks\":").append(fmt(SwerveDrivetrainConstants.turnKSPerPod[i]))
+                    .append(",\"ksband\":")
+                    .append(fmt(SwerveDrivetrainConstants.turnKSBandDegPerPod[i]))
+                    .append('}');
+        }
+        sb.append("]}");
 
         sb.append(",\"notes\":[");
         for (int i = 0; i < scanNotes.size(); i++) {
