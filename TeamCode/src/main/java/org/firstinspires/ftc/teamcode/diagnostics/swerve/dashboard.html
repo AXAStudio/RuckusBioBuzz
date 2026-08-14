@@ -394,8 +394,9 @@
         <div class="row" style="margin-top:8px">
           <button id="hdgPidfBtn" onclick="cmd('setHeadingHold')">heading PIDF: …</button>
           <span class="hint">
-            ON = right stick steers a heading setpoint and the robot holds it (retuned kD 0.080,
-            with hold/correct hysteresis &mdash; settles 90&deg; in ~0.56 s). OFF = raw rotation power.
+            ON = right stick steers a heading setpoint (full stick = the robot's true max turn
+            rate). On release it coasts to a stop, snaps the setpoint to the measured heading,
+            and the X-lock takes the hold &mdash; the PIDF never fights the X. OFF = raw rotation.
           </span>
         </div>
         <div class="row" style="margin-top:8px">

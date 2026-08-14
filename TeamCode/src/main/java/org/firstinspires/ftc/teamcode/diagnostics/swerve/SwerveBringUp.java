@@ -577,25 +577,33 @@ public class SwerveBringUp extends OpMode {
     private boolean headingStickActive;
 
     /**
-     * Hold/correct hysteresis for the heading loop at rest.
+     * Heading-hold lifecycle at zero input: coast to a stop, adopt reality, hand over to X-lock.
      *
-     * <p>With heading hold on, the drivetrain's zero-power behaviour is IGNORE_ANGLE_CHANGES,
-     * so {@code arcade()} releases the pods whenever |rotation| drops under epsilon (0.05) and
-     * re-engages them - a 90 degree pod swing - the moment it rises again. At kP 1.20 the
-     * boundary sits at 2.4 degrees of heading error, which the robot wobbles across
-     * perpetually: all four pods snapping between released and rotation pose several times a
-     * second was the "violent shake" heading hold produced. No gain fixes a relay in the
-     * actuation path.
-     *
-     * <p>So the loop is a two-state machine when stationary: HOLDING passes zero rotation (pods
-     * released, chassis held by friction) until the error exceeds the enter band; CORRECTING
-     * runs the PIDF with its output floored just above epsilon so the pods stay engaged through
-     * the tail, and disengages only once the error is inside the exit band with the rotation
-     * rate low. Stick input or translation always runs closed loop - the boundary problem only
-     * exists at rest.
+     * <p>ACTIVE runs the PIDF - stick input, translation, or a pending headingGoto. On release
+     * the robot is usually still rotating faster than the swept setpoint (how much faster
+     * changes with the battery), so chasing a latched target rubber-bands it backwards.
+     * STOPPING instead commands zero rotation and watches the IMU until the chassis has
+     * actually stopped; only then is the setpoint snapped to the measured heading, and RESTING
+     * begins. In RESTING the heading PIDF never produces output: the pods form the X (the
+     * Swerve-level engage delay has been counting since the input went quiet) and the X owns
+     * the hold - mechanically, not by servoing. Any new demand re-adopts the current heading
+     * before acting, so nothing stale can snap the robot.
      */
-    private boolean headingCorrecting;
-    private static final double HEADING_ENTER_RAD = Math.toRadians(2.5);
+    private enum HeadingHoldPhase { ACTIVE, STOPPING, RESTING }
+
+    private HeadingHoldPhase headingPhase = HeadingHoldPhase.RESTING;
+
+    /** A commanded rotate-to-heading (headingGoto) counts as demand until it settles. */
+    private boolean headingGotoActive;
+
+    private final ElapsedTime headingStopTimer = new ElapsedTime();
+
+    /** Chassis rotation below this reads as "stopped" for the STOPPING -> RESTING snap. */
+    private static final double HEADING_STOPPED_RATE_RAD_S = Math.toRadians(15);
+
+    /** STOPPING never waits longer than this - IMU noise must not stall the snap forever. */
+    private static final double HEADING_STOP_TIMEOUT_S = 1.0;
+
     private static final double HEADING_EXIT_RAD = Math.toRadians(1.0);
     private static final double HEADING_EXIT_RATE_RAD_S = Math.toRadians(25);
     private static final double HEADING_MIN_ENGAGED_TURN = 0.06;
@@ -617,7 +625,14 @@ public class SwerveBringUp extends OpMode {
      * needs a fraction of full power to keep up, so a held stick feels weak. Pedro's own teleop
      * maps the stick straight to rotation power, so full stick must mean full authority here too.
      */
-    private static final double HEADING_STICK_RATE = 5.5;   // rad/s, ~315 deg/s
+    // Raised 5.5 -> 7.0 rad/s (~400 deg/s) on 2026-08-13 late: the robot out-turned the swept
+    // setpoint on a fresh pack (measured 328 deg/s at full power, and that ceiling moves with
+    // battery), so the sweep was the limiter and the felt speed changed through a match. Now
+    // the sweep always outruns the chassis, the lead cap saturates the controller, and full
+    // stick means the robot's true maximum whatever the pack voltage. The release rubber-band
+    // this used to cause is gone: the hold phase machine stops, waits for the IMU to read
+    // stationary, and snaps the setpoint to reality instead of chasing the latched lead.
+    private static final double HEADING_STICK_RATE = 7.0;   // rad/s, ~400 deg/s
 
     /**
      * How far the setpoint may lead the measured heading.
@@ -1110,13 +1125,13 @@ public class SwerveBringUp extends OpMode {
 
             SwerveConstants sc = new SwerveConstants()
                     .velocity(73.9)
-                    // X_LOCK matches competition, but it cannot coexist with heading hold:
-                    // arcadeDrive engages the lock whenever |rotation| < epsilon, and the lock
-                    // points pods ALONG their radius while rotating points them PERPENDICULAR to
-                    // it. Every time the heading PID output dips under epsilon on approach, all
-                    // four pods snap 90 degrees, the robot stops rotating, error grows, output
-                    // rises and they snap back - which reads as rotation happening in bursts.
-                    .zeroPowerBehavior(xLock && !headingHold
+                    // X_LOCK now coexists with heading hold. It used to be disabled under hold
+                    // because the heading PID output dipping under epsilon toggled the X on and
+                    // off - but the hold phase machine passes EXACTLY zero rotation once it
+                    // decides to rest, so the X engages once (after the Swerve-level delay) and
+                    // stays. In RESTING the heading PIDF is silent by design: the X owns the
+                    // hold and is never overridden.
+                    .zeroPowerBehavior(xLock
                             ? SwerveConstants.ZeroPowerBehavior.X_LOCK
                             : SwerveConstants.ZeroPowerBehavior.IGNORE_ANGLE_CHANGES)
                     .useBrakeModeInTeleOp(false)
@@ -1965,30 +1980,9 @@ public class SwerveBringUp extends OpMode {
             headingStickTimer.reset();
 
             boolean stickActive = Math.abs(driveTurn) > 0.02;
-
-            if (stickActive) {
-                headingTargetRad = MathFunctions.normalizeAngle(
-                        headingTargetRad + driveTurn * HEADING_STICK_RATE * dt);
-
-                // Never let the setpoint lead further than the controller can chase. Past 180 the
-                // error wraps and getTurnDirection flips, which reverses the robot mid-turn.
-                double lead = MathFunctions.getTurnDirection(headingRad, headingTargetRad)
-                        * MathFunctions.getSmallestAngleDifference(headingRad, headingTargetRad);
-                if (lead > HEADING_MAX_LEAD) {
-                    headingTargetRad = MathFunctions.normalizeAngle(headingRad + HEADING_MAX_LEAD);
-                } else if (lead < -HEADING_MAX_LEAD) {
-                    headingTargetRad = MathFunctions.normalizeAngle(headingRad - HEADING_MAX_LEAD);
-                }
-            } else if (headingStickActive) {
-                // Stick just released. Latch the heading we are at rather than unwinding the lead,
-                // which would otherwise keep turning for another lead-angle after letting go.
-                headingTargetRad = headingRad;
-                headingPidf.reset();
-            }
-
             headingStickActive = stickActive;
 
-            // Heading rate for the CORRECTING exit gate, wrap-aware.
+            // Wrap-aware chassis rotation rate, for the stopped/settled gates.
             double rateDt = Math.min(0.25, Math.max(1e-3, headingRateTimer.seconds()));
             headingRateTimer.reset();
             if (!Double.isNaN(headingPrevForRate)) {
@@ -2002,31 +1996,71 @@ public class SwerveBringUp extends OpMode {
             double headingAbsErr =
                     MathFunctions.getSmallestAngleDifference(headingRad, headingTargetRad);
 
-            // Hold/correct hysteresis - see the field comment. Demand always runs closed loop;
-            // at rest the loop either holds quietly or corrects decisively, never dithers on
-            // the epsilon boundary.
-            if (stickActive || translating) {
-                headingCorrecting = true;
-            } else if (headingCorrecting) {
-                if (headingAbsErr < HEADING_EXIT_RAD
-                        && Math.abs(headingRateRadS) < HEADING_EXIT_RATE_RAD_S) {
-                    headingCorrecting = false;
-                }
-            } else if (headingAbsErr > HEADING_ENTER_RAD) {
-                headingCorrecting = true;
-                headingPidf.reset();
+            if (stickActive) {
+                // Driver input overrides any pending rotate-to-target.
+                headingGotoActive = false;
             }
+            boolean demand = stickActive || translating || headingGotoActive;
 
-            if (headingCorrecting) {
+            if (demand) {
+                if (headingPhase != HeadingHoldPhase.ACTIVE) {
+                    headingPhase = HeadingHoldPhase.ACTIVE;
+                    if (!headingGotoActive) {
+                        // Re-adopt reality on entry. The resting target may be stale (the robot
+                        // can be shoved while X-locked and nothing corrects it, by design), and
+                        // acting on a stale setpoint snaps the robot somewhere nobody asked.
+                        headingTargetRad = headingRad;
+                        headingPidf.reset();
+                    }
+                }
+
+                if (stickActive) {
+                    headingTargetRad = MathFunctions.normalizeAngle(
+                            headingTargetRad + driveTurn * HEADING_STICK_RATE * dt);
+
+                    // Never let the setpoint lead further than the controller can chase. Past
+                    // 180 the error wraps and getTurnDirection flips, which reverses the robot
+                    // mid-turn. The lead cap is also what makes the sweep rate battery-proof:
+                    // the setpoint runs ahead until the cap, the output saturates, and the
+                    // robot turns at whatever its true maximum is today.
+                    double lead = MathFunctions.getTurnDirection(headingRad, headingTargetRad)
+                            * MathFunctions.getSmallestAngleDifference(headingRad, headingTargetRad);
+                    if (lead > HEADING_MAX_LEAD) {
+                        headingTargetRad = MathFunctions.normalizeAngle(headingRad + HEADING_MAX_LEAD);
+                    } else if (lead < -HEADING_MAX_LEAD) {
+                        headingTargetRad = MathFunctions.normalizeAngle(headingRad - HEADING_MAX_LEAD);
+                    }
+                }
+
                 turn = headingCorrection();
-                if (!translating && Math.abs(turn) < HEADING_MIN_ENGAGED_TURN) {
-                    // Keep the pods engaged through the tail of a stationary correction: below
-                    // epsilon arcade() would release them mid-move, which is the chatter this
-                    // state machine exists to prevent.
+                if (!translating && !stickActive && Math.abs(turn) < HEADING_MIN_ENGAGED_TURN) {
+                    // Stationary goto tail: below epsilon arcade() would release the pods
+                    // mid-move; keep them engaged until the goto settles.
                     double dir = MathFunctions.getTurnDirection(headingRad, headingTargetRad);
                     turn = HEADING_MIN_ENGAGED_TURN * (turn != 0 ? Math.signum(turn) : dir);
                 }
+                if (headingGotoActive && headingAbsErr < HEADING_EXIT_RAD
+                        && Math.abs(headingRateRadS) < HEADING_EXIT_RATE_RAD_S) {
+                    headingGotoActive = false;
+                }
             } else {
+                // Zero input. The release sequence the driver actually wants: stop correcting
+                // immediately (chasing a latched target while the chassis still carries
+                // momentum rubber-bands it), wait for the IMU to say rotation has genuinely
+                // stopped, snap the setpoint to wherever physics parked us, and let the X-lock
+                // - whose engage delay has been counting since input went quiet - own the hold.
+                // In RESTING the heading PIDF produces nothing, ever: the X is not overridden.
+                if (headingPhase == HeadingHoldPhase.ACTIVE) {
+                    headingPhase = HeadingHoldPhase.STOPPING;
+                    headingStopTimer.reset();
+                }
+                if (headingPhase == HeadingHoldPhase.STOPPING
+                        && (Math.abs(headingRateRadS) < HEADING_STOPPED_RATE_RAD_S
+                                || headingStopTimer.seconds() > HEADING_STOP_TIMEOUT_S)) {
+                    headingTargetRad = headingRad;
+                    headingPidf.reset();
+                    headingPhase = HeadingHoldPhase.RESTING;
+                }
                 turn = 0;
             }
 
@@ -2514,9 +2548,11 @@ public class SwerveBringUp extends OpMode {
                         headingRad + Math.toRadians(doubleArg(cmd, "deg", 90)));
                 headingPidf.reset();
                 headingHold = true;
-                // Clear the stick-release latch: if the stick was active on the previous DRIVE
-                // loop, the next loop would see it "just released" and latch the target back to
-                // the current heading, silently cancelling this command.
+                // A goto is demand: it keeps the hold phase machine in ACTIVE (which would
+                // otherwise rest at zero input and never execute the rotation) until the
+                // target is reached, and it must not be re-adopted away on ACTIVE entry.
+                headingGotoActive = true;
+                headingPhase = HeadingHoldPhase.ACTIVE;
                 headingStickActive = false;
                 podsDirty = true;
                 driveForward = 0;
@@ -2832,10 +2868,10 @@ public class SwerveBringUp extends OpMode {
         boolean zeroRot = Math.abs(rotation) < SWERVE_EPSILON;
 
         if (zeroTrans && zeroRot) {
-            // Mirror the behaviour the drivetrain was actually built with: rebuildPods only
-            // engages X_LOCK when xLock is on AND heading hold is off. Keying this on xLock
-            // alone recorded X-lock targets while the pods were in fact released.
-            if (!(xLock && !headingHold)) {
+            // Mirrors rebuildPods: X_LOCK whenever xLock is on (heading hold no longer disables
+            // it - the hold phase machine guarantees clean zero rotation at rest). The
+            // Swerve-level engage delay means the first ~0.35 s of this display leads reality.
+            if (!xLock) {
                 // Pods just hold their heading, so there is nothing being commanded to show.
                 return;
             }
@@ -2897,7 +2933,8 @@ public class SwerveBringUp extends OpMode {
                 .append(",\"kf\":").append(fmt(headingKf))
                 .append(",\"closedLoop\":").append(headingClosedLoop)
                 .append(",\"hold\":").append(headingHold)
-                .append(",\"correcting\":").append(headingCorrecting)
+                .append(",\"correcting\":").append(headingPhase == HeadingHoldPhase.ACTIVE)
+                .append(",\"restPhase\":\"").append(headingPhase.name()).append('"')
                 .append(",\"rate\":").append(fmt(Math.toDegrees(headingRateRadS)))
                 .append('}');
         sb.append(",\"message\":\"").append(esc(message)).append('"');
