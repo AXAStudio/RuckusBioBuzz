@@ -414,6 +414,31 @@
     </div>
   </section>
 
+  <section>
+    <h2>Field</h2>
+    <div class="row" style="margin-bottom:8px">
+      <span class="stat">x <b id="poseX">--</b> in</span>
+      <span class="stat">y <b id="poseY">--</b> in</span>
+      <span class="stat">v <b id="poseV">--</b> in/s</span>
+      <span class="stat" id="boxStat">box: none</span>
+      <span class="spacer"></span>
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <button onclick="cmd('boxMark', {corner: 0})">Mark corner A</button>
+      <button onclick="cmd('boxMark', {corner: 1})">Mark corner B</button>
+      <button onclick="cmd('boxClear')">Clear box</button>
+      <button onclick="cmd('resetImu')">Reset pose</button>
+      <button onclick="fieldTrail = []">Clear trail</button>
+    </div>
+    <div class="hint" style="margin-bottom:8px">
+      Drive to one corner of the safe area, mark A; drive to the opposite corner, mark B. The
+      box saves to the hub and becomes a <b>hard limit</b>: any drive command that would carry
+      the robot out is clamped at the wall (edges flash red when clamping). Resetting the pose
+      clears the box &mdash; it lives in the pose frame.
+    </div>
+    <canvas id="fieldCanvas" width="360" height="360"
+            style="background:#0c1015;border:1px solid #2b3542;border-radius:6px"></canvas>
+  </section>
 
   <section>
     <h2>Robot heading PIDF</h2>
@@ -1070,6 +1095,8 @@ function renderPods(pods) {
 function render() {
   if (!state) return;
 
+  renderField();
+
   var live = !!state.live;
 
   // The OpMode owns the selection, so the gamepad and the dashboard can never disagree - except
@@ -1525,6 +1552,105 @@ function drawTrace(tr) {
   g.font = '12px sans-serif';
   g.fillText('pod ' + tr.pod + '   ' + tSpan.toFixed(1) + ' s   error '
     + err.toFixed(1) + '°', 46, 14);
+}
+
+// ---------------------------------------------------------------- field view
+//
+// Field-frame picture of where the robot actually is (Pinpoint odometry) inside the saved
+// bounding box. Screen mapping: field +x is up (the robot's forward at the last pose reset),
+// field +y is left - matching the odometry frame so a forward nudge draws upward.
+
+var fieldTrail = [];
+
+function renderField() {
+  var cv = document.getElementById('fieldCanvas');
+  if (!cv || !state) return;
+  var g = cv.getContext('2d');
+  var W = cv.width, H = cv.height;
+  g.clearRect(0, 0, W, H);
+
+  var pose = state.pose || {};
+  var box = state.box || {};
+
+  document.getElementById('poseX').textContent = pose.ok ? Number(pose.x).toFixed(1) : '--';
+  document.getElementById('poseY').textContent = pose.ok ? Number(pose.y).toFixed(1) : '--';
+  document.getElementById('poseV').textContent = pose.ok
+      ? Math.hypot(pose.vx || 0, pose.vy || 0).toFixed(1) : '--';
+  var bs = document.getElementById('boxStat');
+  if (box.valid) {
+    bs.textContent = 'box: ' + (box.maxX - box.minX).toFixed(0) + ' x '
+        + (box.maxY - box.minY).toFixed(0) + ' in (hard limit armed)';
+  } else if (box.marked0) {
+    bs.textContent = 'box: corner A marked - drive to the opposite corner, mark B';
+  } else {
+    bs.textContent = 'box: none';
+  }
+
+  if (pose.ok) {
+    var last = fieldTrail[fieldTrail.length - 1];
+    if (!last || Math.hypot(pose.x - last[0], pose.y - last[1]) > 0.5) {
+      fieldTrail.push([pose.x, pose.y]);
+      if (fieldTrail.length > 400) fieldTrail.shift();
+    }
+  }
+
+  // View bounds: the box when there is one, else a window around the robot; padded.
+  var bounds = box.valid
+      ? {x0: box.minX, y0: box.minY, x1: box.maxX, y1: box.maxY}
+      : (pose.ok ? {x0: pose.x - 30, y0: pose.y - 30, x1: pose.x + 30, y1: pose.y + 30}
+                 : {x0: -30, y0: -30, x1: 30, y1: 30});
+  var pad = 0.15 * Math.max(bounds.x1 - bounds.x0, bounds.y1 - bounds.y0);
+  var span = Math.max(bounds.x1 - bounds.x0, bounds.y1 - bounds.y0) + 2 * pad;
+  var scale = Math.min(W, H) / span;
+  var cx = (bounds.x0 + bounds.x1) / 2, cy = (bounds.y0 + bounds.y1) / 2;
+
+  // field(x up, y left) -> screen
+  function sx(fy) { return W / 2 - (fy - cy) * scale; }
+  function sy(fx) { return H / 2 - (fx - cx) * scale; }
+
+  // Grid every 12 in.
+  g.strokeStyle = VIZ.line; g.lineWidth = 1; g.beginPath();
+  for (var gx = Math.ceil((cx - span / 2) / 12) * 12; gx <= cx + span / 2; gx += 12) {
+    g.moveTo(0, sy(gx)); g.lineTo(W, sy(gx));
+  }
+  for (var gy = Math.ceil((cy - span / 2) / 12) * 12; gy <= cy + span / 2; gy += 12) {
+    g.moveTo(sx(gy), 0); g.lineTo(sx(gy), H);
+  }
+  g.stroke();
+
+  if (box.valid) {
+    g.strokeStyle = box.clamped ? VIZ.bad : '#2ea043';
+    g.lineWidth = box.clamped ? 3 : 2;
+    g.strokeRect(sx(box.maxY), sy(box.maxX),
+                 (box.maxY - box.minY) * scale, (box.maxX - box.minX) * scale);
+  }
+
+  if (fieldTrail.length > 1) {
+    g.strokeStyle = 'rgba(57,135,229,0.45)'; g.lineWidth = 1.5; g.beginPath();
+    g.moveTo(sx(fieldTrail[0][1]), sy(fieldTrail[0][0]));
+    for (var i = 1; i < fieldTrail.length; i++) {
+      g.lineTo(sx(fieldTrail[i][1]), sy(fieldTrail[i][0]));
+    }
+    g.stroke();
+  }
+
+  if (pose.ok) {
+    var hdg = (state.heading && state.heading.ok) ? state.heading.deg * Math.PI / 180 : 0;
+    var hw = 6.1 * scale, hl = 5.8 * scale;  // half width/length, 12.2 x 11.5 in chassis
+    g.save();
+    g.translate(sx(pose.y), sy(pose.x));
+    g.rotate(-hdg);  // field +x is up on screen; positive heading turns left (CCW)
+    g.strokeStyle = VIZ.ink; g.lineWidth = 2;
+    g.strokeRect(-hw, -hl, 2 * hw, 2 * hl);
+    g.strokeStyle = VIZ.target; g.beginPath();
+    g.moveTo(0, 0); g.lineTo(0, -hl * 1.45); g.stroke();
+    g.fillStyle = VIZ.actual;
+    g.beginPath(); g.arc(0, 0, 3, 0, 2 * Math.PI); g.fill();
+    g.restore();
+  } else {
+    g.fillStyle = VIZ.muted; g.font = '13px sans-serif';
+    g.fillText('no pose from the Pinpoint', 14, 20);
+  }
 }
 
 function poll() {

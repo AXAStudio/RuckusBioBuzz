@@ -521,6 +521,38 @@ public class SwerveBringUp extends OpMode {
     private double headingRad;
     private boolean headingOk;
 
+    // ---- field pose (Pinpoint + odometry pods, attached 2026-08-14) ----
+    /** Field-frame pose and velocity, inches and in/s, in the Pinpoint's frame since last reset. */
+    private double poseXIn;
+    private double poseYIn;
+    private double poseVxIn;
+    private double poseVyIn;
+    private boolean poseOk;
+
+    /**
+     * Operator-defined bounding box the robot may drive in, field frame, inches.
+     *
+     * <p>Captured as two corners (drive to a corner, mark it, drive to the opposite corner, mark
+     * it), normalised to min/max, persisted on the hub. It exists for two customers: a human
+     * tuning session that wants a visual fence, and the autonomous tuning driver, which treats it
+     * as a hard limit - {@link #applyBoxLimit} clamps any outward field-velocity component when
+     * the robot is within a braking margin of a wall, and everywhere outside the box only inward
+     * commands pass. The box lives in the Pinpoint's frame, so resetting the Pinpoint pose
+     * invalidates it; resetImu therefore clears it rather than letting a stale fence point at
+     * the wrong patch of floor.
+     */
+    private double boxMinX, boxMinY, boxMaxX, boxMaxY;
+    private boolean boxValid;
+    private double boxCorner0X, boxCorner0Y;
+    private boolean boxMarked0;
+    private boolean boxClampedNow;
+
+    private static final File BOX_FILE = new File(AppUtil.FIRST_FOLDER, "swerve_field_box.txt");
+
+    /** Wall margin: base plus a braking allowance per in/s of speed toward that wall. */
+    private static final double BOX_MARGIN_BASE_IN = 4.0;
+    private static final double BOX_MARGIN_LOOKAHEAD_S = 0.30;
+
     /** Heading PIDF under test. Units match FollowerConstants.headingPIDFCoefficients (radians). */
     // Seeded from what actually ships, so a heading session starts where the robot is rather than
     // where it used to be. These had been left at 1.75/0.003, the pre-tuning values, while
@@ -707,11 +739,25 @@ public class SwerveBringUp extends OpMode {
 
         try {
             pinpoint = hardwareMap.get(GoBildaPinpointDriver.class, "pinpoint");
+            // Same configuration the competition localizer applies, referenced from the same
+            // constants object so the two can never quietly disagree. Configuring does NOT
+            // reset the pose - continuity across OpMode restarts is what makes a saved box
+            // survive a redeploy. resetImu is the deliberate way to re-origin.
+            pinpoint.setOffsets(
+                    SwerveDrivetrainConstants.localizerConstants.forwardPodY,
+                    SwerveDrivetrainConstants.localizerConstants.strafePodX,
+                    SwerveDrivetrainConstants.localizerConstants.distanceUnit);
+            pinpoint.setEncoderResolution(
+                    SwerveDrivetrainConstants.localizerConstants.encoderResolution);
+            pinpoint.setEncoderDirections(
+                    SwerveDrivetrainConstants.localizerConstants.forwardEncoderDirection,
+                    SwerveDrivetrainConstants.localizerConstants.strafeEncoderDirection);
             pinpoint.update();
         } catch (RuntimeException e) {
             pinpoint = null;
             hwErrors.add("No \"pinpoint\" device; heading tuning unavailable.");
         }
+        loadBox();
 
         try {
             voltageSensor = hardwareMap.voltageSensor.iterator().next();
@@ -1053,9 +1099,125 @@ public class SwerveBringUp extends OpMode {
             if (headingOk) {
                 headingRad = h;
             }
+            // Full pose from the odometry pods. getPosition/getVel read the snapshot update()
+            // already fetched, so this costs no extra bus traffic.
+            org.firstinspires.ftc.robotcore.external.navigation.Pose2D p =
+                    pinpoint.getPosition();
+            double x = p.getX(org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit.INCH);
+            double y = p.getY(org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit.INCH);
+            poseOk = headingOk && !Double.isNaN(x) && !Double.isNaN(y);
+            if (poseOk) {
+                poseXIn = x;
+                poseYIn = y;
+                poseVxIn = pinpoint.getVelX(
+                        org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit.INCH);
+                poseVyIn = pinpoint.getVelY(
+                        org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit.INCH);
+            }
         } catch (RuntimeException e) {
             headingOk = false;
+            poseOk = false;
         }
+    }
+
+    // ---------------------------------------------------------------- field box
+
+    private void saveBox() {
+        FileWriter w = null;
+        try {
+            w = new FileWriter(BOX_FILE, false);
+            w.write("# Field bounding box, inches, Pinpoint frame. minX|minY|maxX|maxY\n");
+            w.write(boxMinX + "|" + boxMinY + "|" + boxMaxX + "|" + boxMaxY + "\n");
+        } catch (IOException e) {
+            message = "Could not save box: " + e.getMessage();
+        } finally {
+            closeQuietly(w);
+        }
+    }
+
+    private void loadBox() {
+        if (!BOX_FILE.exists()) {
+            return;
+        }
+        BufferedReader r = null;
+        try {
+            r = new BufferedReader(new FileReader(BOX_FILE));
+            String line;
+            while ((line = r.readLine()) != null) {
+                if (line.startsWith("#") || line.trim().isEmpty()) {
+                    continue;
+                }
+                String[] p = line.split("\\|");
+                if (p.length >= 4) {
+                    boxMinX = Double.parseDouble(p[0]);
+                    boxMinY = Double.parseDouble(p[1]);
+                    boxMaxX = Double.parseDouble(p[2]);
+                    boxMaxY = Double.parseDouble(p[3]);
+                    boxValid = true;
+                }
+            }
+        } catch (IOException | NumberFormatException e) {
+            boxValid = false;
+        } finally {
+            closeQuietly(r);
+        }
+    }
+
+    /**
+     * Clamps a commanded robot-frame translation so the robot cannot leave the box.
+     *
+     * <p>The command is rotated into the field frame; any component pointing at a wall the robot
+     * is within braking distance of is removed (the margin grows with measured speed toward that
+     * wall), and outside the box only inward components survive. Rotation is untouched. With a
+     * box armed and the pose unreadable, translation is refused outright - an autonomous driver
+     * with no fence and no eyes is how robots leave tables.
+     *
+     * @return {forward, strafe} to actually command
+     */
+    private double[] applyBoxLimit(double forward, double strafe) {
+        boxClampedNow = false;
+        if (!boxValid) {
+            return new double[] {forward, strafe};
+        }
+        if (!poseOk) {
+            if (forward != 0 || strafe != 0) {
+                boxClampedNow = true;
+                message = "Box armed but pose unreadable - translation refused.";
+            }
+            return new double[] {0, 0};
+        }
+        double ch = Math.cos(headingRad);
+        double sh = Math.sin(headingRad);
+        double vx = forward * ch - strafe * sh;
+        double vy = forward * sh + strafe * ch;
+
+        double hiX = BOX_MARGIN_BASE_IN + Math.max(0, poseVxIn) * BOX_MARGIN_LOOKAHEAD_S;
+        double loX = BOX_MARGIN_BASE_IN + Math.max(0, -poseVxIn) * BOX_MARGIN_LOOKAHEAD_S;
+        double hiY = BOX_MARGIN_BASE_IN + Math.max(0, poseVyIn) * BOX_MARGIN_LOOKAHEAD_S;
+        double loY = BOX_MARGIN_BASE_IN + Math.max(0, -poseVyIn) * BOX_MARGIN_LOOKAHEAD_S;
+
+        boolean clamped = false;
+        if (poseXIn >= boxMaxX - hiX && vx > 0) {
+            vx = 0;
+            clamped = true;
+        }
+        if (poseXIn <= boxMinX + loX && vx < 0) {
+            vx = 0;
+            clamped = true;
+        }
+        if (poseYIn >= boxMaxY - hiY && vy > 0) {
+            vy = 0;
+            clamped = true;
+        }
+        if (poseYIn <= boxMinY + loY && vy < 0) {
+            vy = 0;
+            clamped = true;
+        }
+        boxClampedNow = clamped;
+        if (!clamped) {
+            return new double[] {forward, strafe};
+        }
+        return new double[] {vx * ch + vy * sh, -vx * sh + vy * ch};
     }
 
     /**
@@ -2091,8 +2253,10 @@ public class SwerveBringUp extends OpMode {
             headingLastSeen = headingRad;
         }
 
+        // Hard limit: the saved box is enforced on every translation command, whoever sent it.
+        double[] fenced = applyBoxLimit(driveForward, driveStrafe);
         appliedTurn = turn;
-        arcade(driveForward, driveStrafe, turn);
+        arcade(fenced[0], fenced[1], turn);
 
         if (headingHold && headingOk) {
             // Heading is the interesting signal while holding, and it is what the circle test and
@@ -2594,7 +2758,15 @@ public class SwerveBringUp extends OpMode {
                     allStop();
                     pinpoint.resetPosAndIMU();
                     headingStuckSeconds = 0;
-                    message = "Pinpoint position and IMU reset - keep the robot still.";
+                    // The box lives in the pose frame that was just destroyed. A stale fence
+                    // pointing at the wrong patch of floor is worse than no fence.
+                    boxValid = false;
+                    boxMarked0 = false;
+                    if (BOX_FILE.exists()) {
+                        BOX_FILE.delete();
+                    }
+                    message = "Pinpoint position and IMU reset - keep the robot still. The "
+                            + "saved box was cleared with the frame it lived in; re-mark it.";
                 } catch (RuntimeException e) {
                     message = "Reset failed: " + e.getMessage();
                 }
@@ -2611,6 +2783,93 @@ public class SwerveBringUp extends OpMode {
                 message = headingHold
                         ? "Right stick steers a heading setpoint; the robot holds it."
                         : "Right stick commands rotation power directly.";
+                break;
+            case "odoConfig": {
+                // Live Pinpoint reconfiguration for calibrating the odometry-pod geometry:
+                // directions and offsets can be iterated without a reflash, then the winning
+                // values get baked into SwerveDrivetrainConstants.localizerConstants. Resets
+                // the pose (config and pose frame are inseparable) and so also clears the box.
+                if (pinpoint == null) {
+                    message = "No pinpoint device.";
+                    break;
+                }
+                try {
+                    double fy = doubleArg(cmd, "fy", Double.NaN);   // forward pod Y, inches
+                    double sx = doubleArg(cmd, "sx", Double.NaN);   // strafe pod X, inches
+                    if (!Double.isNaN(fy) && !Double.isNaN(sx)) {
+                        pinpoint.setOffsets(fy, sx,
+                                org.firstinspires.ftc.robotcore.external.navigation
+                                        .DistanceUnit.INCH);
+                    }
+                    String fdir = cmd.get("fdir");
+                    String sdir = cmd.get("sdir");
+                    if (fdir != null && sdir != null) {
+                        pinpoint.setEncoderDirections(
+                                "reversed".equalsIgnoreCase(fdir)
+                                        ? GoBildaPinpointDriver.EncoderDirection.REVERSED
+                                        : GoBildaPinpointDriver.EncoderDirection.FORWARD,
+                                "reversed".equalsIgnoreCase(sdir)
+                                        ? GoBildaPinpointDriver.EncoderDirection.REVERSED
+                                        : GoBildaPinpointDriver.EncoderDirection.FORWARD);
+                    }
+                    allStop();
+                    pinpoint.resetPosAndIMU();
+                    boxValid = false;
+                    boxMarked0 = false;
+                    message = "Pinpoint reconfigured and pose reset - keep the robot still a "
+                            + "moment. Box cleared with the old frame.";
+                } catch (RuntimeException e) {
+                    message = "odoConfig failed: " + e.getMessage();
+                }
+                break;
+            }
+            case "boxMark": {
+                if (!poseOk) {
+                    message = "Cannot mark a corner: no pose from the Pinpoint.";
+                    break;
+                }
+                int corner = intArg(cmd, "corner", boxMarked0 ? 1 : 0);
+                if (corner == 0) {
+                    boxCorner0X = poseXIn;
+                    boxCorner0Y = poseYIn;
+                    boxMarked0 = true;
+                    message = String.format(Locale.US,
+                            "Corner A marked at (%.1f, %.1f). Drive to the opposite corner and "
+                                    + "mark B.", poseXIn, poseYIn);
+                } else if (!boxMarked0) {
+                    message = "Mark corner A first.";
+                } else {
+                    boxMinX = Math.min(boxCorner0X, poseXIn);
+                    boxMaxX = Math.max(boxCorner0X, poseXIn);
+                    boxMinY = Math.min(boxCorner0Y, poseYIn);
+                    boxMaxY = Math.max(boxCorner0Y, poseYIn);
+                    if (boxMaxX - boxMinX < 12 || boxMaxY - boxMinY < 12) {
+                        message = String.format(Locale.US,
+                                "Box %.0f x %.0f in is too small to drive in (need 12+ each "
+                                        + "way). Not saved.",
+                                boxMaxX - boxMinX, boxMaxY - boxMinY);
+                        boxValid = false;
+                    } else {
+                        boxValid = true;
+                        saveBox();
+                        message = String.format(Locale.US,
+                                "Box saved: x %.1f..%.1f, y %.1f..%.1f (%.0f x %.0f in). Hard "
+                                        + "limit armed.",
+                                boxMinX, boxMaxX, boxMinY, boxMaxY,
+                                boxMaxX - boxMinX, boxMaxY - boxMinY);
+                    }
+                    boxMarked0 = false;
+                }
+                break;
+            }
+            case "boxClear":
+                boxValid = false;
+                boxMarked0 = false;
+                if (BOX_FILE.exists() && !BOX_FILE.delete()) {
+                    message = "Box disarmed, but the file on the hub would not delete.";
+                } else {
+                    message = "Box cleared and disarmed.";
+                }
                 break;
             case "setXLock":
                 xLock = cmd.get("value") == null ? !xLock : Boolean.parseBoolean(cmd.get("value"));
@@ -2936,6 +3195,20 @@ public class SwerveBringUp extends OpMode {
                 .append(",\"correcting\":").append(headingPhase == HeadingHoldPhase.ACTIVE)
                 .append(",\"restPhase\":\"").append(headingPhase.name()).append('"')
                 .append(",\"rate\":").append(fmt(Math.toDegrees(headingRateRadS)))
+                .append('}');
+        sb.append(",\"pose\":{\"ok\":").append(poseOk)
+                .append(",\"x\":").append(fmt(poseXIn))
+                .append(",\"y\":").append(fmt(poseYIn))
+                .append(",\"vx\":").append(fmt(poseVxIn))
+                .append(",\"vy\":").append(fmt(poseVyIn))
+                .append('}');
+        sb.append(",\"box\":{\"valid\":").append(boxValid)
+                .append(",\"minX\":").append(fmt(boxMinX))
+                .append(",\"minY\":").append(fmt(boxMinY))
+                .append(",\"maxX\":").append(fmt(boxMaxX))
+                .append(",\"maxY\":").append(fmt(boxMaxY))
+                .append(",\"marked0\":").append(boxMarked0)
+                .append(",\"clamped\":").append(boxClampedNow)
                 .append('}');
         sb.append(",\"message\":\"").append(esc(message)).append('"');
         sb.append(",\"phase\":").append(fmt(phaseTimer.seconds()));

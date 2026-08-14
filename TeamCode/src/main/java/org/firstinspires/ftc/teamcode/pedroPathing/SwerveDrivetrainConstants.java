@@ -76,13 +76,21 @@ public class SwerveDrivetrainConstants {
             .centripetalScaling(0.0005).
             mass(13.732);
 
+    // Calibrated 2026-08-14 against reality, the day the pods were physically attached. The
+    // values that had been sitting here were never measured on this robot: both encoder
+    // directions were backwards (forward drove x negative, strafe-left drove y negative) and
+    // the two offsets appear to have been SWAPPED - rotating 90 degrees in place orbited the
+    // pose by 18 inches. Directions fixed by nudge tests; offsets solved by paired +/-45 deg
+    // rotations (slip bias cancels in the pairing) and a linear fit to the fake-translation
+    // rate. Verified residual: ~0.6 in of orbit per 45 degrees of rotation, which is the
+    // measurement noise floor of the method.
     public static PinpointConstants localizerConstants = new PinpointConstants()
-            .forwardPodY(-2.9350393701) //-74.5mm
-            .strafePodX(-5.9133858268) //-150.2
+            .forwardPodY(-5.376)
+            .strafePodX(-3.912)
             .distanceUnit(DistanceUnit.INCH).hardwareMapName("pinpoint")
             .encoderResolution(GoBildaPinpointDriver.GoBildaOdometryPods.goBILDA_4_BAR_POD)
-            .forwardEncoderDirection(GoBildaPinpointDriver.EncoderDirection.FORWARD)
-            .strafeEncoderDirection(GoBildaPinpointDriver.EncoderDirection.REVERSED);
+            .forwardEncoderDirection(GoBildaPinpointDriver.EncoderDirection.REVERSED)
+            .strafeEncoderDirection(GoBildaPinpointDriver.EncoderDirection.FORWARD);
 
     public static SwerveConstants swerveConstants = new SwerveConstants()
             .velocity(73.9)
