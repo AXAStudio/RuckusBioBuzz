@@ -389,6 +389,13 @@ public class SwerveDrivetrainConstants {
         pod.setMotorCachingThreshold(0.05);
         pod.setServoCachingThreshold(turnServoCaching);
         pod.setStaticFriction(turnKSPerPod[ss], Math.toRadians(turnKSBandDegPerPod[ss]));
+        // Pulsed final approach with the stall-escalation ladder (see CoaxialPod). Inside 6 deg
+        // the servo is silent except for discrete stationary pulses; base pulse 0.035/20 ms is
+        // measured travel on the lubricated plant (pulsecal2, 2026-08-15), tolerance 0.6 deg.
+        // Bench A/B: parked pods go actuation-silent instantly (continuous never fully quiets),
+        // steps land 0.35 mean / 0.81 max deg, moving regimes measure identical to continuous.
+        pod.setPulsedApproach(true, Math.toRadians(6.0), Math.toRadians(0.6),
+                0.035, 0.020, Math.toRadians(20), 0.10);
         return pod;
     }
 
