@@ -69,6 +69,10 @@ public class CoaxialPod implements SwervePod {
     // escalation can never feed a cycle: every pulse is still bounded and coast-separated.
     private double pulseFirePower = 0;
     private double pulseLastAbsErr = Double.NaN;
+    // Below this commanded drive power the pod counts as approaching rest and pulses engage;
+    // above it the wheels are rolling and the scheduled PD tracks the (possibly rotating)
+    // demand continuously. Sits under the human driver's band (0.1-0.2).
+    private static final double PULSE_DRIVE_GATE = 0.08;
     private static final double PULSE_ESCALATE = 1.5;
     // Must clear the stiffest pod's breakaway (podMinV max 0.106 measured) or a stalled ladder
     // rides the cap forever; 0.09 did exactly that on pod 3.
@@ -402,8 +406,15 @@ public class CoaxialPod implements SwervePod {
         double turnPower = MathFunctions.clamp(raw, -1.0, 1.0);
 
         // RUCKUS PATCH: discrete pulses for the final approach. See setPulsedApproach.
+        // Gated on drive power: pulses own the approach-to-rest, the scheduled PD owns rolling.
+        // A pulse-coast cycle corrects at most ~5-10 deg/s, slower than an arcing demand
+        // rotates, so with pulses active at speed every pod lagged to the band edge and rode
+        // it - median tracking error 8-14 deg through a recorded driving session's turns,
+        // worst on the stiff pod. Straight lines and parking never showed it (their demand
+        // holds still); arcs need the continuous loop.
         lastMovePulsed = false;
-        if (pulsedApproach && Math.abs(errorRad) < pulseBandRad) {
+        if (pulsedApproach && Math.abs(drivePower) < PULSE_DRIVE_GATE
+                && Math.abs(errorRad) < pulseBandRad) {
             lastMovePulsed = true;
             if (nowNano < pulseEndNano) {
                 turnPower = pulseSign * pulseFirePower;
