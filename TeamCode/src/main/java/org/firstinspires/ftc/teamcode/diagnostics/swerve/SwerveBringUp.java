@@ -2615,6 +2615,8 @@ public class SwerveBringUp extends OpMode {
                         doubleArg(cmd, "floor", Double.NaN),
                         Math.toRadians(doubleArg(cmd, "velstart", Double.NaN)),
                         Math.toRadians(doubleArg(cmd, "gate", Double.NaN)));
+                com.pedropathing.ftc.drivetrains.CoaxialPod.setScheduleRamp(
+                        doubleArg(cmd, "ramp", Double.NaN));
                 PodCal c = cals[selected];
                 if ("all".equals(cmd.get("scope"))) {
                     for (PodCal each : cals) {

@@ -84,18 +84,29 @@ public class CoaxialPod implements SwervePod {
      * at every gain tried - kP 0.14 while rolling collapsed the wheel oscillation from 32-49
      * to 7-9 degrees. So the turn output scales with commanded drive power: full authority
      * parked (stiction is real there), ramping down to {@code SCHED_FLOOR} of full by
-     * {@code SCHED_RAMP_DRIVE} of drive power. 0.32 x 0.44 = 0.14, the measured rolling
-     * optimum.
+     * {@code SCHED_RAMP_DRIVE} of drive power.
+     *
+     * <p>Re-tuned 2026-08-15 against a RECORDED HUMAN SESSION: the driver lives at 0.05-0.20
+     * drive power, a regime every scripted test overshot. Floor 0.24 reached by 0.10 drive,
+     * velocity leg starting at 22 deg/s (slow 1-degree dither peaks near 30 deg/s and flew
+     * under the old 40): wobble/chatter episodes in the driver-mimic pattern fell by 60-90%.
+     * The error gate keeps transitions at full authority, which is what makes a floor this
+     * low safe.
      */
     private static final boolean TURN_GAIN_SCHEDULING = true;
-    private static double SCHED_FLOOR = 0.32;
-    private static final double SCHED_RAMP_DRIVE = 0.25;
+    private static double SCHED_FLOOR = 0.24;
+    private static double SCHED_RAMP_DRIVE = 0.10;
 
     /** RUCKUS PATCH: runtime tuning of the schedule, robot-wide. NaN leaves a value alone. */
     public static void setScheduleTuning(double floor, double velStartRadS, double errGateRad) {
         if (!Double.isNaN(floor)) SCHED_FLOOR = MathFunctions.clamp(floor, 0.05, 1.0);
         if (!Double.isNaN(velStartRadS)) SCHED_VEL_START_RAD_S = Math.abs(velStartRadS);
         if (!Double.isNaN(errGateRad)) SCHED_ERR_GATE_RAD = Math.abs(errGateRad);
+    }
+
+    /** RUCKUS PATCH: drive power at which the schedule reaches the floor. Runtime-tunable. */
+    public static void setScheduleRamp(double rampDrive) {
+        if (!Double.isNaN(rampDrive)) SCHED_RAMP_DRIVE = Math.max(0.05, Math.abs(rampDrive));
     }
 
     public static double[] getScheduleTuning() {
@@ -112,7 +123,7 @@ public class CoaxialPod implements SwervePod {
      * authority. Ramp starts at {@code SCHED_VEL_START} (above noise and normal creep) and
      * reaches the floor by {@code SCHED_VEL_FULL}.
      */
-    private static double SCHED_VEL_START_RAD_S = Math.toRadians(40);
+    private static double SCHED_VEL_START_RAD_S = Math.toRadians(22);
     private static final double SCHED_VEL_FULL_RAD_S = Math.toRadians(260);
 
     /**
