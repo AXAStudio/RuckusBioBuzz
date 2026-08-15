@@ -689,6 +689,19 @@ public class SwerveBringUp extends OpMode {
     private static final double HEADING_EXIT_RATE_RAD_S = Math.toRadians(25);
     private static final double HEADING_MIN_ENGAGED_TURN = 0.06;
 
+    /**
+     * Soft-lock strength while translating. The epsilon floor alone (0.06) holds heading to
+     * about a degree at crawl speed but lets it wander 3-9 degrees at 0.55 power - yaw
+     * disturbance grows with speed, so the correction floor does too, up to this cap. The
+     * engage/release pair is hysteresis so the trim never dithers on its own deadband.
+     */
+    private static final double HEADING_TRIM_MAX = 0.20;
+    private static final double HEADING_TRIM_PER_TRANS = 0.25;
+    private static final double HEADING_TRIM_ENGAGE_RAD = Math.toRadians(1.2);
+    private static final double HEADING_TRIM_RELEASE_RAD = Math.toRadians(0.5);
+
+    private boolean headingTrimEngaged;
+
     /** Measured heading rate, rad/s, for the CORRECTING exit gate. */
     private double headingRateRadS;
     private double headingPrevForRate = Double.NaN;
@@ -2198,7 +2211,10 @@ public class SwerveBringUp extends OpMode {
             double dt = Math.min(0.25, Math.max(1e-3, headingStickTimer.seconds()));
             headingStickTimer.reset();
 
-            boolean stickActive = Math.abs(driveTurn) > 0.02;
+            // Threshold matches the browser gamepad deadband (0.06): the robot must never read
+            // "stick active" from an axis value the dashboard would have zeroed - a slightly
+            // leaky pad would otherwise sweep the setpoint with nobody touching the stick.
+            boolean stickActive = Math.abs(driveTurn) > 0.055;
             headingStickActive = stickActive;
 
             // Wrap-aware chassis rotation rate, for the stopped/settled gates.
@@ -2252,19 +2268,32 @@ public class SwerveBringUp extends OpMode {
                 }
 
                 turn = headingCorrection();
-                if (!stickActive && Math.abs(turn) < HEADING_MIN_ENGAGED_TURN) {
-                    // Sub-epsilon corrections die inside arcadeDrive (|rotation| < 0.05 is
-                    // treated as zero), so the heading used to drift a couple of degrees
-                    // while translating before anything pushed back - the epsilon shadow.
-                    // The soft lock: once the error is worth fixing, floor the correction
-                    // past epsilon so it actually reaches the pods; inside the deadband,
-                    // command genuinely zero rotation. The stationary goto tail needs the
-                    // same floor for the same reason.
+                if (!stickActive) {
+                    // The soft heading lock. Sub-epsilon corrections die inside arcadeDrive
+                    // (|rotation| < 0.05 is treated as zero), and at speed even epsilon-sized
+                    // corrections are too weak against yaw disturbance - measured 3-9 degrees
+                    // of wander at 0.55 power with a bare 0.06 floor. So the floor scales
+                    // with translation magnitude, engages past 1.2 degrees of error and
+                    // releases below 0.5 (hysteresis - the trim must not dither on its own
+                    // deadband), and inside the deadband commands genuinely zero rotation.
                     double dir = MathFunctions.getTurnDirection(headingRad, headingTargetRad);
-                    if (headingAbsErr > Math.toRadians(1.0)) {
-                        turn = HEADING_MIN_ENGAGED_TURN * (turn != 0 ? Math.signum(turn) : dir);
+                    if (headingAbsErr > HEADING_TRIM_ENGAGE_RAD) {
+                        headingTrimEngaged = true;
+                    } else if (headingAbsErr < HEADING_TRIM_RELEASE_RAD) {
+                        headingTrimEngaged = false;
+                    }
+                    if (headingTrimEngaged) {
+                        double transMag = Math.hypot(driveForward, driveStrafe);
+                        double floor = Math.min(HEADING_TRIM_MAX,
+                                HEADING_MIN_ENGAGED_TURN + HEADING_TRIM_PER_TRANS * transMag);
+                        if (Math.abs(turn) < floor) {
+                            turn = floor * (turn != 0 ? Math.signum(turn) : dir);
+                        }
                     } else if (translating) {
                         turn = 0;
+                    } else if (Math.abs(turn) < HEADING_MIN_ENGAGED_TURN) {
+                        // Stationary goto tail keeps its original epsilon floor.
+                        turn = HEADING_MIN_ENGAGED_TURN * (turn != 0 ? Math.signum(turn) : dir);
                     }
                 }
                 if (headingGotoActive && headingAbsErr < HEADING_EXIT_RAD
