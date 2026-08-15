@@ -43,6 +43,9 @@ public class CoaxialPod implements SwervePod {
     private double lastErrorRad = 0;
     private boolean lastMoveFlipped = false;
 
+    /** RUCKUS PATCH: flip-decision hysteresis half-band. See the flip block in {@link #move}. */
+    private static final double FLIP_HYSTERESIS_RAD = Math.toRadians(10);
+
     /** RUCKUS PATCH: continuous static-friction term. See {@link #setStaticFriction}. */
     private double staticFrictionPower = 0.0;
     private double staticFrictionBandRad = Math.toRadians(2.0);
@@ -289,9 +292,27 @@ public class CoaxialPod implements SwervePod {
         // PID uses radians (tune PIDF for radian error)
         double errorRad = signedRad;
 
-        // Minimize rotation: flip + invert drive if > 90°
-        lastMoveFlipped = Math.abs(errorRad) > (Math.PI / 2.0);
-        if (Math.abs(errorRad) > (Math.PI / 2.0)) {
+        // Minimize rotation: flip + invert drive if > 90 degrees - WITH HYSTERESIS.
+        //
+        // RUCKUS PATCH: the stock decision re-evaluates |error| > 90 every call, so a demand
+        // sitting near the boundary (a diagonal drive from X-parked pods puts it almost
+        // exactly there) flips back and forth every loop: the pod dithers between "go to
+        // theta" and "go to theta+180 reversed", the wheel sweeps 60-110 degrees, and the
+        // asymmetry of four pods doing this shows up as chassis yaw wobble. Measured on
+        // full-speed diagonals 2026-08-14. Inside a +/-10 degree band around the boundary the
+        // previous flip state is kept; the worst cost is accepting a 100 degree rotation
+        // instead of an 80 degree one, once.
+        boolean flip;
+        double absErr = Math.abs(errorRad);
+        if (absErr > Math.PI / 2.0 + FLIP_HYSTERESIS_RAD) {
+            flip = true;
+        } else if (absErr < Math.PI / 2.0 - FLIP_HYSTERESIS_RAD) {
+            flip = false;
+        } else {
+            flip = lastMoveFlipped;
+        }
+        lastMoveFlipped = flip;
+        if (flip) {
             // add 180 degrees (pi radians)
             desiredRad = MathFunctions.normalizeAngle(desiredRad + Math.PI);
             drivePower = -drivePower;
