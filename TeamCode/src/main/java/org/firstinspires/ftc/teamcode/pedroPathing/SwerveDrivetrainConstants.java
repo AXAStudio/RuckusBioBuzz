@@ -346,19 +346,16 @@ public class SwerveDrivetrainConstants {
      * <p>Keep these as the single source of truth - the factories below read them, and
      * SwerveBringUp compares against them.
      */
-    // Re-captured 2026-08-13 late, after the first drive at the per-pod gains went haywire. The
-    // per-pod tuning session was pod-relative step scoring, which is completely blind to zeros:
-    // a mis-zeroed pod steps beautifully and still pushes the wrong way in the robot frame. The
-    // 2026-08-13 afternoon zeros were 4-175 degrees off by drive time (the analog ranges had
-    // also shifted, e.g. ss3 min 0.266 -> 0.106 V, which moves every angle that pod reports), so
-    // the operator re-zeroed and re-ranged all four on the ground and verified by driving.
-    // Values below are the tool's full-precision numbers, not the export's rounded ones.
-    // +13.13 deg common trim applied 2026-08-14: the by-eye re-zero had all four wheels
-    // parallel but pointing 13 degrees left of true chassis-forward - invisible to every
-    // pod-relative measurement, the robot crabbing motion-left in both travel directions while
-    // its heading held true. Solved from the odometry crab angle at crawl speed and verified:
-    // lateral bow over a 30 in dash fell from 8.2 to 1.3 in mean.
-    public static final double[] podZeroDeg = {45.8987, 161.5964, 1.9856, 292.9170};
+    // Re-captured 2026-08-15 from the hub's live calibration after the operator's full re-zero
+    // (which also flipped drive direction on ss0 and ss3 - a re-zero near +-180 and a direction
+    // flip are two halves of the same physical statement). These are the /state full-precision
+    // numbers, NOT the dashboard export's rounded ones - an export generated mid-recalibration
+    // was 33-104 degrees stale against the hub by the time it was pasted. History that still
+    // matters: the 2026-08-14 zeros carried a +13.13 deg common trim solved from the odometry
+    // crab angle (all four wheels parallel but 13 deg left of true chassis-forward - invisible
+    // to every pod-relative measurement). Whether THIS by-eye re-zero has a similar collective
+    // bias is unverified: redo the crawl-speed crab check before trusting field-frame autos.
+    public static final double[] podZeroDeg = {313.9191, 46.0100, 313.1707, 46.7064};
 
     /** Analog encoder low/high voltage per pod, same ss0..ss3 indexing as {@link #podZeroDeg}. */
     public static final double[] podMinV = {0.072, 0.094, 0.091, 0.106};
@@ -372,7 +369,8 @@ public class SwerveDrivetrainConstants {
      * Servo direction is REVERSE on all four (Axon MINI+ orientation) and the encoders read
      * un-reversed; those stay literals in the builder until one actually varies per pod.
      */
-    public static final boolean[] podDriveReversed = {true, true, false, false};
+    // ss0 and ss3 flipped with the 2026-08-15 re-zero, paired with their ~180 zero moves.
+    public static final boolean[] podDriveReversed = {false, true, false, true};
 
     // The encoder names do NOT follow the sm#/ss#/se# numbering. The Axon feedback wires are
     // spliced two per analog port, and the wiring scan found every pod landing on a different
