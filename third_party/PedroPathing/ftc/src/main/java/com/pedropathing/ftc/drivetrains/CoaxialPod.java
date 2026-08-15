@@ -85,8 +85,19 @@ public class CoaxialPod implements SwervePod {
      * optimum.
      */
     private static final boolean TURN_GAIN_SCHEDULING = true;
-    private static final double SCHED_FLOOR = 0.32;
+    private static double SCHED_FLOOR = 0.32;
     private static final double SCHED_RAMP_DRIVE = 0.25;
+
+    /** RUCKUS PATCH: runtime tuning of the schedule, robot-wide. NaN leaves a value alone. */
+    public static void setScheduleTuning(double floor, double velStartRadS, double errGateRad) {
+        if (!Double.isNaN(floor)) SCHED_FLOOR = MathFunctions.clamp(floor, 0.05, 1.0);
+        if (!Double.isNaN(velStartRadS)) SCHED_VEL_START_RAD_S = Math.abs(velStartRadS);
+        if (!Double.isNaN(errGateRad)) SCHED_ERR_GATE_RAD = Math.abs(errGateRad);
+    }
+
+    public static double[] getScheduleTuning() {
+        return new double[] {SCHED_FLOOR, SCHED_VEL_START_RAD_S, SCHED_ERR_GATE_RAD};
+    }
 
     /**
      * RUCKUS PATCH: the velocity leg of the schedule. A pod swinging fast has a moving contact
@@ -98,7 +109,7 @@ public class CoaxialPod implements SwervePod {
      * authority. Ramp starts at {@code SCHED_VEL_START} (above noise and normal creep) and
      * reaches the floor by {@code SCHED_VEL_FULL}.
      */
-    private static final double SCHED_VEL_START_RAD_S = Math.toRadians(40);
+    private static double SCHED_VEL_START_RAD_S = Math.toRadians(40);
     private static final double SCHED_VEL_FULL_RAD_S = Math.toRadians(260);
 
     /**
@@ -108,7 +119,7 @@ public class CoaxialPod implements SwervePod {
      * robot crabbed 50 degrees off its commanded direction until the pods caught up. Above
      * this error the gains are simply the gains.
      */
-    private static final double SCHED_ERR_GATE_RAD = Math.toRadians(20);
+    private static double SCHED_ERR_GATE_RAD = Math.toRadians(20);
 
     /** RUCKUS PATCH: see {@link #setDerivativeOnMeasurement}. */
     private boolean derivativeOnMeasurement = false;

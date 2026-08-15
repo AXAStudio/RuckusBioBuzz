@@ -2575,6 +2575,12 @@ public class SwerveBringUp extends OpMode {
             }
 
             case "setPidf": {
+                // Robot-wide schedule tuning rides along: floor (fraction), velstart (deg/s),
+                // gate (deg). NaN (absent) leaves a value untouched.
+                com.pedropathing.ftc.drivetrains.CoaxialPod.setScheduleTuning(
+                        doubleArg(cmd, "floor", Double.NaN),
+                        Math.toRadians(doubleArg(cmd, "velstart", Double.NaN)),
+                        Math.toRadians(doubleArg(cmd, "gate", Double.NaN)));
                 PodCal c = cals[selected];
                 if ("all".equals(cmd.get("scope"))) {
                     for (PodCal each : cals) {
