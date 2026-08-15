@@ -135,7 +135,9 @@ public class SwerveBringUp extends OpMode {
         AUTOTUNE,
         /** Guarded walk to a servo position, for measuring a positional pod's endpoints. */
         CAL_POS,
-        DRIVE
+        DRIVE,
+        /** The real Pedro follower driving, for translational/drive/centripetal PIDF tuning. */
+        FOLLOW
     }
 
     /** Actions that can move the robot, and so require START to have been pressed. */
@@ -155,7 +157,12 @@ public class SwerveBringUp extends OpMode {
                 || "calGoto".equals(action)
                 || "calHome".equals(action)
                 // Drives the servo to an endpoint - physical motion, same as calGoto.
-                || "calPositional".equals(action);
+                || "calPositional".equals(action)
+                // The follower drives the robot the moment it starts (holdPoint servoes).
+                || "pedroStart".equals(action)
+                || "pedroLine".equals(action)
+                || "pedroHold".equals(action)
+                || "pedroCurve".equals(action);
     }
 
     // ---------------------------------------------------------------- state
@@ -552,6 +559,48 @@ public class SwerveBringUp extends OpMode {
     /** Wall margin: base plus a braking allowance per in/s of speed toward that wall. */
     private static final double BOX_MARGIN_BASE_IN = 4.0;
     private static final double BOX_MARGIN_LOOKAHEAD_S = 0.30;
+
+    // ---- Pedro follower bench ----
+    /**
+     * A real competition {@link com.pedropathing.follower.Follower}, driven by bench commands,
+     * so the translational, drive and centripetal PIDFs are tuned through the exact control
+     * stack that competes - host-side control over WiFi would tune against 150 ms of link
+     * latency instead of the plant. Paths are always RELATIVE to the follower's current pose,
+     * so the follower's internal coordinate convention never has to agree with the Pinpoint
+     * frame; the box guard runs on the raw Pinpoint pose regardless and breaks the follower the
+     * moment it strays past the fence.
+     *
+     * <p>Gain changes go through pedroPidf, which mutates the shared followerConstants and
+     * throws the follower away - the next pedroStart rebuilds from clean state, so no stale
+     * internal copy of a coefficient can survive into a measurement.
+     */
+    private com.pedropathing.follower.Follower pedro;
+    private String pedroJob = "idle";
+
+    /**
+     * Margin every follower waypoint must keep from the box walls, inches - the overshoot
+     * allowance. A Bezier never leaves the convex hull of its control points, so validating
+     * endpoints and control points against this bound is sufficient for the whole path.
+     */
+    private static final double PEDRO_TARGET_MARGIN_IN = 6.0;
+
+    private boolean pedroBreach;
+    private final ElapsedTime pedroBreachTimer = new ElapsedTime();
+
+    /**
+     * The rule the 2026-08-14 escape wrote in stone: NO follower motion command is accepted
+     * unless every point of the path fits inside the box with margin. The host once sent a
+     * 12 inch line whose target was already past the wall; the reactive fence broke the
+     * follower at the wall and the robot coasted 8 inches off the mat on FLOAT motors. Bounds
+     * are checked BEFORE anything moves, robot-side, so no host mistake can repeat that.
+     */
+    private boolean pedroPointOk(double x, double y) {
+        return boxValid
+                && x >= boxMinX + PEDRO_TARGET_MARGIN_IN
+                && x <= boxMaxX - PEDRO_TARGET_MARGIN_IN
+                && y >= boxMinY + PEDRO_TARGET_MARGIN_IN
+                && y <= boxMaxY - PEDRO_TARGET_MARGIN_IN;
+    }
 
     /** Heading PIDF under test. Units match FollowerConstants.headingPIDFCoefficients (radians). */
     // Seeded from what actually ships, so a heading session starts where the robot is rather than
@@ -1401,6 +1450,9 @@ public class SwerveBringUp extends OpMode {
             case DRIVE:
                 runDriveMode();
                 break;
+            case FOLLOW:
+                runFollowMode();
+                break;
             case IDLE:
             default:
                 // Servos limp so pods can be turned by hand for zeroing.
@@ -1419,6 +1471,11 @@ public class SwerveBringUp extends OpMode {
         // update() simply stops being called, so without this isRunning() stays true forever.
         if (mode == Mode.AUTOTUNE && next != Mode.AUTOTUNE && tuner.isRunning()) {
             tuner.abort("mode changed to " + next);
+        }
+        // Leaving FOLLOW must break the follower - its pods are separate objects the bench's
+        // allStop cannot reach, and an abandoned holdPoint would keep servoing forever.
+        if (mode == Mode.FOLLOW && next != Mode.FOLLOW && pedro != null) {
+            pedro.breakFollowing();
         }
         // A wiring scan forces every turn servo to Direction.FORWARD so "positive power" is
         // unambiguous. Only finishWireScan restored them, so aborting a scan (STOP, another
@@ -2269,6 +2326,65 @@ public class SwerveBringUp extends OpMode {
         }
     }
 
+    // ---------------------------------------------------------------- pedro follower bench
+
+    private void ensurePedro() {
+        if (pedro == null) {
+            pedro = SwerveDrivetrainConstants.createFollower(hardwareMap);
+            pedro.setStartingPose(new com.pedropathing.geometry.Pose(poseXIn, poseYIn, headingRad));
+            pedro.update();
+        }
+    }
+
+    private void runFollowMode() {
+        if (pedro == null) {
+            setMode(Mode.IDLE);
+            return;
+        }
+        // The fence, enforced on the follower too: the follower drives its own pods and never
+        // passes through applyBoxLimit. Command-time validation (pedroPointOk) is the primary
+        // defence; this is the backstop, and it BRAKES rather than releasing - breakFollowing
+        // alone left FLOAT motors coasting several inches past the wall on 2026-08-14. On a
+        // breach the follower is redirected to hold a point pulled back inside the box, which
+        // actively arrests the momentum, and only once that has had a second to work does the
+        // mode drop to IDLE.
+        if (!poseOk && boxValid) {
+            pedro.breakFollowing();
+            allStop();
+            setMode(Mode.IDLE);
+            message = "Pose unreadable while following - broken off and stopped.";
+            return;
+        }
+        if (boxValid && (poseXIn < boxMinX || poseXIn > boxMaxX
+                || poseYIn < boxMinY || poseYIn > boxMaxY)) {
+            if (!pedroBreach) {
+                pedroBreach = true;
+                pedroBreachTimer.reset();
+                double hx = Math.max(boxMinX + PEDRO_TARGET_MARGIN_IN,
+                        Math.min(boxMaxX - PEDRO_TARGET_MARGIN_IN, poseXIn));
+                double hy = Math.max(boxMinY + PEDRO_TARGET_MARGIN_IN,
+                        Math.min(boxMaxY - PEDRO_TARGET_MARGIN_IN, poseYIn));
+                pedro.holdPoint(new com.pedropathing.geometry.Pose(hx, hy, headingRad));
+                pedroJob = "BREACH-recovery";
+                message = "Follower hit the fence - braking back inside.";
+            } else if (pedroBreachTimer.seconds() > 1.5) {
+                pedro.breakFollowing();
+                allStop();
+                setMode(Mode.IDLE);
+                message = "Fence breach handled; follower stopped.";
+                return;
+            }
+        } else if (pedroBreach && pedroBreachTimer.seconds() > 1.0) {
+            // Back inside and settled: stop cleanly rather than resuming the old job.
+            pedroBreach = false;
+            pedro.breakFollowing();
+            setMode(Mode.IDLE);
+            message = "Recovered inside the box; follower stopped.";
+            return;
+        }
+        pedro.update();
+    }
+
     // ---------------------------------------------------------------- zeroing
 
     /** Captures the current raw angle of every pod as its forward reference. */
@@ -2784,6 +2900,207 @@ public class SwerveBringUp extends OpMode {
                         ? "Right stick steers a heading setpoint; the robot holds it."
                         : "Right stick commands rotation power directly.";
                 break;
+            case "pedroStart": {
+                if (!poseOk) {
+                    message = "No pose - the follower needs the Pinpoint.";
+                    break;
+                }
+                if (!boxValid) {
+                    message = "No box - the follower bench refuses to run without a fence. "
+                            + "Mark the box first.";
+                    break;
+                }
+                pedroBreach = false;
+                try {
+                    ensurePedro();
+                } catch (RuntimeException e) {
+                    pedro = null;
+                    message = "Follower build failed: " + e.getMessage();
+                    break;
+                }
+                String act = cmd.get("activate");
+                pedro.deactivateAllPIDFs();
+                if ("translational".equals(act)) {
+                    pedro.activateTranslational();
+                } else if ("heading".equals(act)) {
+                    pedro.activateHeading();
+                } else if ("drive".equals(act)) {
+                    pedro.activateDrive();
+                } else if ("transheading".equals(act)) {
+                    pedro.activateTranslational();
+                    pedro.activateHeading();
+                } else {
+                    pedro.activateAllPIDFs();
+                    act = "all";
+                }
+                setMode(Mode.FOLLOW);
+                pedro.holdPoint(pedro.getPose());
+                pedroJob = "hold";
+                message = "Pedro follower active: " + act + ".";
+                break;
+            }
+            case "pedroLine": {
+                if (mode != Mode.FOLLOW || pedro == null) {
+                    message = "pedroStart first.";
+                    break;
+                }
+                double dx = doubleArg(cmd, "dx", 20);
+                double dy = doubleArg(cmd, "dy", 0);
+                double power = doubleArg(cmd, "power", 0.5);
+                com.pedropathing.geometry.Pose cur = pedro.getPose();
+                com.pedropathing.geometry.Pose tgt = new com.pedropathing.geometry.Pose(
+                        cur.getX() + dx, cur.getY() + dy, cur.getHeading());
+                if (!pedroPointOk(tgt.getX(), tgt.getY())) {
+                    message = String.format(Locale.US,
+                            "REFUSED: line target (%.1f, %.1f) is outside the box minus %.0f in "
+                                    + "margin. Nothing moved.",
+                            tgt.getX(), tgt.getY(), PEDRO_TARGET_MARGIN_IN);
+                    break;
+                }
+                com.pedropathing.paths.Path p = new com.pedropathing.paths.Path(
+                        new com.pedropathing.geometry.BezierLine(cur, tgt));
+                p.setConstantHeadingInterpolation(cur.getHeading());
+                pedro.setMaxPower(Math.max(0.1, Math.min(1.0, power)));
+                pedro.followPath(p, true);
+                pedroJob = "line";
+                message = String.format(Locale.US, "Line %+.1f, %+.1f at %.2f.", dx, dy, power);
+                break;
+            }
+            case "pedroHold": {
+                if (mode != Mode.FOLLOW || pedro == null) {
+                    message = "pedroStart first.";
+                    break;
+                }
+                double dx = doubleArg(cmd, "dx", 0);
+                double dy = doubleArg(cmd, "dy", 0);
+                com.pedropathing.geometry.Pose cur = pedro.getPose();
+                double hxT = cur.getX() + dx;
+                double hyT = cur.getY() + dy;
+                if (!pedroPointOk(hxT, hyT)) {
+                    message = String.format(Locale.US,
+                            "REFUSED: hold point (%.1f, %.1f) is outside the box minus %.0f in "
+                                    + "margin. Nothing moved.",
+                            hxT, hyT, PEDRO_TARGET_MARGIN_IN);
+                    break;
+                }
+                pedro.holdPoint(new com.pedropathing.geometry.Pose(hxT, hyT, cur.getHeading()));
+                pedroJob = "hold";
+                message = String.format(Locale.US, "Holding %+.1f, %+.1f from here.", dx, dy);
+                break;
+            }
+            case "pedroCurve": {
+                if (mode != Mode.FOLLOW || pedro == null) {
+                    message = "pedroStart first.";
+                    break;
+                }
+                // The CentripetalTuner's quadratic: forward |d|, then |d| to the left (or right
+                // for negative d), built in the robot's current heading frame so the follower's
+                // absolute convention never matters.
+                double dCurve = doubleArg(cmd, "d", 18);
+                double power = doubleArg(cmd, "power", 0.6);
+                com.pedropathing.geometry.Pose cur = pedro.getPose();
+                double h = cur.getHeading();
+                double fxu = Math.cos(h), fyu = Math.sin(h);
+                double lxu = -Math.sin(h), lyu = Math.cos(h);
+                double ad = Math.abs(dCurve);
+                com.pedropathing.geometry.Pose c1 = new com.pedropathing.geometry.Pose(
+                        cur.getX() + ad * fxu, cur.getY() + ad * fyu, h);
+                com.pedropathing.geometry.Pose c2 = new com.pedropathing.geometry.Pose(
+                        cur.getX() + ad * fxu + dCurve * lxu,
+                        cur.getY() + ad * fyu + dCurve * lyu, h);
+                // A Bezier stays inside its control points' convex hull, so these checks bound
+                // the whole curve.
+                if (!pedroPointOk(c1.getX(), c1.getY()) || !pedroPointOk(c2.getX(), c2.getY())) {
+                    message = String.format(Locale.US,
+                            "REFUSED: curve control points (%.1f, %.1f)/(%.1f, %.1f) leave the "
+                                    + "box minus %.0f in margin. Nothing moved.",
+                            c1.getX(), c1.getY(), c2.getX(), c2.getY(), PEDRO_TARGET_MARGIN_IN);
+                    break;
+                }
+                com.pedropathing.paths.Path p = new com.pedropathing.paths.Path(
+                        new com.pedropathing.geometry.BezierCurve(cur, c1, c2));
+                p.setConstantHeadingInterpolation(h);
+                pedro.setMaxPower(Math.max(0.1, Math.min(1.0, power)));
+                pedro.followPath(p, true);
+                pedroJob = "curve";
+                message = String.format(Locale.US, "Curve d %+.1f at %.2f.", dCurve, power);
+                break;
+            }
+            case "pedroPidf": {
+                // Mutate the shared constants, then throw the follower away: the next
+                // pedroStart rebuilds from clean state, so no stale internal copy survives.
+                SwerveDrivetrainConstants.followerConstants.coefficientsTranslationalPIDF.P =
+                        doubleArg(cmd, "tp",
+                                SwerveDrivetrainConstants.followerConstants
+                                        .coefficientsTranslationalPIDF.P);
+                SwerveDrivetrainConstants.followerConstants.coefficientsTranslationalPIDF.I =
+                        doubleArg(cmd, "ti",
+                                SwerveDrivetrainConstants.followerConstants
+                                        .coefficientsTranslationalPIDF.I);
+                SwerveDrivetrainConstants.followerConstants.coefficientsTranslationalPIDF.D =
+                        doubleArg(cmd, "td",
+                                SwerveDrivetrainConstants.followerConstants
+                                        .coefficientsTranslationalPIDF.D);
+                SwerveDrivetrainConstants.followerConstants.coefficientsTranslationalPIDF.F =
+                        doubleArg(cmd, "tf",
+                                SwerveDrivetrainConstants.followerConstants
+                                        .coefficientsTranslationalPIDF.F);
+                SwerveDrivetrainConstants.followerConstants.coefficientsDrivePIDF.P =
+                        doubleArg(cmd, "dp",
+                                SwerveDrivetrainConstants.followerConstants
+                                        .coefficientsDrivePIDF.P);
+                SwerveDrivetrainConstants.followerConstants.coefficientsDrivePIDF.I =
+                        doubleArg(cmd, "di",
+                                SwerveDrivetrainConstants.followerConstants
+                                        .coefficientsDrivePIDF.I);
+                SwerveDrivetrainConstants.followerConstants.coefficientsDrivePIDF.D =
+                        doubleArg(cmd, "dd",
+                                SwerveDrivetrainConstants.followerConstants
+                                        .coefficientsDrivePIDF.D);
+                SwerveDrivetrainConstants.followerConstants.coefficientsDrivePIDF.T =
+                        doubleArg(cmd, "dt",
+                                SwerveDrivetrainConstants.followerConstants
+                                        .coefficientsDrivePIDF.T);
+                SwerveDrivetrainConstants.followerConstants.coefficientsDrivePIDF.F =
+                        doubleArg(cmd, "df",
+                                SwerveDrivetrainConstants.followerConstants
+                                        .coefficientsDrivePIDF.F);
+                SwerveDrivetrainConstants.followerConstants.setCentripetalScaling(
+                        doubleArg(cmd, "cent",
+                                SwerveDrivetrainConstants.followerConstants.centripetalScaling));
+                if (pedro != null) {
+                    pedro.breakFollowing();
+                    pedro = null;
+                }
+                if (mode == Mode.FOLLOW) {
+                    setMode(Mode.IDLE);
+                }
+                message = "Follower gains updated; follower discarded - pedroStart to rebuild.";
+                break;
+            }
+            case "pedroStop":
+                setMode(Mode.IDLE);
+                message = "Follower stopped.";
+                break;
+            case "zeroTrim": {
+                // Rotates every pod's forward reference by the same angle. Exists because a
+                // by-eye re-zero can carry a COMMON bias - all four wheels parallel but
+                // pointing off true chassis-forward - which no pod-relative measurement can
+                // see: the encoders track perfectly while the robot crabs. Measured 2026-08-14
+                // as a 16 degree motion-left crab at crawl speed, identical at speed. The trim
+                // is derived from odometry (drive straight, measure the crab angle, trim by
+                // it) and verified by re-measuring.
+                double trimDeg = doubleArg(cmd, "deg", 0);
+                for (PodCal c : cals) {
+                    c.angleOffsetRad = c.angleOffsetRad + Math.toRadians(trimDeg);
+                }
+                podsDirty = true;
+                saveCalibration();
+                message = String.format(Locale.US,
+                        "All pod zeros trimmed %+.2f deg and saved. Re-measure the crab.",
+                        trimDeg);
+                break;
+            }
             case "odoConfig": {
                 // Live Pinpoint reconfiguration for calibrating the odometry-pod geometry:
                 // directions and offsets can be iterated without a reflash, then the winning
@@ -3202,6 +3519,24 @@ public class SwerveBringUp extends OpMode {
                 .append(",\"vx\":").append(fmt(poseVxIn))
                 .append(",\"vy\":").append(fmt(poseVyIn))
                 .append('}');
+        sb.append(",\"pedro\":{\"active\":").append(mode == Mode.FOLLOW)
+                .append(",\"job\":\"").append(esc(pedroJob)).append('"');
+        if (pedro != null) {
+            try {
+                com.pedropathing.geometry.Pose pp = pedro.getPose();
+                sb.append(",\"busy\":").append(pedro.isBusy())
+                        .append(",\"x\":").append(fmt(pp.getX()))
+                        .append(",\"y\":").append(fmt(pp.getY()))
+                        .append(",\"h\":").append(fmt(Math.toDegrees(pp.getHeading())))
+                        .append(",\"terr\":")
+                        .append(fmt(pedro.getTranslationalError().getMagnitude()));
+            } catch (RuntimeException e) {
+                sb.append(",\"busy\":false");
+            }
+        } else {
+            sb.append(",\"busy\":false");
+        }
+        sb.append('}');
         sb.append(",\"box\":{\"valid\":").append(boxValid)
                 .append(",\"minX\":").append(fmt(boxMinX))
                 .append(",\"minY\":").append(fmt(boxMinY))

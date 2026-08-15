@@ -437,7 +437,8 @@
       clears the box &mdash; it lives in the pose frame.
     </div>
     <canvas id="fieldCanvas" width="360" height="360"
-            style="background:#0c1015;border:1px solid #2b3542;border-radius:6px"></canvas>
+            style="background:#0c1015;border:1px solid #2b3542;border-radius:6px;display:block;
+                   width:100%;max-width:480px"></canvas>
   </section>
 
   <section>
@@ -1565,6 +1566,14 @@ var fieldTrail = [];
 function renderField() {
   var cv = document.getElementById('fieldCanvas');
   if (!cv || !state) return;
+
+  // Always a square, whatever the layout does: the backing store follows the DISPLAYED width
+  // and the displayed height is pinned to it. Without this, CSS stretching the canvas to the
+  // section width smeared the square buffer across a wide rectangle.
+  var cssW = Math.round(cv.clientWidth) || 360;
+  if (cv.style.height !== cssW + 'px') cv.style.height = cssW + 'px';
+  if (cv.width !== cssW || cv.height !== cssW) { cv.width = cssW; cv.height = cssW; }
+
   var g = cv.getContext('2d');
   var W = cv.width, H = cv.height;
   g.clearRect(0, 0, W, H);
