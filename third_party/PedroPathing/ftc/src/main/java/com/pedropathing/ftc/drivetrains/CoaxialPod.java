@@ -61,6 +61,20 @@ public class CoaxialPod implements SwervePod {
     private long pulseEndNano = 0;
     private double pulseSign = 0;
     private boolean lastMovePulsed = false;
+    // Stall escalation: one pulse size cannot straddle this plant. Measured travel per pulse
+    // spans 0.05-0.5 deg across pods at one power (stiction spread), and the friction itself
+    // drifts as pods warm. So the base pulse is sized for the loosest case, and any pulse that
+    // fails to shrink the error grows the next same-direction pulse instead - the pod finds the
+    // size the plant needs right now. Overshoot (sign flip) or convergence resets to base, so
+    // escalation can never feed a cycle: every pulse is still bounded and coast-separated.
+    private double pulseFirePower = 0;
+    private double pulseLastAbsErr = Double.NaN;
+    private static final double PULSE_ESCALATE = 1.5;
+    // Must clear the stiffest pod's breakaway (podMinV max 0.106 measured) or a stalled ladder
+    // rides the cap forever; 0.09 did exactly that on pod 3.
+    private static final double PULSE_MAX_POWER = 0.13;
+    private static final double PULSE_PROGRESS_FRACTION = 0.75;
+    private static final double PULSE_PROGRESS_MIN_RAD = Math.toRadians(0.35);
 
     /**
      * RUCKUS PATCH: largest change in turn-servo power per move() call. 0 disables. See the
@@ -392,7 +406,7 @@ public class CoaxialPod implements SwervePod {
         if (pulsedApproach && Math.abs(errorRad) < pulseBandRad) {
             lastMovePulsed = true;
             if (nowNano < pulseEndNano) {
-                turnPower = pulseSign * pulsePower;
+                turnPower = pulseSign * pulseFirePower;
             } else if (nowNano < pulseEndNano + (long) (pulseCoastSeconds * 1.0e9)) {
                 // Mandatory coast. The velocity gate alone is not enough: the hub's analog
                 // registers update more slowly than the control loop, so a stale reading reads as
@@ -400,13 +414,35 @@ public class CoaxialPod implements SwervePod {
                 turnPower = 0;
             } else if (Math.abs(errorRad) > pulseToleranceRad
                     && Math.abs(lastMeasuredVelocityRad) < pulseStationaryRadPerSec) {
-                pulseSign = errorRad >= 0 ? 1.0 : -1.0;
+                double sign = errorRad >= 0 ? 1.0 : -1.0;
+                // Progress must beat an absolute floor as well as a fraction: near the
+                // tolerance, 25% of a small error is inside encoder noise, and a noise dip
+                // must not reset a ladder that is still climbing toward breakaway.
+                double progressNeeded = Math.max(
+                        (1.0 - PULSE_PROGRESS_FRACTION) * pulseLastAbsErr,
+                        PULSE_PROGRESS_MIN_RAD);
+                boolean stalled = sign == pulseSign && !Double.isNaN(pulseLastAbsErr)
+                        && Math.abs(errorRad) > pulseLastAbsErr - progressNeeded;
+                pulseFirePower = stalled
+                        ? Math.min(PULSE_MAX_POWER, pulseFirePower * PULSE_ESCALATE)
+                        : pulsePower;
+                pulseSign = sign;
+                pulseLastAbsErr = Math.abs(errorRad);
                 pulseEndNano = nowNano + (long) (pulseSeconds * 1.0e9);
-                turnPower = pulseSign * pulsePower;
+                turnPower = pulseSign * pulseFirePower;
             } else {
                 // Inside tolerance, or still coasting from the last pulse. Let it stop.
                 turnPower = 0;
+                if (Math.abs(errorRad) <= pulseToleranceRad) {
+                    pulseLastAbsErr = Double.NaN; // converged: next episode starts at base power
+                }
             }
+        } else if (Math.abs(lastMeasuredVelocityRad) > pulseStationaryRadPerSec) {
+            // Stall history goes stale only when the pod actually moves. Resetting on a mere
+            // band exit let border chatter (a stalled pod sitting at the band edge, PD pushing
+            // it fractionally in and out at loop rate) wipe the ladder every loop, so
+            // escalation never reached breakaway - the exact stall it exists to break.
+            pulseLastAbsErr = Double.NaN;
         }
 
         // RUCKUS PATCH: instrumentation only, no control effect.
