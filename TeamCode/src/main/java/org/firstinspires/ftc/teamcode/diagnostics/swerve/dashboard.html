@@ -198,6 +198,8 @@
     <div class="row" style="margin-bottom:10px">
       <span class="stat"><span id="padDot" class="dot off"></span><b id="padName">no gamepad seen</b></span>
       <span class="spacer"></span>
+      <label class="inline" title="Stick up = the way the robot faced when this was ticked. Re-tick to re-capture.">
+        <input type="checkbox" id="focBox" onchange="focChanged()"> field oriented</label>
       <button id="padBtn" class="primary" onclick="togglePadDrive()">Drive with gamepad</button>
     </div>
     <div class="hint" style="margin-bottom:10px">
@@ -542,8 +544,21 @@ function cmd(action, args) {
 var driveInFlight = false;
 var drivePending = null;
 
+// Field-oriented toggle. Enabling captures the robot's current heading as "away from the
+// driver", so ticking the box doubles as a re-zero: square the robot up first, then tick.
+// The flag rides on every drive command rather than robot-side state, so bench scripts
+// (which never send it) keep their robot-frame semantics no matter what the checkbox says.
+function focChanged() {
+  if (document.getElementById('focBox').checked) cmd('focRef');
+}
+
+function focFlag() {
+  var b = document.getElementById('focBox');
+  return b && b.checked ? 1 : 0;
+}
+
 function drive(f, s, t) {
-  drivePending = {f: f, s: s, t: t};
+  drivePending = {f: f, s: s, t: t, foc: focFlag()};
   pumpDrive();
 }
 
@@ -553,7 +568,8 @@ function pumpDrive() {
   drivePending = null;
   driveInFlight = true;
   var done = function () { driveInFlight = false; pumpDrive(); };
-  fetch('/swerve/cmd?action=drive&pod=' + selected + '&f=' + p.f + '&s=' + p.s + '&t=' + p.t)
+  fetch('/swerve/cmd?action=drive&pod=' + selected + '&f=' + p.f + '&s=' + p.s + '&t=' + p.t
+      + '&foc=' + p.foc)
       .then(done, done);
 }
 

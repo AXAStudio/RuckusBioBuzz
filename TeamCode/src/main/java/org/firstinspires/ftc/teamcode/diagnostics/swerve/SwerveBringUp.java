@@ -329,6 +329,19 @@ public class SwerveBringUp extends OpMode {
      * command that was never sent.
      */
     private double appliedTurn;
+    private double appliedForward;
+    private double appliedStrafe;
+
+    /**
+     * Field-oriented drive. Per drive command, not a mode: only commands that arrive with
+     * foc=1 (the dashboard gamepad path when its toggle is on) are treated as field-frame
+     * and rotated by live heading each loop. Bench scripts never send the flag, so their
+     * robot-frame commands can never be double-rotated. The reference is captured by the
+     * focRef command - the dashboard sends it as the toggle turns on, so "stick up" means
+     * "the way the robot faced when the driver enabled it".
+     */
+    private boolean driveFieldOriented;
+    private double focRefRad;
 
     /** Whether the heading was usable last DRIVE loop, to catch the sensor coming back. */
     private boolean headingWasOkInDrive;
@@ -971,7 +984,8 @@ public class SwerveBringUp extends OpMode {
                 (headingHold && headingOk) ? Math.toDegrees(headingTargetRad) : Double.NaN,
                 poseOk ? poseXIn : Double.NaN,
                 poseOk ? poseYIn : Double.NaN,
-                driveForward, driveStrafe, appliedTurn);
+                // Post-fence, post-field-rotation robot frame: what actually drove the pods.
+                appliedForward, appliedStrafe, appliedTurn);
     }
 
     // ---------------------------------------------------------------- hardware
@@ -1447,6 +1461,9 @@ public class SwerveBringUp extends OpMode {
         driveForward = 0;
         driveStrafe = 0;
         driveTurn = 0;
+        appliedForward = 0;
+        appliedStrafe = 0;
+        appliedTurn = 0;
     }
 
     // ---------------------------------------------------------------- mode runner
@@ -2384,9 +2401,32 @@ public class SwerveBringUp extends OpMode {
             headingLastSeen = headingRad;
         }
 
+        // Field-oriented translation, rotated by LIVE heading here rather than at the 10-17 Hz
+        // command rate: between stick updates a spinning robot rotates several degrees, and a
+        // stale transform would drag the translation direction around with it.
+        double effForward = driveForward;
+        double effStrafe = driveStrafe;
+        if (driveFieldOriented) {
+            if (headingOk) {
+                double rel = headingRad - focRefRad;
+                double cos = Math.cos(rel);
+                double sin = Math.sin(rel);
+                effForward = driveForward * cos + driveStrafe * sin;
+                effStrafe = -driveForward * sin + driveStrafe * cos;
+            } else {
+                // Guessing a frame with a dead heading sensor moves the robot somewhere nobody
+                // asked. Stop translating; the driver can toggle back to robot frame.
+                effForward = 0;
+                effStrafe = 0;
+                message = "Field-oriented drive lost heading - translation stopped.";
+            }
+        }
+
         // Hard limit: the saved box is enforced on every translation command, whoever sent it.
-        double[] fenced = applyBoxLimit(driveForward, driveStrafe);
+        double[] fenced = applyBoxLimit(effForward, effStrafe);
         appliedTurn = turn;
+        appliedForward = fenced[0];
+        appliedStrafe = fenced[1];
         arcade(fenced[0], fenced[1], turn);
 
         if (headingHold && headingOk) {
@@ -3305,8 +3345,18 @@ public class SwerveBringUp extends OpMode {
                 driveForward = doubleArg(cmd, "f", 0);
                 driveStrafe = doubleArg(cmd, "s", 0);
                 driveTurn = doubleArg(cmd, "t", 0);
+                driveFieldOriented = doubleArg(cmd, "foc", 0) != 0;
                 lastDriveCmdMs = System.currentTimeMillis();
                 message = "Drive test active.";
+                break;
+            case "focRef":
+                if (headingOk) {
+                    focRefRad = headingRad;
+                    message = String.format(Locale.US,
+                            "Field forward captured at %.1f deg.", Math.toDegrees(headingRad));
+                } else {
+                    message = "No heading available - field forward not captured.";
+                }
                 break;
             case "export":
                 exportText = SwerveExport.generate(orderedForExport());
@@ -3604,6 +3654,8 @@ public class SwerveBringUp extends OpMode {
                 .append(",\"correcting\":").append(headingPhase == HeadingHoldPhase.ACTIVE)
                 .append(",\"restPhase\":\"").append(headingPhase.name()).append('"')
                 .append(",\"rate\":").append(fmt(Math.toDegrees(headingRateRadS)))
+                .append(",\"foc\":").append(driveFieldOriented)
+                .append(",\"focRefDeg\":").append(fmt(Math.toDegrees(focRefRad)))
                 .append('}');
         sb.append(",\"pose\":{\"ok\":").append(poseOk)
                 .append(",\"x\":").append(fmt(poseXIn))
