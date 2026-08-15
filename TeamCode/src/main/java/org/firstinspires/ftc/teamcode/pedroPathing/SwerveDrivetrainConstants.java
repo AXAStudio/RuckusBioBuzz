@@ -22,12 +22,23 @@ import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
  */
 public class SwerveDrivetrainConstants {
     public static FollowerConstants followerConstants = new FollowerConstants()
-            .forwardZeroPowerAcceleration(-197.1)
-            .lateralZeroPowerAcceleration(-197.1)
+            // Measured 2026-08-14 by coast-down on the tiles (accelerate, cut power, fit the
+            // velocity decay): -40 in/s^2, against the -197.1 that had been configured - the
+            // follower was assuming 5x more passive braking than the drivetrain has, which is
+            // why every path arrival overshot by 4-7 inches regardless of drive PIDF. Swerve is
+            // isotropic (the pods point wherever the motion goes), so forward and lateral share
+            // the value.
+            .forwardZeroPowerAcceleration(-40.0)
+            .lateralZeroPowerAcceleration(-40.0)
             .useSecondaryDrivePIDF(false).useSecondaryHeadingPIDF(false)
             .useSecondaryTranslationalPIDF(false)
 
-            .translationalPIDFCoefficients(new PIDFCoefficients(0.125, 0, 0.008, 0))
+            // Retuned 2026-08-14 through the bring-up tool's follower bench (pedrotune.py),
+            // odometry pods live, 8 in lateral hold-point steps on the tiles: 0.125/0.008
+            // settled in 1.39 s; 0.26/0.025 settles in 0.68 s with ZERO overshoot over n=8 and
+            // 0.32 in residual. 0.34/0.035 was no faster - the step is velocity-limited - so
+            // the lower gain wins on robustness.
+            .translationalPIDFCoefficients(new PIDFCoefficients(0.26, 0, 0.025, 0))
             //.secondaryTranslationalPIDFCoefficients(new PIDFCoefficients(0.0825, 0, 0.008, 0))
 
             // Measured 2026-08-11 on the Pinpoint IMU (no odometry pods needed), across commanded
@@ -60,7 +71,11 @@ public class SwerveDrivetrainConstants {
             .headingPIDFCoefficients(new PIDFCoefficients(1.20, 0, 0.080, 0))
             //.secondaryHeadingPIDFCoefficients(new PIDFCoefficients(0.8, 0, 0.015, 0))
 
-            .drivePIDFCoefficients(new FilteredPIDFCoefficients(0.005, 0, 0.00003, 0.6, 0.13))
+            // Retuned 2026-08-14 with the honest zero-power acceleration in place (the two
+            // interact: at ZPA -197 every candidate overshot 4-7 in because the follower braked
+            // late; at the measured -40, 24 in lines at 0.7 power arrive in 1.56 s with 0.40 in
+            // worst overshoot and zero oscillation).
+            .drivePIDFCoefficients(new FilteredPIDFCoefficients(0.008, 0, 0.0001, 0.6, 0.10))
             //.secondaryDrivePIDFCoefficients(
             //        new FilteredPIDFCoefficients(0.004, 0, 0.000002, 0.6, 0.13))
 
@@ -84,6 +99,10 @@ public class SwerveDrivetrainConstants {
     // rotations (slip bias cancels in the pairing) and a linear fit to the fake-translation
     // rate. Verified residual: ~0.6 in of orbit per 45 degrees of rotation, which is the
     // measurement noise floor of the method.
+    // Centripetal stays 0.0005: swept 0.0-0.003 on 12 in curves at 0.7 power on 2026-08-14 and
+    // the tracking error would not separate - the tuning box is too small to sustain the
+    // v^2 * curvature regime the term corrects. Retune on a full field.
+
     public static PinpointConstants localizerConstants = new PinpointConstants()
             .forwardPodY(-5.376)
             .strafePodX(-3.912)
@@ -325,7 +344,12 @@ public class SwerveDrivetrainConstants {
     // also shifted, e.g. ss3 min 0.266 -> 0.106 V, which moves every angle that pod reports), so
     // the operator re-zeroed and re-ranged all four on the ground and verified by driving.
     // Values below are the tool's full-precision numbers, not the export's rounded ones.
-    public static final double[] podZeroDeg = {32.7686, 148.4663, 348.8555, 279.7869};
+    // +13.13 deg common trim applied 2026-08-14: the by-eye re-zero had all four wheels
+    // parallel but pointing 13 degrees left of true chassis-forward - invisible to every
+    // pod-relative measurement, the robot crabbing motion-left in both travel directions while
+    // its heading held true. Solved from the odometry crab angle at crawl speed and verified:
+    // lateral bow over a 30 in dash fell from 8.2 to 1.3 in mean.
+    public static final double[] podZeroDeg = {45.8987, 161.5964, 1.9856, 292.9170};
 
     /** Analog encoder low/high voltage per pod, same ss0..ss3 indexing as {@link #podZeroDeg}. */
     public static final double[] podMinV = {0.072, 0.094, 0.091, 0.106};

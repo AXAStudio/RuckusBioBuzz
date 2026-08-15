@@ -3068,6 +3068,14 @@ public class SwerveBringUp extends OpMode {
                 SwerveDrivetrainConstants.followerConstants.setCentripetalScaling(
                         doubleArg(cmd, "cent",
                                 SwerveDrivetrainConstants.followerConstants.centripetalScaling));
+                SwerveDrivetrainConstants.followerConstants.forwardZeroPowerAcceleration =
+                        doubleArg(cmd, "fzpa",
+                                SwerveDrivetrainConstants.followerConstants
+                                        .forwardZeroPowerAcceleration);
+                SwerveDrivetrainConstants.followerConstants.lateralZeroPowerAcceleration =
+                        doubleArg(cmd, "lzpa",
+                                SwerveDrivetrainConstants.followerConstants
+                                        .lateralZeroPowerAcceleration);
                 if (pedro != null) {
                     pedro.breakFollowing();
                     pedro = null;

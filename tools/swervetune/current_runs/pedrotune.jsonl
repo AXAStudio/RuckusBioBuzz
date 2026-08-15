@@ -1,0 +1,18 @@
+{"kind": "trans", "tp": 0.125, "td": 0.008, "settle": 1.39, "settled_frac": 1.0, "over_max": 0.0, "ss": 0.87, "volts": 12.555, "t": "20:54:57"}
+{"kind": "trans", "tp": 0.19, "td": 0.008, "settle": 0.7, "settled_frac": 1.0, "over_max": 0.47, "ss": 0.32, "volts": 12.506, "t": "20:55:11"}
+{"kind": "trans", "tp": 0.19, "td": 0.025, "settle": 1.26, "settled_frac": 0.75, "over_max": 0.0, "ss": 0.67, "volts": 12.467, "t": "20:55:25"}
+{"kind": "trans", "tp": 0.26, "td": 0.025, "settle": 0.68, "settled_frac": 1.0, "over_max": 0.0, "ss": 0.4, "volts": 12.537, "t": "20:55:39"}
+{"kind": "trans", "tp": 0.34, "td": 0.035, "settle": 0.67, "settled_frac": 1.0, "over_max": 0.0, "ss": 0.39, "volts": 12.432, "t": "20:56:12"}
+{"kind": "trans", "tp": 0.26, "td": 0.025, "settle": 0.69, "settled_frac": 1.0, "over_max": 0.0, "ss": 0.32, "volts": 12.528, "t": "20:56:25"}
+{"kind": "drive", "dp": 0.005, "dd": 3e-05, "df": 0.13, "t_mean": 1.7, "over_max": 5.9, "revs_max": 0, "volts": 12.415, "tt": "20:56:47"}
+{"kind": "drive", "dp": 0.008, "dd": 3e-05, "df": 0.13, "t_mean": 1.56, "over_max": 4.08, "revs_max": 0, "volts": 12.402, "tt": "20:57:00"}
+{"kind": "drive", "dp": 0.008, "dd": 0.0001, "df": 0.1, "t_mean": 1.64, "over_max": 3.94, "revs_max": 0, "volts": 12.358, "tt": "20:57:12"}
+{"kind": "drive", "dp": 0.012, "dd": 0.0001, "df": 0.1, "t_mean": 1.92, "over_max": 7.04, "revs_max": 0, "volts": 12.249, "tt": "20:57:26"}
+{"kind": "drive", "dp": 0.005, "dd": 3e-05, "df": 0.13, "t_mean": 1.81, "over_max": 0.26, "revs_max": 0, "volts": 12.423, "tt": "21:00:30"}
+{"kind": "drive", "dp": 0.008, "dd": 3e-05, "df": 0.13, "t_mean": 1.64, "over_max": 0.48, "revs_max": 0, "volts": 12.323, "tt": "21:00:43"}
+{"kind": "drive", "dp": 0.008, "dd": 0.0001, "df": 0.1, "t_mean": 1.56, "over_max": 0.4, "revs_max": 0, "volts": 12.34, "tt": "21:00:55"}
+{"kind": "cent", "cent": 0.0005, "terr_max": 3.0, "terr_mean": 1.05, "volts": 12.371, "t": "21:01:31"}
+{"kind": "cent", "cent": 0.0, "terr_max": 2.89, "terr_mean": 0.76, "volts": 12.017}
+{"kind": "cent", "cent": 0.0005, "terr_max": 3.36, "terr_mean": 0.92, "volts": 11.803}
+{"kind": "cent", "cent": 0.0015, "terr_max": 3.53, "terr_mean": 1.4, "volts": 12.467}
+{"kind": "cent", "cent": 0.003, "terr_max": 3.46, "terr_mean": 1.11, "volts": 12.371}
