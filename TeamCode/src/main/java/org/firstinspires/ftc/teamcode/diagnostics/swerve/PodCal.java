@@ -170,6 +170,12 @@ public class PodCal {
      */
     public double servoCaching = 0.05;
 
+    /**
+     * Largest turn-power change per control update. Caps the actuation slam that feeds the
+     * servo-activity encoder corruption loop (see CoaxialPod.getRawAngleRad). 0 disables.
+     */
+    public double servoSlewPerUpdate = 0.0;
+
     /** Pod position relative to robot center, matching the odometry coordinate system. */
     public double podX;
     public double podY;
@@ -269,6 +275,7 @@ public class PodCal {
                 encoderReversed);
         pod.setMotorCachingThreshold(0.05);
         pod.setServoCachingThreshold(servoCaching);
+        pod.setTurnSlewPerUpdate(servoSlewPerUpdate);
         pod.setStaticFriction(kS, Math.toRadians(kSBandDeg));
         pod.setTurnIntegralSettings(kILimit, Math.toRadians(kIBandDeg), Math.toRadians(kIResetDeg));
         pod.setDerivativeOnMeasurement(derivativeOnMeasurement);
@@ -368,7 +375,8 @@ public class PodCal {
                 + "|" + posCalibrated
                 + "|" + discoveredEncoderIndex
                 + "|" + posMarked0
-                + "|" + posMarked1;
+                + "|" + posMarked1
+                + "|" + servoSlewPerUpdate;
     }
 
     /** Applies a line previously produced by {@link #serialize()}. Returns false if unusable. */
@@ -424,6 +432,7 @@ public class PodCal {
             discoveredEncoderIndex = p.length > 36 ? Integer.parseInt(p[36]) : -1;
             posMarked0 = p.length > 37 && Boolean.parseBoolean(p[37]);
             posMarked1 = p.length > 38 && Boolean.parseBoolean(p[38]);
+            servoSlewPerUpdate = p.length > 39 ? Double.parseDouble(p[39]) : 0.0;
             return true;
         } catch (NumberFormatException e) {
             return false;

@@ -278,11 +278,20 @@ public class SwerveDrivetrainConstants {
     public static final double turnKP = 0.320;
     public static final double turnKD = 0.022;
 
-    /** Per-pod turn gains, ss0..ss3 indexing (0=RB 1=RF 2=LF 3=LB). See block comment above. */
-    public static final double[] turnKPPerPod = {0.440, 0.440, 0.440, 0.380};
+    // 2026-08-14 late, the rolling-plant discovery (see CoaxialPod.TURN_GAIN_SCHEDULING): a
+    // rolling wheel steers nearly friction-free, so gains sized against parked stiction were
+    // several times over-gained the moment the robot moved - a 3-4 Hz, 25 degree limit cycle
+    // on every pod that no static tuning could see, because every static test ran at zero
+    // drive power. With the schedule scaling turn effort down against drive power AND the
+    // pod's own steering speed (the at-rest hunt kept its own contact patch rolling - it
+    // sustained the regime that fed it), one gentle recipe now wins on every pod: steady-drive
+    // pod error fell from 33-89 to 3-8 deg p-p and the X-lock hold went from hunting
+    // indefinitely to actuation-silent. The per-pod kP 0.44 aggression that won the static
+    // shootout is exactly what the schedule now provides only when parked.
+    public static final double[] turnKPPerPod = {0.380, 0.380, 0.380, 0.380};
     public static final double[] turnKDPerPod = {0.022, 0.022, 0.022, 0.022};
-    public static final double[] turnKSPerPod = {0.028, 0.024, 0.024, 0.022};
-    public static final double[] turnKSBandDegPerPod = {3.5, 2.0, 2.0, 2.0};
+    public static final double[] turnKSPerPod = {0.022, 0.022, 0.022, 0.022};
+    public static final double[] turnKSBandDegPerPod = {2.0, 2.0, 2.0, 2.0};
 
     /**
      * Static-friction feed-forward, set to the measured breakaway. Replaces the kF relay.

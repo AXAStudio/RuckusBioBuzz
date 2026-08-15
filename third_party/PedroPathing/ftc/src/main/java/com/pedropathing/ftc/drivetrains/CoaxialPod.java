@@ -59,6 +59,48 @@ public class CoaxialPod implements SwervePod {
     private double pulseSign = 0;
     private boolean lastMovePulsed = false;
 
+    /**
+     * RUCKUS PATCH: largest change in turn-servo power per move() call. 0 disables. See the
+     * comment at the slew clamp in {@link #move} for why this exists.
+     */
+    private double turnSlewPerUpdate = 0.0;
+
+    /** RUCKUS PATCH: see {@link #turnSlewPerUpdate}. */
+    public void setTurnSlewPerUpdate(double limit) {
+        this.turnSlewPerUpdate = Math.abs(limit);
+    }
+
+    /**
+     * RUCKUS PATCH: drive-power gain scheduling for the turn loop.
+     *
+     * <p>Measured 2026-08-14: a ROLLING wheel steers with a fraction of the friction of a
+     * parked one - with the servos frozen, free-castering wheels held a 0.1-0.4 degree band
+     * while driving, i.e. the rolling plant is nearly frictionless. Gains sized to break
+     * parked stiction (kP 0.38-0.44 plus kS) are therefore several times over-gained the
+     * moment the robot moves, and the loop limit-cycled at 3-4 Hz, 25 degrees, on every pod,
+     * at every gain tried - kP 0.14 while rolling collapsed the wheel oscillation from 32-49
+     * to 7-9 degrees. So the turn output scales with commanded drive power: full authority
+     * parked (stiction is real there), ramping down to {@code SCHED_FLOOR} of full by
+     * {@code SCHED_RAMP_DRIVE} of drive power. 0.32 x 0.44 = 0.14, the measured rolling
+     * optimum.
+     */
+    private static final boolean TURN_GAIN_SCHEDULING = true;
+    private static final double SCHED_FLOOR = 0.32;
+    private static final double SCHED_RAMP_DRIVE = 0.25;
+
+    /**
+     * RUCKUS PATCH: the velocity leg of the schedule. A pod swinging fast has a moving contact
+     * patch - partially rolling, low friction - even with zero drive power, which is how the
+     * at-rest hunt sustained itself at full static gains: the oscillation kept the plant in
+     * the regime that made full gains unstable. Scaling authority down with the pod's own
+     * measured steering speed starves the cycle (swing fast -> gains drop -> energy drops ->
+     * slows -> stiction catches it) while a slow, settling pod keeps full stiction-beating
+     * authority. Ramp starts at {@code SCHED_VEL_START} (above noise and normal creep) and
+     * reaches the floor by {@code SCHED_VEL_FULL}.
+     */
+    private static final double SCHED_VEL_START_RAD_S = Math.toRadians(40);
+    private static final double SCHED_VEL_FULL_RAD_S = Math.toRadians(260);
+
     /** RUCKUS PATCH: see {@link #setDerivativeOnMeasurement}. */
     private boolean derivativeOnMeasurement = false;
     private double previousActualRad = Double.NaN;
@@ -277,6 +319,20 @@ public class CoaxialPod implements SwervePod {
             raw += staticFrictionPower * Math.tanh(errorRad / staticFrictionBandRad);
         }
 
+        // RUCKUS PATCH: scale the whole turn effort by the schedule - see the field comments.
+        // Two legs, whichever demands more reduction wins: commanded drive power (the robot is
+        // translating, wheels rolling) and the pod's own measured steering speed (the pod is
+        // swinging, contact patch moving). Applied after kS so the feed-forward scales too: a
+        // rolling pod has no stiction to break.
+        if (TURN_GAIN_SCHEDULING) {
+            double aDrive = Math.min(1.0, Math.abs(drivePower) / SCHED_RAMP_DRIVE);
+            double aVel = MathFunctions.clamp(
+                    (Math.abs(lastMeasuredVelocityRad) - SCHED_VEL_START_RAD_S)
+                            / (SCHED_VEL_FULL_RAD_S - SCHED_VEL_START_RAD_S), 0.0, 1.0);
+            double a = Math.max(aDrive, aVel);
+            raw *= 1.0 - a * (1.0 - SCHED_FLOOR);
+        }
+
         double turnPower = MathFunctions.clamp(raw, -1.0, 1.0);
 
         // RUCKUS PATCH: discrete pulses for the final approach. See setPulsedApproach.
@@ -304,6 +360,17 @@ public class CoaxialPod implements SwervePod {
         // RUCKUS PATCH: instrumentation only, no control effect.
         lastErrorRad = errorRad;
 
+        // RUCKUS PATCH: slew-limit the turn output. The corruption loop documented on
+        // getRawAngleRad is fed by the SIZE of each actuation step - a fake 25 degree error
+        // used to slam the servo from -0.45 to +0.45 in one write, and that slam is what
+        // disturbs the next reading. Ramping the output caps the disturbance and breaks the
+        // loop's gain without costing steady-state authority. Released (ignoreAngleChanges)
+        // writes stay instant - letting go must never be rate-limited.
+        if (turnSlewPerUpdate > 0 && !ignoreAngleChanges) {
+            turnPower = MathFunctions.clamp(turnPower,
+                    lastTurnPower - turnSlewPerUpdate, lastTurnPower + turnSlewPerUpdate);
+        }
+
         // please don't change the next 5 lines took like 5 hours to figure ts out
         if (ignoreAngleChanges) {
             lastTurnPower = 0;
@@ -329,9 +396,31 @@ public class CoaxialPod implements SwervePod {
     }
 
     /**
-     * Returns the raw encoder angle in radians, in [0, 2pi].
+     * RUCKUS PATCH: median filter master switch. OFF - measured 2026-08-14, the one sample
+     * of lag it adds makes the rolling-plant oscillation WORSE (wheel p95 span tripled), the
+     * same way every lag-adding measure did. Kept for reference, not for use.
+     */
+    private static final boolean RAW_MEDIAN_FILTER = false;
+
+    /** RUCKUS PATCH: median-of-3 state. See {@link #getRawAngleRad}. */
+    private double medA = Double.NaN;
+    private double medB = Double.NaN;
+    private double medLastPushed = Double.NaN;
+
+    /**
+     * Returns the raw encoder angle in radians, in [0, 2pi], median-of-3 filtered.
      *
-     * @return raw encoder angle in radians
+     * <p>RUCKUS PATCH: measured 2026-08-14, the Axon's analog output corrupts when its own
+     * servo motor is drawing current - with the servos silenced the encoders read a 0.1-0.4
+     * degree band while driving, with them active 20-33% of samples implied impossible pod
+     * rates. Each fake error makes the loop act, the act corrupts the next reading, and the
+     * result is a self-sustaining 3-4 Hz, 25-degree oscillation that no gain could touch. A
+     * median of the last three distinct readings deletes isolated fakes outright and costs one
+     * sample of lag on real motion. Wrap-aware: the median is taken after unwrapping the
+     * candidates around the newest reading. Same-loop repeats (bulk-cached, identical) do not
+     * advance the window.
+     *
+     * @return filtered raw encoder angle in radians
      */
     public double getRawAngleRad() {
         double v = turnEncoder.getVoltage();
@@ -340,7 +429,26 @@ public class CoaxialPod implements SwervePod {
             return 0;
         double normalized = (v - analogMinVoltage) / range;
         normalized = MathFunctions.clamp(normalized, 0, 1);
-        return normalized * (2.0 * Math.PI);
+        double raw = normalized * (2.0 * Math.PI);
+
+        if (!RAW_MEDIAN_FILTER) {
+            return raw;
+        }
+        if (raw != medLastPushed) {
+            medA = medB;
+            medB = medLastPushed;
+            medLastPushed = raw;
+        }
+        if (Double.isNaN(medA) || Double.isNaN(medB)) {
+            return raw;
+        }
+        // Unwrap the two older samples around the newest, take the middle value.
+        double b = raw + MathFunctions.normalizeAngleSigned(medB - raw);
+        double a = raw + MathFunctions.normalizeAngleSigned(medA - raw);
+        double lo = Math.min(raw, Math.min(a, b));
+        double hi = Math.max(raw, Math.max(a, b));
+        double mid = raw + a + b - lo - hi;
+        return MathFunctions.normalizeAngle(mid);
     }
 
     /**

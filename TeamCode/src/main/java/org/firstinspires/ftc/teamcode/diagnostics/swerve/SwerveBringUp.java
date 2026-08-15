@@ -2577,6 +2577,7 @@ public class SwerveBringUp extends OpMode {
                         // parameter, not a display preference, and leaving it out of scope=all
                         // meant a swept value silently applied to one pod out of four.
                         each.servoCaching = doubleArg(cmd, "cache", each.servoCaching);
+                        each.servoSlewPerUpdate = doubleArg(cmd, "slew", each.servoSlewPerUpdate);
                         each.kS = doubleArg(cmd, "ks", each.kS);
                         each.kSBandDeg = doubleArg(cmd, "ksband", each.kSBandDeg);
                         each.kILimit = doubleArg(cmd, "kilimit", each.kILimit);
@@ -2596,6 +2597,7 @@ public class SwerveBringUp extends OpMode {
                     c.kD = doubleArg(cmd, "kd", c.kD);
                     c.kF = doubleArg(cmd, "kf", c.kF);
                     c.servoCaching = doubleArg(cmd, "cache", c.servoCaching);
+                    c.servoSlewPerUpdate = doubleArg(cmd, "slew", c.servoSlewPerUpdate);
                     c.kS = doubleArg(cmd, "ks", c.kS);
                     c.kSBandDeg = doubleArg(cmd, "ksband", c.kSBandDeg);
                     c.kILimit = doubleArg(cmd, "kilimit", c.kILimit);
@@ -3709,6 +3711,7 @@ public class SwerveBringUp extends OpMode {
         sb.append(",\"kd\":").append(fmt(c.kD));
         sb.append(",\"kf\":").append(fmt(c.kF));
         sb.append(",\"cache\":").append(fmt(c.servoCaching));
+        sb.append(",\"slew\":").append(fmt(c.servoSlewPerUpdate));
         sb.append(",\"ks\":").append(fmt(c.kS));
         sb.append(",\"ksband\":").append(fmt(c.kSBandDeg));
         sb.append(",\"kilimit\":").append(fmt(c.kILimit));
