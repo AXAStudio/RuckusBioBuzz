@@ -963,7 +963,12 @@ public class SwerveBringUp extends OpMode {
         }
 
         recorder.add(dt, batteryVolts(), loopHz, mode.ordinal(), servoRailMa, batteryMa,
-                volts, recWheel, recTarget, recError, servoCmd, recFlipped);
+                volts, recWheel, recTarget, recError, servoCmd, recFlipped,
+                headingOk ? Math.toDegrees(headingRad) : Double.NaN,
+                (headingHold && headingOk) ? Math.toDegrees(headingTargetRad) : Double.NaN,
+                poseOk ? poseXIn : Double.NaN,
+                poseOk ? poseYIn : Double.NaN,
+                driveForward, driveStrafe, appliedTurn);
     }
 
     // ---------------------------------------------------------------- hardware

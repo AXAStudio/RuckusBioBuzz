@@ -21,8 +21,13 @@ import java.util.Locale;
  */
 public class PodRecorder {
 
-    /** Columns shared by the whole robot. */
-    private static final int GLOBAL_COLS = 7;
+    /**
+     * Columns shared by the whole robot. Grew 7 -> 14 on 2026-08-14 for driver-session
+     * recording: heading and its hold target, field pose, and the drive command actually
+     * applied - so a wobble or drift episode in a human session can be lined up against what
+     * the sticks were doing at loop rate, in one synchronized stream.
+     */
+    private static final int GLOBAL_COLS = 14;
 
     /** Columns recorded per pod. */
     private static final int POD_COLS = 6;
@@ -104,10 +109,19 @@ public class PodRecorder {
      * @param errDeg signed post-flip pod error per pod, degrees; NaN when the loop is not closed
      * @param power turn servo power actually written per pod
      * @param flipped whether the pod took the 180 degree flip this loop
+     * @param headingDeg robot heading, degrees; NaN when the Pinpoint is unreadable
+     * @param headingTgtDeg heading-hold target, degrees; NaN when hold is off
+     * @param poseX field x, inches; NaN without a pose
+     * @param poseY field y, inches; NaN without a pose
+     * @param cmdF forward command applied this loop
+     * @param cmdS strafe command applied this loop
+     * @param cmdT rotation actually applied (heading-hold output, not the raw stick)
      */
     public void add(double dt, double volts, double loopHz, int mode, double servoMa,
             double batteryMa, double[] podVolts, double[] wheelDeg, double[] targetDeg,
-            double[] errDeg, double[] power, boolean[] flipped) {
+            double[] errDeg, double[] power, boolean[] flipped,
+            double headingDeg, double headingTgtDeg, double poseX, double poseY,
+            double cmdF, double cmdS, double cmdT) {
         if (!recording) {
             return;
         }
@@ -125,6 +139,13 @@ public class PodRecorder {
         data[at + 4] = mode;
         data[at + 5] = (float) servoMa;
         data[at + 6] = (float) batteryMa;
+        data[at + 7] = (float) headingDeg;
+        data[at + 8] = (float) headingTgtDeg;
+        data[at + 9] = (float) poseX;
+        data[at + 10] = (float) poseY;
+        data[at + 11] = (float) cmdF;
+        data[at + 12] = (float) cmdS;
+        data[at + 13] = (float) cmdT;
 
         for (int i = 0; i < POD_COUNT; i++) {
             int p = at + GLOBAL_COLS + i * POD_COLS;
@@ -156,7 +177,7 @@ public class PodRecorder {
                 .append(" recording=").append(recording)
                 .append('\n');
 
-        sb.append("t,dt,volts,loopHz,mode,servoMa,batteryMa");
+        sb.append("t,dt,volts,loopHz,mode,servoMa,batteryMa,heading,htgt,px,py,cf,cs,ct");
         for (int i = 0; i < POD_COUNT; i++) {
             sb.append(",p").append(i).append("_v")
                     .append(",p").append(i).append("_wheel")
