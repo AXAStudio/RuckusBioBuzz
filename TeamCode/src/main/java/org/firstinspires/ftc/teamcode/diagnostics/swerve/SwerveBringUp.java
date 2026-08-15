@@ -2252,11 +2252,20 @@ public class SwerveBringUp extends OpMode {
                 }
 
                 turn = headingCorrection();
-                if (!translating && !stickActive && Math.abs(turn) < HEADING_MIN_ENGAGED_TURN) {
-                    // Stationary goto tail: below epsilon arcade() would release the pods
-                    // mid-move; keep them engaged until the goto settles.
+                if (!stickActive && Math.abs(turn) < HEADING_MIN_ENGAGED_TURN) {
+                    // Sub-epsilon corrections die inside arcadeDrive (|rotation| < 0.05 is
+                    // treated as zero), so the heading used to drift a couple of degrees
+                    // while translating before anything pushed back - the epsilon shadow.
+                    // The soft lock: once the error is worth fixing, floor the correction
+                    // past epsilon so it actually reaches the pods; inside the deadband,
+                    // command genuinely zero rotation. The stationary goto tail needs the
+                    // same floor for the same reason.
                     double dir = MathFunctions.getTurnDirection(headingRad, headingTargetRad);
-                    turn = HEADING_MIN_ENGAGED_TURN * (turn != 0 ? Math.signum(turn) : dir);
+                    if (headingAbsErr > Math.toRadians(1.0)) {
+                        turn = HEADING_MIN_ENGAGED_TURN * (turn != 0 ? Math.signum(turn) : dir);
+                    } else if (translating) {
+                        turn = 0;
+                    }
                 }
                 if (headingGotoActive && headingAbsErr < HEADING_EXIT_RAD
                         && Math.abs(headingRateRadS) < HEADING_EXIT_RATE_RAD_S) {

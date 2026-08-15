@@ -101,6 +101,15 @@ public class CoaxialPod implements SwervePod {
     private static final double SCHED_VEL_START_RAD_S = Math.toRadians(40);
     private static final double SCHED_VEL_FULL_RAD_S = Math.toRadians(260);
 
+    /**
+     * RUCKUS PATCH: the schedule only applies near the target. The limit cycles it suppresses
+     * all live within ~15-18 degrees of the setpoint; a pod slewing a large transition needs
+     * every bit of authority, and scheduling it down made X-to-forward convergence so slow the
+     * robot crabbed 50 degrees off its commanded direction until the pods caught up. Above
+     * this error the gains are simply the gains.
+     */
+    private static final double SCHED_ERR_GATE_RAD = Math.toRadians(20);
+
     /** RUCKUS PATCH: see {@link #setDerivativeOnMeasurement}. */
     private boolean derivativeOnMeasurement = false;
     private double previousActualRad = Double.NaN;
@@ -324,7 +333,7 @@ public class CoaxialPod implements SwervePod {
         // translating, wheels rolling) and the pod's own measured steering speed (the pod is
         // swinging, contact patch moving). Applied after kS so the feed-forward scales too: a
         // rolling pod has no stiction to break.
-        if (TURN_GAIN_SCHEDULING) {
+        if (TURN_GAIN_SCHEDULING && Math.abs(errorRad) < SCHED_ERR_GATE_RAD) {
             double aDrive = Math.min(1.0, Math.abs(drivePower) / SCHED_RAMP_DRIVE);
             double aVel = MathFunctions.clamp(
                     (Math.abs(lastMeasuredVelocityRad) - SCHED_VEL_START_RAD_S)
