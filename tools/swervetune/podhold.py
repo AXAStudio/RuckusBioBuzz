@@ -82,6 +82,14 @@ def hold_trial(b, d, tag):
     return rows
 
 
+def _field_x(d, power):
+    """Field-frame +x demand, whatever the robot's heading. The old robot-frame
+    forward drove into the fence whenever heading was rotated from the box axis
+    (the exit tests field px) and measured pods fighting the clamp."""
+    _, _, h, _ = d.pose()
+    d.cmd(round(math.cos(h) * power, 3), round(-math.sin(h) * power, 3), 0)
+
+
 def steady_trial(b, d, tag):
     yc = (d.y0 + d.y1) / 2
     d.drive_to(d.x0, yc, 0.3, 5.0)
@@ -89,7 +97,7 @@ def steady_trial(b, d, tag):
     time.sleep(0.8)
     t0 = time.time()
     while time.time() - t0 < 0.5:
-        d.cmd(0.08, 0, 0)
+        _field_x(d, 0.08)
         time.sleep(0.07)
     b.cmd("recStart", label=f"steady-{tag}")
     t0 = time.time()
@@ -97,7 +105,7 @@ def steady_trial(b, d, tag):
         px, _, _, cl = d.pose()
         if px >= d.x1 or cl:
             break
-        d.cmd(0.3, 0, 0)
+        _field_x(d, 0.3)
         time.sleep(0.07)
     b.cmd("recStop")
     d.cmd(0, 0, 0)

@@ -535,6 +535,7 @@ public class SwerveBringUp extends OpMode {
     private double poseVxIn;
     private double poseVyIn;
     private boolean poseOk;
+    private boolean boxNeedsFrameCheck;
 
     /**
      * Operator-defined bounding box the robot may drive in, field frame, inches.
@@ -696,9 +697,11 @@ public class SwerveBringUp extends OpMode {
      * engage/release pair is hysteresis so the trim never dithers on its own deadband.
      */
     private static final double HEADING_TRIM_MAX = 0.20;
-    private static final double HEADING_TRIM_PER_TRANS = 0.25;
     private static final double HEADING_TRIM_ENGAGE_RAD = Math.toRadians(1.2);
     private static final double HEADING_TRIM_RELEASE_RAD = Math.toRadians(0.5);
+    private static final double HEADING_TRIM_RATE_GATE_RAD_S = Math.toRadians(10);
+    // Just past arcadeDrive's 0.05 rotation epsilon: the smallest turn that reaches the pods.
+    private static final double HEADING_EPS_BYPASS = 0.055;
 
     private boolean headingTrimEngaged;
 
@@ -1180,6 +1183,26 @@ public class SwerveBringUp extends OpMode {
                         org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit.INCH);
                 poseVyIn = pinpoint.getVelY(
                         org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit.INCH);
+                if (boxNeedsFrameCheck) {
+                    boxNeedsFrameCheck = false;
+                    // A box reloaded from disk is only meaningful if the Pinpoint still holds
+                    // the frame it was marked in. The coprocessor keeps its frame across OpMode
+                    // restarts but zeroes on robot power-up, and a freshly booted Pinpoint reads
+                    // exactly (0, 0, 0 deg) - a robot that has actually driven in a live frame
+                    // never parks at perfect triple zero. A stale box is not a fence, it is a
+                    // lie aimed at whatever now occupies those coordinates.
+                    boolean freshFrame = Math.abs(poseXIn) < 0.05 && Math.abs(poseYIn) < 0.05
+                            && Math.abs(MathFunctions.normalizeAngleSigned(headingRad))
+                                    < Math.toRadians(0.1);
+                    if (freshFrame && boxValid) {
+                        boxValid = false;
+                        if (BOX_FILE.exists()) {
+                            BOX_FILE.delete();
+                        }
+                        message = "Saved box discarded: odometry frame was reset "
+                                + "(robot power cycle). Re-mark the box.";
+                    }
+                }
             }
         } catch (RuntimeException e) {
             headingOk = false;
@@ -1221,6 +1244,7 @@ public class SwerveBringUp extends OpMode {
                     boxMaxX = Double.parseDouble(p[2]);
                     boxMaxY = Double.parseDouble(p[3]);
                     boxValid = true;
+                    boxNeedsFrameCheck = true;
                 }
             }
         } catch (IOException | NumberFormatException e) {
@@ -2275,12 +2299,18 @@ public class SwerveBringUp extends OpMode {
                 turn = headingCorrection();
                 if (!stickActive) {
                     // The soft heading lock. Sub-epsilon corrections die inside arcadeDrive
-                    // (|rotation| < 0.05 is treated as zero), and at speed even epsilon-sized
-                    // corrections are too weak against yaw disturbance - measured 3-9 degrees
-                    // of wander at 0.55 power with a bare 0.06 floor. So the floor scales
-                    // with translation magnitude, engages past 1.2 degrees of error and
-                    // releases below 0.5 (hysteresis - the trim must not dither on its own
-                    // deadband), and inside the deadband commands genuinely zero rotation.
+                    // (|rotation| < 0.05 is treated as zero), so the hold has no small-signal
+                    // authority at all - and every minimum-magnitude floor tried against that
+                    // deadzone turned bang-bang: a constant translation-scaled floor relayed at
+                    // 3.5 Hz / ±0.135 turn (10 deg of fishtail at 0.3 power), and rate-gating
+                    // it only slowed the relay - each kick is a fixed yaw impulse far above
+                    // what a degree of error needs, so overshoot re-arms it every swing. The
+                    // deadzone wants a BYPASS, not a floor: shift the PID output past epsilon
+                    // so authority is continuous from zero and the kD damping survives to the
+                    // output. Engage past 1.2 deg with release below 0.5 (hysteresis), command
+                    // genuinely zero rotation inside the deadband, and skip the epsilon shift
+                    // while the chassis is already rotating fast - a moving chassis is past
+                    // stiction and the raw PID owns the approach.
                     double dir = MathFunctions.getTurnDirection(headingRad, headingTargetRad);
                     if (headingAbsErr > HEADING_TRIM_ENGAGE_RAD) {
                         headingTrimEngaged = true;
@@ -2288,11 +2318,12 @@ public class SwerveBringUp extends OpMode {
                         headingTrimEngaged = false;
                     }
                     if (headingTrimEngaged) {
-                        double transMag = Math.hypot(driveForward, driveStrafe);
-                        double floor = Math.min(HEADING_TRIM_MAX,
-                                HEADING_MIN_ENGAGED_TURN + HEADING_TRIM_PER_TRANS * transMag);
-                        if (Math.abs(turn) < floor) {
-                            turn = floor * (turn != 0 ? Math.signum(turn) : dir);
+                        if (Math.abs(headingRateRadS) < HEADING_TRIM_RATE_GATE_RAD_S) {
+                            double assisted = Math.abs(turn) + HEADING_EPS_BYPASS;
+                            if (assisted > HEADING_TRIM_MAX) {
+                                assisted = Math.max(HEADING_TRIM_MAX, Math.abs(turn));
+                            }
+                            turn = assisted * (turn != 0 ? Math.signum(turn) : dir);
                         }
                     } else if (translating) {
                         turn = 0;
