@@ -549,6 +549,8 @@ public class SwerveBringUp extends OpMode {
     private double poseVyIn;
     private boolean poseOk;
     private boolean boxNeedsFrameCheck;
+    // Well above the drivetrain's true maximum (~45 in/s flat out): only handling reads faster.
+    private static final double POSE_SANITY_IN_S = 80.0;
 
     /**
      * Operator-defined bounding box the robot may drive in, field frame, inches.
@@ -1199,6 +1201,20 @@ public class SwerveBringUp extends OpMode {
                         org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit.INCH);
                 poseVyIn = pinpoint.getVelY(
                         org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit.INCH);
+                if (boxValid && Math.hypot(poseVxIn, poseVyIn) > POSE_SANITY_IN_S) {
+                    // Odometry reporting speeds this drivetrain cannot produce means the pods
+                    // are not rolling on the ground - the robot is being carried or dragged -
+                    // and the integrated position is garbage from that moment on. A fence in a
+                    // corrupted frame is not a fence: session data showed pose jumping 10-20
+                    // inches per tenth of a second, wheels parked, while the robot was
+                    // repositioned by hand right after the box was marked.
+                    boxValid = false;
+                    if (BOX_FILE.exists()) {
+                        BOX_FILE.delete();
+                    }
+                    message = "Box discarded: odometry jumped faster than the robot can move "
+                            + "(picked up or dragged?). Re-mark the box.";
+                }
                 if (boxNeedsFrameCheck) {
                     boxNeedsFrameCheck = false;
                     // A box reloaded from disk is only meaningful if the Pinpoint still holds
