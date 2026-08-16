@@ -26,6 +26,8 @@ import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
+import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
+import org.firstinspires.ftc.robotcore.external.navigation.Pose2D;
 import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
 import org.firstinspires.ftc.robotcore.internal.system.AppUtil;
 
@@ -1240,21 +1242,47 @@ public class SwerveBringUp extends OpMode {
                 if (boxNeedsFrameCheck) {
                     boxNeedsFrameCheck = false;
                     // A box reloaded from disk is only meaningful if the Pinpoint still holds
-                    // the frame it was marked in. The coprocessor keeps its frame across OpMode
-                    // restarts but zeroes on robot power-up, and a freshly booted Pinpoint reads
-                    // exactly (0, 0, 0 deg) - a robot that has actually driven in a live frame
-                    // never parks at perfect triple zero. A stale box is not a fence, it is a
-                    // lie aimed at whatever now occupies those coordinates.
-                    boolean freshFrame = Math.abs(poseXIn) < 0.05 && Math.abs(poseYIn) < 0.05
-                            && Math.abs(MathFunctions.normalizeAngleSigned(headingRad))
-                                    < Math.toRadians(0.1);
-                    if (freshFrame && boxValid) {
+                    // the frame it was marked in. A stale box is not a fence, it is a lie aimed
+                    // at whatever now occupies those coordinates.
+                    //
+                    // The signature of a reset frame is the pose sitting at the origin. The
+                    // tolerance used to be 0.05 in / 0.1 deg, which only catches a frame reset
+                    // MOMENTS ago - and on 2026-08-16 that was not enough. Running DriveTeleOp
+                    // re-origins the Pinpoint (Pedro's PinpointLocalizer constructor calls
+                    // odo.setPosition on the hardware), and by the time bring-up came back the
+                    // heading had drifted to -0.63 deg. The box would have loaded as valid and
+                    // fenced a patch of floor 20 inches away from the real one.
+                    //
+                    // Two independent triggers now, either of which discards:
+                    //   * the pose is at the origin within a tolerance wide enough to survive
+                    //     drift, AND the witness says we were somewhere else when the box was
+                    //     last written - that is a reset, not a robot that drove home;
+                    //   * there is no witness at all (a box file written before this check
+                    //     existed), in which case the frame cannot be verified.
+                    double absHeading = Math.abs(MathFunctions.normalizeAngleSigned(headingRad));
+                    boolean atOrigin = Math.abs(poseXIn) < 1.0 && Math.abs(poseYIn) < 1.0
+                            && absHeading < Math.toRadians(2.0);
+                    boolean witnessFar = !boxWitnessValid
+                            || Math.hypot(boxWitnessX, boxWitnessY) > 6.0;
+                    if (boxValid && atOrigin && witnessFar) {
                         boxValid = false;
                         if (BOX_FILE.exists()) {
                             BOX_FILE.delete();
                         }
-                        message = "Saved box discarded: odometry frame was reset "
-                                + "(robot power cycle). Re-mark the box.";
+                        message = "Saved box discarded: the odometry frame was reset while this "
+                                + "OpMode was not running (a power cycle, or any OpMode that "
+                                + "builds a Pedro Follower). Re-mark corners A and B.";
+                    } else if (boxValid && boxWitnessValid) {
+                        double moved = Math.hypot(poseXIn - boxWitnessX, poseYIn - boxWitnessY);
+                        if (moved > BOX_WITNESS_TOLERANCE_IN) {
+                            // Not the reset signature, but the robot is not where it was left.
+                            // It may simply have been pushed - the Pinpoint keeps integrating
+                            // with no OpMode running - so this warns rather than discards.
+                            message = String.format(Locale.US,
+                                    "Box loaded, but the robot is %.1f in from where it was when "
+                                            + "the box was last written. If it was carried rather "
+                                            + "than pushed, re-mark corners A and B.", moved);
+                        }
                     }
                 }
             }
@@ -1266,12 +1294,29 @@ public class SwerveBringUp extends OpMode {
 
     // ---------------------------------------------------------------- field box
 
+    /**
+     * How far the robot may be from its witness pose before the box is called into question.
+     * Generous: the point is to catch a moved FRAME, not to police a nudge.
+     */
+    private static final double BOX_WITNESS_TOLERANCE_IN = 12.0;
+
+    /** Where the robot was when the box was last written. See the frame check in readHeading. */
+    private double boxWitnessX, boxWitnessY, boxWitnessHeadingRad;
+    private boolean boxWitnessValid;
+
     private void saveBox() {
         FileWriter w = null;
         try {
             w = new FileWriter(BOX_FILE, false);
             w.write("# Field bounding box, inches, Pinpoint frame. minX|minY|maxX|maxY\n");
             w.write(boxMinX + "|" + boxMinY + "|" + boxMaxX + "|" + boxMaxY + "\n");
+            // Frame witness: where the robot stood when this box was written. A box is only a
+            // fence if the frame it was marked in is still the frame the Pinpoint is reporting,
+            // and nothing else on the hub records which frame that was.
+            if (poseOk) {
+                w.write("# witness: pose when written. x|y|headingRad\n");
+                w.write("witness|" + poseXIn + "|" + poseYIn + "|" + headingRad + "\n");
+            }
         } catch (IOException e) {
             message = "Could not save box: " + e.getMessage();
         } finally {
@@ -1292,7 +1337,12 @@ public class SwerveBringUp extends OpMode {
                     continue;
                 }
                 String[] p = line.split("\\|");
-                if (p.length >= 4) {
+                if (p.length >= 4 && "witness".equals(p[0])) {
+                    boxWitnessX = Double.parseDouble(p[1]);
+                    boxWitnessY = Double.parseDouble(p[2]);
+                    boxWitnessHeadingRad = Double.parseDouble(p[3]);
+                    boxWitnessValid = true;
+                } else if (p.length >= 4) {
                     boxMinX = Double.parseDouble(p[0]);
                     boxMinY = Double.parseDouble(p[1]);
                     boxMaxX = Double.parseDouble(p[2]);
@@ -2769,6 +2819,36 @@ public class SwerveBringUp extends OpMode {
                 break;
             }
 
+            case "setPose": {
+                // Writes a known pose into the Pinpoint. The recovery path for a frame that was
+                // re-origined by something else: if the robot has not physically moved since,
+                // restoring the pose it held restores the frame exactly, and a box marked in
+                // that frame becomes valid again without re-marking corners.
+                //
+                // It does NOT re-validate the box on its own - the operator has to confirm the
+                // fence lines up with the mat, because "the robot has not moved" is a claim only
+                // a human can make.
+                if (pinpoint == null) {
+                    message = "No pinpoint device.";
+                    break;
+                }
+                double px = doubleArg(cmd, "x", Double.NaN);
+                double py = doubleArg(cmd, "y", Double.NaN);
+                double ph = doubleArg(cmd, "headingDeg", Double.NaN);
+                if (Double.isNaN(px) || Double.isNaN(py) || Double.isNaN(ph)) {
+                    message = "setPose needs x, y and headingDeg.";
+                    break;
+                }
+                allStop();
+                pinpoint.setPosition(new Pose2D(DistanceUnit.INCH, px, py,
+                        AngleUnit.DEGREES, ph));
+                pinpoint.update();
+                message = String.format(Locale.US,
+                        "Pose set to (%.4f, %.4f) at %.4f deg. Confirm the box lines up with the "
+                                + "mat before driving.", px, py, ph);
+                break;
+            }
+
             case "setMixer": {
                 // The Task 2 continuity fixes, switchable at runtime so each can be A/B'd
                 // interleaved inside one session instead of across a redeploy. Absent
@@ -3513,6 +3593,39 @@ public class SwerveBringUp extends OpMode {
                 }
                 break;
             }
+            case "boxSet": {
+                // Arms a box from explicit coordinates rather than by driving to two corners.
+                //
+                // The recovery path that pairs with setPose: if a frame was re-origined by
+                // something else and then restored, the box that was marked in it is still
+                // correct and re-marking corners means driving the robot to two walls with no
+                // fence armed - the more dangerous of the two options, not the safer one.
+                //
+                // Deliberately NOT a shortcut around marking. It writes exactly what it is
+                // given, so the operator still has to confirm the fence lines up with the mat.
+                double x0 = doubleArg(cmd, "minX", Double.NaN);
+                double y0 = doubleArg(cmd, "minY", Double.NaN);
+                double x1 = doubleArg(cmd, "maxX", Double.NaN);
+                double y1 = doubleArg(cmd, "maxY", Double.NaN);
+                if (Double.isNaN(x0) || Double.isNaN(y0) || Double.isNaN(x1) || Double.isNaN(y1)) {
+                    message = "boxSet needs minX, minY, maxX and maxY.";
+                    break;
+                }
+                boxMinX = Math.min(x0, x1);
+                boxMaxX = Math.max(x0, x1);
+                boxMinY = Math.min(y0, y1);
+                boxMaxY = Math.max(y0, y1);
+                boxValid = true;
+                boxMarked0 = false;
+                boxNeedsFrameCheck = false;
+                saveBox();
+                message = String.format(Locale.US,
+                        "Box armed from coordinates: %.2f x %.2f in. VERIFY IT AGAINST THE MAT "
+                                + "before driving - nothing here checked it.",
+                        boxMaxX - boxMinX, boxMaxY - boxMinY);
+                break;
+            }
+
             case "boxClear":
                 boxValid = false;
                 boxMarked0 = false;

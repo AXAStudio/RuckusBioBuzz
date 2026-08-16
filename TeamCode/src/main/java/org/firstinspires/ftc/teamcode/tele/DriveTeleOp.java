@@ -64,7 +64,38 @@ public class DriveTeleOp extends OpMode {
             hubs.add(module);
         }
 
+        // Preserve the odometry frame across follower construction.
+        //
+        // Pedro's PinpointLocalizer constructor calls setStartPose(new Pose()), which writes
+        // odo.setPosition(0, 0, 0) to the HARDWARE - so merely starting this OpMode re-origins
+        // the Pinpoint wherever the robot happens to be standing. On 2026-08-16 that silently
+        // invalidated the bring-up tool's saved safe-area box: the fence was still armed, still
+        // looked valid, and pointed at a patch of floor 20 inches away from the real one.
+        // Reading the pose first and handing it back afterwards keeps the frame continuous, so
+        // a practice box stays a fence. Autos still set their own starting pose explicitly and
+        // are unaffected.
+        com.qualcomm.hardware.gobilda.GoBildaPinpointDriver odo = null;
+        Pose priorPose = null;
+        try {
+            odo = hardwareMap.get(com.qualcomm.hardware.gobilda.GoBildaPinpointDriver.class,
+                    "pinpoint");
+            odo.update();
+            priorPose = new Pose(odo.getPosX(org.firstinspires.ftc.robotcore.external.navigation
+                    .DistanceUnit.INCH),
+                    odo.getPosY(org.firstinspires.ftc.robotcore.external.navigation
+                            .DistanceUnit.INCH),
+                    odo.getHeading(org.firstinspires.ftc.robotcore.external.navigation
+                            .AngleUnit.RADIANS));
+        } catch (RuntimeException e) {
+            priorPose = null;
+        }
+
         follower = Constants.createFollower(hardwareMap);
+
+        if (priorPose != null && !(Math.abs(priorPose.getX()) < 1e-6
+                && Math.abs(priorPose.getY()) < 1e-6)) {
+            follower.setStartingPose(priorPose);
+        }
         probe.init(hardwareMap);
         telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
     }
