@@ -79,3 +79,7 @@ lint/generated/
 lint/outputs/
 lint/tmp/
 # lint/reports/
+# Session artifacts and Python bytecode - not project state.
+my-session-transcript.md
+__pycache__/
+*.pyc
