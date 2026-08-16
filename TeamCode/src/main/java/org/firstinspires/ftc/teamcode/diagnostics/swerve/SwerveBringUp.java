@@ -4208,8 +4208,28 @@ public class SwerveBringUp extends OpMode {
      * Selects the hand-rolled formatter over {@code String.format}. Runtime-switchable
      * ({@code setFastFmt}) so the two can be A/B'd inside one session against one battery, rather
      * than across a redeploy.
+     *
+     * <p><b>Measured 2026-08-16</b>, robot stationary in IDLE, 12.72 V, 6 randomised interleaved
+     * blocks, n=114 samples per arm, identical 193-call payload in both:
+     *
+     * <pre>
+     *   String.format   11.77 ms  sd 1.01  (9.50-15.10)   61.0 us per call
+     *   hand-rolled      1.62 ms  sd 0.19  (1.11- 1.95)    8.4 us per call
+     *   delta 10.15 ms, 95% CI [9.96, 10.34], t=105
+     * </pre>
+     *
+     * The two distributions do not overlap - the slowest fast-formatter sample is 1.95 ms, the
+     * fastest String.format sample is 9.50. 209 numeric fields were compared between the two
+     * arms' snapshots and none differed, so this is a pure cost saving and not a rounding change.
+     *
+     * <p>At 20 Hz publishing that is 203 ms of every second returned to the control loop. The
+     * projection that matters is DRIVE with heading hold, where the 260-sample trace pushes the
+     * payload to ~973 calls: 59.4 ms against 8.2 ms. That is the loop's bistability - publish
+     * runs off a 50 ms timer, so once it costs more than 50 ms every loop pays it.
+     *
+     * <p>Defaults ON as of that measurement.
      */
-    private static volatile boolean fastFmt;
+    private static volatile boolean fastFmt = true;
 
     private static String fmt(double v) {
         fmtCalls++;
