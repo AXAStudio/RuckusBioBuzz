@@ -736,7 +736,9 @@ function firstPad() {
 }
 
 function padAxis(v) {
-  return Math.abs(v) < PAD_DEADBAND ? 0 : v;
+  var a = Math.abs(v);
+  if (a < PAD_DEADBAND) return 0;
+  return (v < 0 ? -1 : 1) * (a - PAD_DEADBAND) / (1 - PAD_DEADBAND);
 }
 
 function pollPad() {
@@ -758,8 +760,19 @@ function pollPad() {
   name.textContent = p.id.length > 44 ? p.id.slice(0, 44) + '…' : p.id;
 
   // Standard mapping: 0 = left X, 1 = left Y, 2 = right X.
-  var forward = padAxis(-(p.axes[1] || 0));
-  var strafe = padAxis(-(p.axes[0] || 0));
+  //
+  // The left stick is deadbanded as a VECTOR. Deadbanding each axis separately does not shorten
+  // a shallow-diagonal command, it rotates it - the smaller axis is zeroed and the direction
+  // snaps to the nearest cardinal, which every pod's atan2 then follows. Measured 2026-08-16 on
+  // mydrive-001: 35.5% of driving samples had exactly one axis zeroed, crossing in and out of
+  // that state 1.44 times a second. Rotation stays a scalar deadband: it is one-dimensional, so
+  // there is no direction to distort.
+  var rawF = -(p.axes[1] || 0);
+  var rawS = -(p.axes[0] || 0);
+  var mag = Math.sqrt(rawF * rawF + rawS * rawS);
+  var k = mag > PAD_DEADBAND ? (mag - PAD_DEADBAND) / (1 - PAD_DEADBAND) / mag : 0;
+  var forward = rawF * k;
+  var strafe = rawS * k;
   var turn = padAxis(-(p.axes[2] || 0));
 
   rows.innerHTML =

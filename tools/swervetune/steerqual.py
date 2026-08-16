@@ -130,6 +130,17 @@ def wrap180(a: np.ndarray) -> np.ndarray:
     return (np.asarray(a) + 180.0) % 360.0 - 180.0
 
 
+def wrap90(a: np.ndarray) -> np.ndarray:
+    """Wraps to (-90, 90] - the PHYSICAL azimuth change a pod would perform.
+
+    A pod treats theta and theta+180 as the same azimuth: past a quarter turn it flips and
+    reverses the drive instead of rotating. So a 179 degree change in the demand costs one
+    degree of travel, not 179. Criterion 1 excludes deliberate flips, which is exactly this
+    wrap; the flips themselves are counted separately from the pod's own flip flag.
+    """
+    return (np.asarray(a) + 90.0) % 180.0 - 90.0
+
+
 def reversals(series: np.ndarray, hyst: float = REV_HYST_DEG) -> int:
     """Direction changes with hysteresis. Identical algorithm to drivetune.reversals."""
     xs = series[~np.isnan(series)]
@@ -211,8 +222,21 @@ def drive_mask(d: dict) -> np.ndarray:
     return mag > DRIVE_ACTIVE
 
 
+def pod_target(d: dict, i: int) -> tuple[np.ndarray, str]:
+    """The demand column, preferring the pod's own report over the host-side mirror.
+
+    ``ctgt`` is read out of CoaxialPod and cannot disagree with what the pod acted on; ``tgt`` is
+    SwerveBringUp.computeTargets, a mirror that has drifted from the mixer before. Runs recorded
+    before 2026-08-16 have no ctgt column, and DriveTeleOp captures have no tgt.
+    """
+    c = d.get(f"p{i}_ctgt")
+    if c is not None and not np.all(np.isnan(c)):
+        return c, "ctgt"
+    return d[f"p{i}_tgt"], "tgt"
+
+
 def pod_metrics(d: dict, i: int, active: np.ndarray) -> dict:
-    tgt = d[f"p{i}_tgt"]
+    tgt, tgt_src = pod_target(d, i)
     wheel = d[f"p{i}_wheel"]
     err = d[f"p{i}_err"]
     flip = d.get(f"p{i}_flip")
@@ -224,7 +248,7 @@ def pod_metrics(d: dict, i: int, active: np.ndarray) -> dict:
     span_active = float(np.nansum(np.where(active, dt, 0.0)))
 
     # ---- criterion 1: consecutive-loop setpoint jumps, deliberate flips excluded
-    dtgt = np.abs(wrap180(np.diff(tgt)))
+    dtgt = np.abs(wrap90(np.diff(tgt)))
     flip_change = None
     if flip is not None:
         f = np.nan_to_num(flip) > 0.5
@@ -255,6 +279,7 @@ def pod_metrics(d: dict, i: int, active: np.ndarray) -> dict:
     return {
         "pod": i,
         "label": POD_NAMES.get(i, str(i)),
+        "target_column": tgt_src,
         "span_s": span,
         "span_active_s": span_active,
         "jump_deg": stats(jumps),
@@ -396,7 +421,8 @@ def graphs(d: dict, m: dict, outdir: str, tag: str, path: dict | None) -> list[s
     fig, axes = plt.subplots(4, 1, figsize=(13, 11), sharex=True)
     for i in range(POD_COUNT):
         ax = axes[i]
-        ax.plot(t, d[f"p{i}_tgt"], lw=0.8, label="commanded (tgt)")
+        tv, src = pod_target(d, i)
+        ax.plot(t, tv, lw=0.8, label=f"commanded ({src})")
         ax.plot(t, d[f"p{i}_wheel"], lw=0.8, label="measured (wheel)")
         for mult in range(0, 360, 45):
             ax.axhline(mult, color="0.85", lw=0.5, zorder=0)
@@ -513,7 +539,7 @@ def graphs(d: dict, m: dict, outdir: str, tag: str, path: dict | None) -> list[s
     # extra - setpoint jump histogram, the criterion-1 evidence
     fig, ax = plt.subplots(1, 2, figsize=(13, 4.5))
     for i in range(POD_COUNT):
-        dtg = np.abs(wrap180(np.diff(d[f"p{i}_tgt"])))[active[1:]]
+        dtg = np.abs(wrap180(np.diff(pod_target(d, i)[0])))[active[1:]]
         dtg = dtg[~np.isnan(dtg)]
         ax[0].hist(dtg, bins=np.arange(0, 91, 1.5), histtype="step",
                    label=f"pod {i}", log=True)
@@ -522,7 +548,7 @@ def graphs(d: dict, m: dict, outdir: str, tag: str, path: dict | None) -> list[s
     ax[0].set_ylabel("count (log)")
     ax[0].legend(fontsize=8)
     for i in range(POD_COUNT):
-        tv = d[f"p{i}_tgt"][active]
+        tv = pod_target(d, i)[0][active]
         tv = tv[~np.isnan(tv)]
         ax[1].hist(tv % 45.0, bins=45, histtype="step", label=f"pod {i}")
     ax[1].set_xlabel("setpoint mod 45 deg  (a spike at 0/45 is snapping)")

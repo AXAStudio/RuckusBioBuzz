@@ -1319,6 +1319,27 @@ public class SwerveBringUp extends OpMode {
      *
      * @return {forward, strafe} to actually command
      */
+    /**
+     * How far outside the hard margin the outward component starts being reduced, inches.
+     * At or inside the margin the factor is 0 - the fence is exactly as hard as it was.
+     */
+    private static final double BOX_TAPER_IN = 6.0;
+
+    /**
+     * Fraction of an outward velocity component to keep, given how far the robot still is past
+     * the hard margin. Smoothstep, so both the value and its slope are continuous at each end.
+     */
+    private static double outwardScale(double slackIn) {
+        if (slackIn <= 0) {
+            return 0.0;
+        }
+        if (slackIn >= BOX_TAPER_IN) {
+            return 1.0;
+        }
+        double u = slackIn / BOX_TAPER_IN;
+        return u * u * (3.0 - 2.0 * u);
+    }
+
     private double[] applyBoxLimit(double forward, double strafe) {
         boxClampedNow = false;
         if (!boxValid) {
@@ -1341,21 +1362,31 @@ public class SwerveBringUp extends OpMode {
         double hiY = BOX_MARGIN_BASE_IN + Math.max(0, poseVyIn) * BOX_MARGIN_LOOKAHEAD_S;
         double loY = BOX_MARGIN_BASE_IN + Math.max(0, -poseVyIn) * BOX_MARGIN_LOOKAHEAD_S;
 
+        // Taper the outward component across BOX_TAPER_IN rather than deleting it at the
+        // threshold. Zeroing one field axis is the right SHAPE for an axis-aligned wall - it
+        // slides along it - but as a step it rotates the commanded direction in one loop, and
+        // since the margin itself shrinks as the robot slows it then chatters: clamp, stop
+        // advancing, unclamp, clamp. The taper keeps the fence hard at the wall (the factor
+        // reaches 0 at exactly the same place) and makes the approach continuous.
         boolean clamped = false;
-        if (poseXIn >= boxMaxX - hiX && vx > 0) {
-            vx = 0;
+        double fx = outwardScale(boxMaxX - hiX - poseXIn);
+        if (vx > 0 && fx < 1.0) {
+            vx *= fx;
             clamped = true;
         }
-        if (poseXIn <= boxMinX + loX && vx < 0) {
-            vx = 0;
+        double fxLo = outwardScale(poseXIn - (boxMinX + loX));
+        if (vx < 0 && fxLo < 1.0) {
+            vx *= fxLo;
             clamped = true;
         }
-        if (poseYIn >= boxMaxY - hiY && vy > 0) {
-            vy = 0;
+        double fy = outwardScale(boxMaxY - hiY - poseYIn);
+        if (vy > 0 && fy < 1.0) {
+            vy *= fy;
             clamped = true;
         }
-        if (poseYIn <= boxMinY + loY && vy < 0) {
-            vy = 0;
+        double fyLo = outwardScale(poseYIn - (boxMinY + loY));
+        if (vy < 0 && fyLo < 1.0) {
+            vy *= fyLo;
             clamped = true;
         }
         boxClampedNow = clamped;
@@ -2735,6 +2766,107 @@ public class SwerveBringUp extends OpMode {
                 message = String.format(Locale.US,
                         "Publish rate %.1f Hz. Lower frees control bandwidth; the recorder is "
                                 + "unaffected because it samples every loop.", hz);
+                break;
+            }
+
+            case "setMixer": {
+                // The Task 2 continuity fixes, switchable at runtime so each can be A/B'd
+                // interleaved inside one session instead of across a redeploy. Absent
+                // parameters are left alone.
+                if (cmd.get("taper") != null) {
+                    com.pedropathing.ftc.drivetrains.Swerve.setEpsilonTaper(
+                            Boolean.parseBoolean(cmd.get("taper")));
+                }
+                if (cmd.get("slew") != null) {
+                    com.pedropathing.ftc.drivetrains.Swerve.setDemandSlewDegPerSec(
+                            doubleArg(cmd, "slew", 300));
+                }
+                message = String.format(Locale.US,
+                        "Mixer: epsilon taper %s, demand slew %.0f deg/s.",
+                        com.pedropathing.ftc.drivetrains.Swerve.getEpsilonTaper() ? "on" : "off",
+                        com.pedropathing.ftc.drivetrains.Swerve.getDemandSlewDegPerSec());
+                break;
+            }
+
+            case "pedroChain": {
+                // A whole PathChain from the host: "x,y;x,y;x,y;x,y" per cubic segment, segments
+                // separated by "|", one heading spec per segment. Designed and validated
+                // host-side (pathdesign.py), bounds-checked here - a Bezier never leaves the
+                // convex hull of its control points, so checking every control point bounds the
+                // whole curve.
+                if (mode != Mode.FOLLOW || pedro == null) {
+                    message = "pedroStart first.";
+                    break;
+                }
+                String pts = cmd.get("pts");
+                if (pts == null || pts.isEmpty()) {
+                    message = "pedroChain needs pts.";
+                    break;
+                }
+                String[] segTexts = pts.split("\\|");
+                String[] headTexts = (cmd.get("head") == null ? "" : cmd.get("head")).split("\\|");
+                List<com.pedropathing.geometry.Pose[]> segs = new ArrayList<>();
+                boolean bad = false;
+                for (String segText : segTexts) {
+                    String[] ptTexts = segText.split(";");
+                    if (ptTexts.length != 4) {
+                        message = "pedroChain: each segment needs 4 control points, got "
+                                + ptTexts.length;
+                        bad = true;
+                        break;
+                    }
+                    com.pedropathing.geometry.Pose[] cps =
+                            new com.pedropathing.geometry.Pose[4];
+                    for (int i = 0; i < 4; i++) {
+                        String[] xy = ptTexts[i].split(",");
+                        double px = Double.parseDouble(xy[0]);
+                        double py = Double.parseDouble(xy[1]);
+                        if (!pedroPointOk(px, py)) {
+                            message = String.format(Locale.US,
+                                    "REFUSED: control point (%.1f, %.1f) leaves the box minus "
+                                            + "%.0f in margin. Nothing moved.",
+                                    px, py, PEDRO_TARGET_MARGIN_IN);
+                            bad = true;
+                            break;
+                        }
+                        cps[i] = new com.pedropathing.geometry.Pose(px, py);
+                    }
+                    if (bad) {
+                        break;
+                    }
+                    segs.add(cps);
+                }
+                if (bad) {
+                    break;
+                }
+                com.pedropathing.paths.PathBuilder pb =
+                        new com.pedropathing.paths.PathBuilder(pedro);
+                for (int i = 0; i < segs.size(); i++) {
+                    com.pedropathing.geometry.Pose[] c = segs.get(i);
+                    pb = pb.addPath(new com.pedropathing.geometry.BezierCurve(
+                            c[0], c[1], c[2], c[3]));
+                    String head = i < headTexts.length ? headTexts[i] : "tangent";
+                    if (head.startsWith("constant")) {
+                        double deg = head.contains(":")
+                                ? Double.parseDouble(head.substring(head.indexOf(':') + 1))
+                                : Math.toDegrees(headingRad);
+                        pb = pb.setConstantHeadingInterpolation(Math.toRadians(deg));
+                    } else if (head.startsWith("linear")) {
+                        String[] parts = head.split(":");
+                        pb = pb.setLinearHeadingInterpolation(
+                                Math.toRadians(Double.parseDouble(parts[1])),
+                                Math.toRadians(Double.parseDouble(parts[2])));
+                    } else {
+                        pb = pb.setHeadingInterpolation(
+                                com.pedropathing.paths.HeadingInterpolator.tangent);
+                    }
+                }
+                double chainPower = doubleArg(cmd, "power", 0.5);
+                pedro.setMaxPower(Math.max(0.05, Math.min(1.0, chainPower)));
+                pedro.followPath(pb.build(), true);
+                pedroJob = "chain";
+                message = String.format(Locale.US, "Following a %d-segment chain at %.2f.",
+                        segs.size(), chainPower);
                 break;
             }
 
