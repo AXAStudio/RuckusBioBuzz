@@ -268,6 +268,140 @@ This is load-bearing: if the list ever *did* update, teleop curvature would be f
 `DriveTeleOp` — an NPE on first movement. Flagged as a risk for the first `DriveTeleOp` run.
 Predicted safe; **not verified on hardware.**
 
+### 2.6 The fixes, and what simulation says they buy
+
+Four distortions fixed. Each has its own measurable signature, so one capture can attribute
+them separately even though they deploy together.
+
+| # | Where | Side | Fix |
+|---|---|---|---|
+| 1 | `DriveTeleOp.applyDeadband` | **shipped** | deadband the translation **vector**, rescaled from the band edge |
+| 2 | `CustomDrivetrain.clampReversePower` | **shipped** | project onto the direction of travel, scale the whole vector |
+| 3 | `Swerve.arcadeDrive` epsilon walls | **shipped** | smoothstep taper across each band instead of a step |
+| 4 | `Swerve.arcadeDrive` demand rate | **shipped** | slew limit at 214 °/s, the measured pod slew |
+| 5 | `SwerveBringUp.applyBoxLimit` | diagnostic | taper the outward component over 6 in |
+| 6 | `dashboard.html padAxis` | diagnostic | same vector deadband as fix 1 |
+
+Simulated over `mydrive-001`'s recorded commands — 51.3 s of real driving replayed through both
+mixers. **Physical** (mod-180, so deliberate flips are excluded) consecutive-loop demand change:
+
+| configuration | jump p90 | jumps >15°/s | demand reversals/s |
+|---|---|---|---|
+| as shipped 2026-08-15 | 19.8° | 2.9 | 4.25 |
+| epsilon taper only | 19.8° | 2.9 | 4.37 |
+| demand slew 214 °/s only | 13.2° | 0.9 | 3.47 |
+| taper + slew 214 °/s | **13.2°** | **0.9** | **3.47** |
+
+Two results worth stating plainly because they are negative:
+
+- **The taper alone does almost nothing.** Epsilon crossings are 3% of jumps and the input
+  usually crosses the wall in a single loop, which no taper can smooth. It is kept because it
+  removes a genuine discontinuity, not because it moved the number.
+- **300 °/s, tried first, is worse than 214 at this loop rate.** It spreads one big jump into
+  several 19° steps and the count of violations goes *up* (151 → 174 per pod). Rate limits
+  interact with loop period; they are not free.
+
+And the consequence that reorders the work: **criterion 1 is a loop-rate criterion.** A slew
+limit is a rate, so a slow loop turns any rate into a big step. 53% of the jumps that survive
+the 214 °/s limit in simulation land on loops longer than 70 ms (= 15° at 214 °/s). At 50 Hz
+true with a 25 ms p99, the same limit permits 5.4° per loop. **Task 0 must land before Task 2's
+criterion can be judged.**
+
+---
+
+## Task 3 — The path
+
+Designed offline, validated offline, **not yet run**.
+
+### 3.1 The envelope, computed before any control point was placed
+
+Box read live from `/state`: x ∈ [−2.08, 48.71], y ∈ [−32.77, 12.87] → **50.79 × 45.65 in**.
+Robot footprint is **assumed 18 × 18 in** (FTC legal maximum — the safe bound; nothing in the
+codebase records the real footprint, and the dashboard's outline is drawn from pod extents plus
+a fixed pixel margin, not a measurement). See ASSUMPTIONS.
+
+| heading mode | clearance needed | centre envelope |
+|---|---|---|
+| tangential (robot sweeps every orientation) | half-diagonal 12.73 + 2.0 cross-track | **21.34 × 16.19 in** |
+| constant (footprint never rotates) | half-width 9.00 + 2.0 cross-track | **28.79 × 23.65 in** |
+
+The follower bench's own 6 in waypoint margin is satisfied with room to spare in both.
+
+### 3.2 Geometry: C2 by construction, not by inspection
+
+A **closed uniform cubic B-spline**, converted span by span to Bézier form
+(`b0 = (d0+4d1+d2)/6`, `b1 = (2d1+d2)/3`, `b2 = (d1+2d2)/3`, `b3 = (d1+4d2+d3)/6`). C1 and C2 are
+then properties of the representation rather than something hand-placed control points must be
+checked for — including at the closing joint, which is where a hand-built loop usually fails.
+
+Measured residuals at the **worst joint of all**, both variants: C0 = 0, C1 ≤ 1.5e-14 in,
+C2 ≤ 1.4e-14 in. So: **C2 at every joint, including the wrap-around.** It is parametric C2 from
+a uniform spline, and because the spans carry equal parameter speed it is also geometric G2 —
+curvature is continuous, which the κ trace shows directly.
+
+| variant | segments | length | min radius | max \|dκ/ds\| |
+|---|---|---|---|---|
+| tangential | 8 cubics, closed | 53.41 in | 5.24 in | 0.0171 in⁻² |
+| constant | 8 cubics, closed | 74.46 in | 8.29 in | 0.0073 in⁻² |
+
+### 3.3 Jerk: Pedro 2.1.2 has no jerk limit, so it is bounded by construction and reported
+
+`PathConstraints` carries end-of-path tolerances and braking behaviour only — Pedro is a path
+follower, not a trajectory follower, and there is no jerk parameter to set. Saying otherwise
+would be inventing a feature. What was done instead:
+
+- C2 geometry bounds `dκ/ds`, and at constant speed lateral jerk is `v³·|dκ/ds|`.
+- Speed is chosen from a **pod-slew budget**: 25% of the measured 214 °/s median pod slew. A pod
+  riding its slew limit is open-loop — the PID has already saturated — so tracking error there is
+  set by the plant, not by gains.
+
+| variant | speed | lap | max lateral accel | max lateral jerk | max pod azimuth rate |
+|---|---|---|---|---|---|
+| tangential | 13.00 in/s | 4.11 s | 32.2 in/s² (0.083 g) | 37.6 in/s³ | 53.5 °/s (chassis yaw 142 °/s) |
+| constant | 7.74 in/s | 9.62 s | 7.2 in/s² (0.019 g) | 3.4 in/s³ | 53.5 °/s |
+
+Worth noting because it is not obvious: on a constant-curvature arc a **tangential** heading
+keeps each pod azimuth *fixed* (at `atan(κ·r_pod)`, ±57.9° at the tightest corner) because the
+chassis yaws with the path — the pods only move as curvature changes. A **constant** heading
+makes the pod azimuth rotate at exactly `v·κ` the whole way round. That is why the two variants
+have such different speed allowances for the same slew budget.
+
+### 3.4 Heading interpolation, per segment, with the reason
+
+- **Tangential variant** — `HeadingInterpolator.tangent` on all 8 segments. A closed loop has no
+  "approach", and tangential is what makes a traverse look driven rather than dragged. Linear
+  interpolation across a curve fights the translation the whole way; it is not used anywhere here.
+- **Constant variant** — `constant(0°)` on all 8 segments. This one exists as the *experiment*:
+  with heading fixed, every pod azimuth change comes from the path alone, which isolates Task 2's
+  question from the heading loop entirely.
+
+### 3.5 Clamp clearance
+
+The path never approaches the fence. Minimum wall clearance: **12.41 in** (constant variant),
+**15.52 in** (tangential) — against a 9.00 in half-width and a 12.73 in half-diagonal. The
+tangential variant clears the half-diagonal everywhere; the constant variant clears its own
+relevant bound (half-width) with 3.4 in to spare and does not need the half-diagonal because it
+never rotates. And the follower path does **not** run through `applyBoxLimit` at all — the bench
+validates every control point before anything moves, and a Bézier stays inside its control
+points' convex hull, so that check bounds the whole curve.
+
+### 3.6 Visualizer validation
+
+`.pp` loaded into the local Pedro visualizer (translated to the field centre; the visualizer
+knows only the 144 × 144 field, so the *envelope* check stays with `pathdesign.py` against the
+real box). Result: **8 segments, 74 in, zero wall or obstacle collisions** against the
+visualizer's own footprint check. Length agrees with the computed 74.46 in.
+
+One thing the visualizer caught: its time estimate was 19.1 s against the computed 9.6 s,
+because the exported `.pp` did not mark the segments as chained, so it profiled eight separate
+stop-at-end paths. The `pedroChain` command builds a single `PathChain` and is unaffected — but
+the exporter should carry the chaining flag, and until it does the visualizer's time estimate
+for these files reads roughly double.
+
+Pedro's `BezierCurve` uses the standard characteristic matrix over the control points, so a
+4-point curve is a plain cubic Bernstein curve — identical to the Python that designed it. Read
+from `generateBezierCurve`, not run.
+
 ---
 
 ## Corrections to CLAUDE.md forced by this session
@@ -286,3 +420,37 @@ Predicted safe; **not verified on hardware.**
 6. The line numbers quoted in the task prompt (`SwerveBringUp.java:2532`, `:2562`, `:2384`) are
    stale; the file has grown to 4060 lines. Current: `runDriveMode` 2234, `computeTargets` 3593,
    `handleGamepad` 3471.
+
+---
+
+## Criteria table, as it stands
+
+"sim" = replayed host-side through the new mixer over recorded commands, not measured on the
+robot. "—" = needs a robot run that has not happened.
+
+| # | Criterion | Threshold | Measured baseline | After fixes | Status |
+|---|---|---|---|---|---|
+| 1 | Setpoint jump between loops | ≤ 15°, no 45° clustering | p90 14.4–17.8°, 2.07–2.71/s over 15°, **55–57% within 5° of a 45° multiple** (22% if uniform) | p90 13.2°, 0.9/s over (sim) | **blocked on Task 0** — a rate limit cannot beat a 77 ms p99 loop |
+| 2 | Unintended 180° flips | < 0.2 /s | 0.47–0.70 /s | — | open |
+| 3 | Azimuth steady-state error | < 1.0° | 2.65–3.01° | — | open, cause still unknown |
+| 4 | 90° step settle to ±2° | < 350 ms | ~647 ms, 65% slew-limited | — | open |
+| 5 | Wheel path ÷ commanded path | < 1.3× | **0.89–1.01×** | — | **already met** — and the old 1.7–3.0× figure was wrong |
+| 6 | Wheel reversals/s | < 1.0 /s | 4.17–4.91 /s, against a **3.47–4.17 /s demand** | demand 3.47 (sim) | open — but the demand is the target, not the pod loop |
+| 7 | Heading error translating | < 3.0° | 7.83° mean (bring-up hold; p95 saturates at the 60° lead cap) | — | open; competition path had no loop until today |
+| 8 | Heading error at rest | < 1.0° | 3.65° mean (bring-up hold) | — | open |
+| 9 | Cross-track | < 2.0 in | never measured | — | needs the path run |
+| 10 | `DriveTeleOp` loop | ≥ 50 Hz true, p90 < 25 ms | **never measured** — instrumented today | — | needs a run |
+| 11 | No visible heading oscillation | qualitative + p-p | — | — | needs a run |
+
+## What is left, and what it needs
+
+Everything below is blocked on robot time, in this order:
+
+1. **`setFastFmt` A/B, robot stationary** (~3 min, no motion). Settles the `String.format`
+   theory of the 36.7 ms publish and, with it, criterion 10's prerequisite.
+2. **`DriveTeleOp` loop histogram** — start the OpMode, drive briefly, read the Driver Station.
+   Criterion 10 directly, and it decides whether the loop work is done or has just begun.
+3. **One capture per path, before and after**, through `drivecapture.py` against both OpModes.
+   Criteria 1–6 and the graphs.
+4. **`HeadingHold`'s first run.** It is new, in shipped code, and untested. Criteria 7, 8, 11.
+5. **The path run**, via `pedroStart` + `pedroChain`. Criterion 9 and the last graph.
