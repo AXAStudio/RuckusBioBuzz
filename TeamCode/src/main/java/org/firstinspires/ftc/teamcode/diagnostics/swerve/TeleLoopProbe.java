@@ -105,14 +105,15 @@ public class TeleLoopProbe {
      * @param dt seconds since the previous loop
      * @param loopHz smoothed rate, for the recorder's loopHz column
      * @param headingDeg robot heading, degrees
+     * @param headingTargetDeg heading-hold setpoint, degrees; NaN when the hold is off
      * @param poseX field x, inches
      * @param poseY field y, inches
      * @param cmdF forward command applied this loop
      * @param cmdS strafe command applied this loop
      * @param cmdT rotation command applied this loop
      */
-    public void update(double dt, double loopHz, double headingDeg, double poseX, double poseY,
-            double cmdF, double cmdS, double cmdT) {
+    public void update(double dt, double loopHz, double headingDeg, double headingTargetDeg,
+            double poseX, double poseY, double cmdF, double cmdS, double cmdT) {
         if (!ENABLED) {
             return;
         }
@@ -142,12 +143,12 @@ public class TeleLoopProbe {
             samplePods();
             recorder.add(dt, volts, loopHz, MODE_DRIVE, Double.NaN, Double.NaN,
                     podVolts, wheelDeg, targetDeg, cmdTargetDeg, errDeg, power, flipped,
-                    headingDeg, Double.NaN, poseX, poseY, cmdF, cmdS, cmdT);
+                    headingDeg, headingTargetDeg, poseX, poseY, cmdF, cmdS, cmdT);
         }
 
         if (publishTimer.seconds() >= PUBLISH_INTERVAL_S) {
             publishTimer.reset();
-            publish(loopHz, headingDeg, poseX, poseY, cmdF, cmdS, cmdT);
+            publish(loopHz, headingDeg, headingTargetDeg, poseX, poseY, cmdF, cmdS, cmdT);
         }
     }
 
@@ -239,8 +240,8 @@ public class TeleLoopProbe {
         return (recorder.recording() ? "REC " : "idle ") + recorder.count() + " " + message;
     }
 
-    private void publish(double loopHz, double headingDeg, double poseX, double poseY,
-            double cmdF, double cmdS, double cmdT) {
+    private void publish(double loopHz, double headingDeg, double headingTargetDeg,
+            double poseX, double poseY, double cmdF, double cmdS, double cmdT) {
         StringBuilder sb = new StringBuilder(1024);
         sb.append("{\"live\":true,\"source\":\"DriveTeleOp\",\"mode\":\"DRIVE\",\"started\":true")
                 .append(",\"busy\":false,\"selected\":0")
@@ -256,10 +257,9 @@ public class TeleLoopProbe {
                 .append(",\"maxMs\":").append(f(1000.0 * dtMax))
                 .append(",\"n\":").append(samples).append('}')
                 .append(",\"heading\":{\"ok\":true,\"deg\":").append(f(headingDeg))
-                // No closed heading loop exists in this OpMode - the right stick is a rate
-                // command straight through the mixer. Reported as absent rather than faked so
-                // no scorer can read a hold that is not there.
-                .append(",\"targetDeg\":0,\"hold\":false,\"closedLoop\":false}")
+                .append(",\"targetDeg\":").append(f(headingTargetDeg))
+                .append(",\"hold\":").append(!Double.isNaN(headingTargetDeg))
+                .append(",\"closedLoop\":").append(!Double.isNaN(headingTargetDeg)).append('}')
                 .append(",\"pose\":{\"ok\":true,\"x\":").append(f(poseX))
                 .append(",\"y\":").append(f(poseY)).append(",\"vx\":0,\"vy\":0}")
                 .append(",\"cmd\":{\"f\":").append(f(cmdF))

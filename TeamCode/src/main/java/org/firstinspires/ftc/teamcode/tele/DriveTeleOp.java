@@ -11,6 +11,7 @@ import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.diagnostics.swerve.TeleLoopProbe;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
+import org.firstinspires.ftc.teamcode.pedroPathing.HeadingHold;
 
 @TeleOp(name = "Drive TeleOp", group = "TeleOp")
 public class DriveTeleOp extends OpMode {
@@ -42,6 +43,9 @@ public class DriveTeleOp extends OpMode {
      */
     private final TeleLoopProbe probe = new TeleLoopProbe();
 
+    /** Closed heading loop. See {@link HeadingHold} - this OpMode had none before 2026-08-16. */
+    private final HeadingHold headingHold = new HeadingHold();
+
     @Override
     public void init() {
         // The swerve pods' turn PID runs at this OpMode's loop rate, so loop rate is a control
@@ -69,6 +73,7 @@ public class DriveTeleOp extends OpMode {
     public void start() {
         follower.startTeleopDrive(true);
         follower.update();
+        headingHold.latch(follower.getPose().getHeading());
     }
 
     @Override
@@ -104,13 +109,30 @@ public class DriveTeleOp extends OpMode {
         double strafe = rawStrafe * scale;
         // Rotation is one-dimensional: there is no direction for a deadband to distort, so a
         // scalar deadband is correct here. It is still rescaled so the output starts from zero.
-        double turn = applyDeadband(-gamepad1.right_stick_x) * speed;
+        double stick = applyDeadband(-gamepad1.right_stick_x) * speed;
+
+        // Closed heading loop, new 2026-08-16. Until then this OpMode had none: the stick went
+        // to the mixer as a raw rate and nothing held a heading, so a shove or a drift was
+        // simply accepted. Right bumper falls back to the old open-loop behaviour, which is both
+        // the escape hatch and the A/B.
+        boolean holdHeading = !gamepad1.right_bumper;
+        double heading = follower.getPose().getHeading();
+        double turn = holdHeading
+                ? headingHold.update(stick, heading, Math.hypot(forward, strafe) > 0,
+                        dt > 0 ? dt : 0.02)
+                : stick;
+        if (!holdHeading) {
+            // Keep the setpoint under the robot while it is being flown open-loop, so releasing
+            // the bumper does not snap back to wherever the hold was last latched.
+            headingHold.latch(heading);
+        }
 
         follower.setTeleOpDrive(forward, strafe, turn, true);
         follower.update();
 
         Pose probePose = follower.getPose();
         probe.update(dt, loopHz, Math.toDegrees(probePose.getHeading()),
+                Math.toDegrees(headingHold.targetRad()),
                 probePose.getX(), probePose.getY(), forward, strafe, turn);
 
         // Telemetry is throttled and no longer includes the drivetrain dump. debugString() calls
@@ -130,6 +152,13 @@ public class DriveTeleOp extends OpMode {
             telemetry.addData("forward", forward);
             telemetry.addData("strafe", strafe);
             telemetry.addData("turn", turn);
+            telemetry.addData("heading hold", holdHeading
+                    ? headingHold.phase() + " err " + String.format(java.util.Locale.US, "%.2f deg",
+                            headingHold.errorDeg(pose.getHeading()))
+                    : "OFF (right bumper)");
+            if (!headingHold.enabled()) {
+                telemetry.addData("heading hold DISABLED", headingHold.disabledReason());
+            }
             telemetry.addData("x", pose.getX());
             telemetry.addData("y", pose.getY());
             telemetry.addData("heading (deg)", Math.toDegrees(pose.getHeading()));
