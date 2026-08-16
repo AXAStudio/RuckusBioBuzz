@@ -346,16 +346,17 @@ public class SwerveDrivetrainConstants {
      * <p>Keep these as the single source of truth - the factories below read them, and
      * SwerveBringUp compares against them.
      */
-    // Re-captured 2026-08-15 from the hub's live calibration after the operator's full re-zero
-    // (which also flipped drive direction on ss0 and ss3 - a re-zero near +-180 and a direction
-    // flip are two halves of the same physical statement). These are the /state full-precision
-    // numbers, NOT the dashboard export's rounded ones - an export generated mid-recalibration
-    // was 33-104 degrees stale against the hub by the time it was pasted. History that still
+    // Re-captured 2026-08-15 after the operator's full re-zero (which also flipped drive
+    // direction on ss0 and ss3 - a re-zero near +-180 and a direction flip are two halves of
+    // the same physical statement). Source of truth: /sdcard/FIRST/swerve_bringup_cal.txt, the
+    // stored radians converted at full precision - NOT the /state "zeroDeg" field, which is a
+    // live telemetry value that moves with wheel position and briefly ended up in this array
+    // (sync from the cal file or the export, never from telemetry). History that still
     // matters: the 2026-08-14 zeros carried a +13.13 deg common trim solved from the odometry
     // crab angle (all four wheels parallel but 13 deg left of true chassis-forward - invisible
     // to every pod-relative measurement). Whether THIS by-eye re-zero has a similar collective
     // bias is unverified: redo the crawl-speed crab check before trusting field-frame autos.
-    public static final double[] podZeroDeg = {313.9191, 46.0100, 313.1707, 46.7064};
+    public static final double[] podZeroDeg = {222.32446, 150.14969, 345.92838, 94.87920};
 
     /** Analog encoder low/high voltage per pod, same ss0..ss3 indexing as {@link #podZeroDeg}. */
     public static final double[] podMinV = {0.072, 0.094, 0.091, 0.106};
