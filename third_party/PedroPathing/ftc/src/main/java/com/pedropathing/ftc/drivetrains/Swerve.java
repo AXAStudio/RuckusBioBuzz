@@ -25,6 +25,8 @@ public class Swerve extends CustomDrivetrain {
     private boolean useBrakeModeInTeleOp;
     private double staticFrictionCoefficient;
     private double epsilon;
+    /** RUCKUS PATCH: see the zeroRotation comment in arcadeDrive. */
+    private static final double ROTATION_EPSILON = 0.015;
 
     private List<SwervePod> pods;
 
@@ -86,7 +88,14 @@ public class Swerve extends CustomDrivetrain {
         Vector rawTrans = new Vector(Range.clip(Math.hypot(strafe, forward), 0, 1), Math.atan2(forward, strafe));
 
         boolean zeroTrans = rawTrans.getMagnitude() < epsilon;
-        boolean zeroRotation = Math.abs(rotation) < epsilon;
+        // RUCKUS PATCH: rotation gets its own, much lower epsilon. The shared 0.05 was a wall
+        // that swallowed every fine heading-hold correction, forcing minimum-magnitude
+        // workarounds upstream whose smallest allowed kick still deflects pod demands by
+        // atan(0.05/translation) - 17+ degrees at crawl speeds, the visible periodic pod
+        // wobble the driver kept reporting. 0.015 lets a damped PID correct continuously with
+        // deflections too small to see. Translation keeps the original epsilon: the zero-input
+        // path (X-lock, release semantics) is tuned around it.
+        boolean zeroRotation = Math.abs(rotation) < Math.min(epsilon, ROTATION_EPSILON);
 
         // RUCKUS PATCH: X_LOCK only after zero input has persisted, so a stick release at speed
         // does not snap the pods sideways under a rolling chassis. Until then zero input behaves

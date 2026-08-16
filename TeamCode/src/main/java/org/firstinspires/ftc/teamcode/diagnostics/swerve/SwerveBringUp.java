@@ -2356,7 +2356,15 @@ public class SwerveBringUp extends OpMode {
                             turn = assisted * (turn != 0 ? Math.signum(turn) : dir);
                         }
                     } else if (translating) {
-                        turn = 0;
+                        // At speed the deadband stays: the bypass engages at 1.2 deg and the
+                        // proven behavior there should not change. At crawl the raw damped PID
+                        // runs CONTINUOUSLY instead - the mixer's lowered rotation epsilon
+                        // (0.015) means its fine outputs actually reach the pods now, with
+                        // deflections of a few degrees at most, so there is no deadband for
+                        // the heading to wander in and nothing visible when it corrects.
+                        if (Math.hypot(driveForward, driveStrafe) >= HEADING_TRIM_MIN_TRANS) {
+                            turn = 0;
+                        }
                     } else if (Math.abs(turn) < HEADING_MIN_ENGAGED_TURN) {
                         // Stationary goto tail keeps its original epsilon floor.
                         turn = HEADING_MIN_ENGAGED_TURN * (turn != 0 ? Math.signum(turn) : dir);
