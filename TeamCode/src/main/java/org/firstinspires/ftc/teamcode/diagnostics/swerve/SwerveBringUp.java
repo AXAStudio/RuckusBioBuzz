@@ -715,6 +715,8 @@ public class SwerveBringUp extends OpMode {
     private static final double HEADING_TRIM_RATE_GATE_RAD_S = Math.toRadians(10);
     // Just past arcadeDrive's 0.05 rotation epsilon: the smallest turn that reaches the pods.
     private static final double HEADING_EPS_BYPASS = 0.055;
+    // Below this translation magnitude the bypass stays out of the mix (see the block comment).
+    private static final double HEADING_TRIM_MIN_TRANS = 0.25;
 
     private boolean headingTrimEngaged;
 
@@ -2335,7 +2337,18 @@ public class SwerveBringUp extends OpMode {
                         headingTrimEngaged = false;
                     }
                     if (headingTrimEngaged) {
-                        if (Math.abs(headingRateRadS) < HEADING_TRIM_RATE_GATE_RAD_S) {
+                        // The bypass is for SPEED. Turn deflects pod demands by roughly
+                        // atan(turn/translation), so at crawl the same 0.06-0.13 assisted
+                        // correction that is invisible at 0.6 power swings every pod 30-40 deg
+                        // - measured at 0.16 forward: quiet drift to the engage threshold,
+                        // then a visible all-pod wobble burst every few seconds while the
+                        // correction relayed itself back inside the deadband. Below the gate
+                        // the raw damped PID runs instead: arcadeDrive's own 0.05 epsilon
+                        // means corrections fire only past ~2.4 deg and at the gentlest
+                        // magnitude the mixer can deliver.
+                        double transMag = Math.hypot(driveForward, driveStrafe);
+                        if (transMag >= HEADING_TRIM_MIN_TRANS
+                                && Math.abs(headingRateRadS) < HEADING_TRIM_RATE_GATE_RAD_S) {
                             double assisted = Math.abs(turn) + HEADING_EPS_BYPASS;
                             if (assisted > HEADING_TRIM_MAX) {
                                 assisted = Math.max(HEADING_TRIM_MAX, Math.abs(turn));
