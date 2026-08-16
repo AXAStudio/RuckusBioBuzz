@@ -77,6 +77,21 @@ tools/swervetune/                        HOST-SIDE Python harness
 `CoaxialPod` owns the 17 turn tunables and is the class both `DriveTeleOp` and
 `SwerveBringUp` drive, so bring-up tuning transfers to competition code.
 
+**`CoaxialPod` is almost certainly NOT in `TeamCode/`.** It appears to be
+`com.pedropathing.ftc.drivetrains.CoaxialPod`, vendored at
+`third_party/PedroPathing/ftc/src/main/java/com/pedropathing/ftc/drivetrains/`
+— Pedro gained native swerve in 2.1.0 and wires it via
+`FollowerBuilder.swerveDrivetrain(SwerveConstants, pods...)`. **A grep scoped
+to `TeamCode/` will miss the pod control loop, the encoder→angle map, and the
+shortest-path flip.** Read the vendored tree, not upstream docs: `turnKS`,
+`turnKSBandDeg`, `cache` and `PositionalPod.java` are not stock 2.1.2, so this
+tree is forked or wrapped — determine which and say so.
+
+**Third bucket for the shipped/diagnostic rule: `vendored` —
+`third_party/PedroPathing/**`.** Editing it forks an upstream dependency, and
+`includeBuild` rebuilds it into every module with no version bump. Flag any
+such change and name the upstream 2.1.2 behaviour it changes.
+
 ### Hard rule: diagnostic vs. shipped
 
 `diagnostics/swerve/**` and `tools/swervetune/**` are **tools**. `tele/`,
@@ -96,19 +111,9 @@ and `SwerveDrivetrainConstants` in red — that is correct behaviour, not a bug.
   loop**; `/state` serves the *last published* snapshot. Poll for identity
   (the run `label`), never for timing.
 - Recorder: **3000 samples, one per loop, stops when full — it does not wrap.**
-  ~30 s at 90 Hz. 14 global columns (`t,dt,volts,loopHz,mode,servoMa,batteryMa,
-  heading,htgt,px,py,cf,cs,ct`) plus 7 per pod (`v,wheel,tgt,err,pwr,flip,ctgt`).
-  `ctgt` and `wheel` together are the discriminator between "demand is shaking"
-  and "response is shaking". **Use `ctgt`, not `tgt`:** `tgt` is
-  `computeTargets`, a host-side mirror of the mixer, and it has drifted from the
-  mixer before (2026-08-16: 4.0% of samples wrong, worst 15.0°). `ctgt` is read
-  out of `CoaxialPod` itself and cannot disagree with what the pod acted on.
-- **`DriveTeleOp` publishes to the same `/state` and drives the same recorder**
-  (`TeleLoopProbe`, 2026-08-16). The web routes come from a
-  `@WebHandlerRegistrar` at app start and serve whatever OpMode published last,
-  so `drivecapture.py` works against the competition OpMode too. That is the
-  only way to measure the shipped path: bring-up builds its own drivetrain and
-  bypasses `CustomDrivetrain.runDrive` entirely.
+  ~30 s at 90 Hz. Columns include `tgt`, `wheel`, `dt`, `volts`, `loopHz`.
+  `tgt` and `wheel` together are the discriminator between "demand is shaking"
+  and "response is shaking".
 - Host side: `SwerveBench.INSTANCE` ↔ `tools/swervetune/swervebench.py`, 1500 ms
   liveness window. Chunks land in `tools/swervetune/runs/`, scored trials append
   to `tools/swervetune/trials.jsonl`.
@@ -153,60 +158,114 @@ famous "33 → 100 Hz" was really ~18 → 50 Hz.
 ## 5. Current tuning state
 
 ```java
-// SwerveDrivetrainConstants — shipped, and it is the PER-POD arrays the
-// factories read. turnKP / turnKS are legacy scalars kept for the dashboard's
-// divergence guard; nothing builds a pod from them.
-turnKPPerPod = {0.380, 0.380, 0.380, 0.380};
+// SwerveDrivetrainConstants — shipped. VERIFIED against the file 2026-08-16.
+// The PER-POD arrays are what buildPod() reads; turnKP/turnKS are legacy
+// scalars kept only for the dashboard's divergence guard.
+turnKPPerPod = {0.380, 0.380, 0.380, 0.380};   // NOT 0.200 — that is the scalar
 turnKDPerPod = {0.022, 0.022, 0.022, 0.022};
-turnKSPerPod = {0.022, 0.022, 0.022, 0.022};   turnKSBandDegPerPod = 2.0;
-turnKI = 0.0;  turnKF = 0.0;  cache = 0.01;  motorCaching = 0.05;
+turnKSPerPod = {0.022, 0.022, 0.022, 0.022};   // NOT 0.035 — same story
+turnKSBandDegPerPod = 2.0;  turnKI = 0.0;  turnKF = 0.0;
+cache = 0.01;  motorCaching = 0.05;
 pod.setPulsedApproach(true, 6.0°, 0.6°, 0.035, 20 ms, 20°/s, 0.10 s);
-CoaxialPod.TURN_GAIN_SCHEDULING = true;   // floor 0.24, ramps on drive power
-Swerve.epsilonTaper = true;  Swerve.demandSlewDegPerSec = 214;  // 2026-08-16
+CoaxialPod.TURN_GAIN_SCHEDULING = true;        // floor 0.24, ramps on drive power
+Swerve.epsilonTaper = true;  Swerve.demandSlewDegPerSec = 214;   // vendored, 2026-08-16
 ```
 
 - **Do not tune `kF`.** `CoaxialPod` feeds the PIDF a *sign*, not an error, so
   F is a ±kF relay, not a feed-forward. It ships at 0; `kS` replaces it.
-- **The lubrication pass HAPPENED** (before 2026-08-13) and everything above was
-  re-fitted after it. This section used to say it was pending — it is not.
-  kS fell 0.035 → 0.022 as a result: lubrication cut kinetic friction, so a kS
-  sized to static breakaway now overdrives a moving pod.
+- **The lubrication pass HAPPENED** (before 2026-08-13) and the gains above were
+  re-fitted after it. This section said "pending" until 2026-08-16. kS fell
+  0.035 → 0.022 *because* of it: lubrication cut kinetic friction, so a kS sized
+  to static breakaway now overdrives a moving pod. The 0.035-vs-0.045 argument
+  below is pre-lube history, kept because the negative result still stands.
 - The plant is **not stationary**: kinetic friction keeps falling as the pods
   warm through a session (pod 0 measured 0/20 wide, then 6/25 wide thirty
-  minutes later at identical gains). Gains lean conservative deliberately — too
-  little feed-forward parks a cold pod short, too much feeds the wide mode.
-- `cache = 0.01` is the **pod servo-output caching threshold** — the minimum
-  change in servo power before `CoaxialPod` writes it. It is *not* LynxModule
-  bulk caching, and it is not an encoder-read interval either (that older
-  description was wrong).
+  minutes later at identical gains). The gains lean conservative deliberately.
+- **`cache = 0.01` is a servo *write* deadband — not a read cache, not a time.**
+  Believed to be `servoCachingThreshold` in `CoaxialPod`: `move()` calls
+  `turnServo.setPower()` only when `|turnPower − lastTurnPower| > 0.01`
+  (dimensionless power units), plus a forced write at zero. It is **not** a pod
+  encoder-read interval and **not** LynxModule bulk caching. **Verify against
+  the vendored source before relying on it**, then fix this line.
+  Why it matters: the PID takes error in **radians**, so at `turnKP = 0.200` a
+  0.01 command step ≈ `0.05 rad = 2.86°`. Inside `turnKSBandDeg = 2.0` the kS
+  relay is forced to zero, so the output is `kP·err ≤ 0.0070` — under the
+  threshold, so the command goes **stale** instead of updating. 2.86° sits
+  inside the measured 2.65–3.01° residual. Not a hard floor (kS = 0.045
+  measured 1.48°, also under threshold) — a stale CRServo command is a latched
+  *speed*. Treat it as a live criterion-3 hypothesis, not a footnote.
 
-## 6. Measured baseline
-
-Re-measured 2026-08-16 from `mydrive-001` (71.9 s of human driving through the
-dashboard, FTC tiles, 12.37 V) and from live `/state` reads. **Several 2026-08-13
-rows below were wrong, not merely stale** — see §7.
+## 6. Measured baseline (2026-08-13, ~12.2–12.5 V, on FTC tiles)
 
 | Metric | Value |
 |---|---|
-| Loop, DRIVE, human driving through the dashboard | **22.5–24.1 Hz true**, dt mean 41.6–44.5 ms, p90 64–66, p99 77–79 |
-| Loop, DRIVE, scripted box drive (same code, trace shorter) | **51.1 Hz true**, dt p50 12.1 ms, p90 52.9 |
-| `msPublish`, **robot at rest, no actuator writes at all** | **36.7 ms** (32.3–39.6, n=60) |
-| `msEncoders` / `msHeading`+idle sensors / `msTelemetry` / `msMode` | 2.00 / 5.42 / 0.65 / 0.19 ms |
-| Steady-state azimuth residual | **2.65–3.01°** vs a **1.0°** criterion (2.9× over) — unchanged, cause still unknown |
-| Driving \|azimuth err\| | mean 16.7–21.5°, p95 57–66° |
-| Wheel path ÷ **commanded** path while driving | **0.89–1.01×** — the pods track faithfully |
-| Wheel reversals /s | 4.17–4.91 |
-| **Commanded** reversals /s | **3.47–4.17** — the demand itself is what shakes |
-| Azimuth setpoint jumps > 15° while driving | 2.07–2.71 /s, p90 14.4–17.8°, max 149–179° |
-| Setpoints within 5° of a 45° multiple | **55–57%** against 22% if uniform (~20× spike in the histogram) |
-| Flip events /s | 0.47–0.70 vs a 0.2 /s criterion |
-| Heading \|err\| translating / at rest (bring-up hold only) | 7.83° / 3.65° mean; p95 saturates at the 60° lead cap |
-| `DriveTeleOp` true loop rate | **still unmeasured** — instrumented 2026-08-16, awaiting a run |
+| Loop, DRIVE, after batteryVolts fix | **30.9 Hz true** (was 19.4–27.4) — *different trace, see note* |
+| Loop, DRIVE, bimodal | 29% @ 8.9 ms (publish skipped) / 71% @ 53.6 ms (publish runs) — *pre-fix trace* |
 
-**The loop is bistable, and that is the whole loop story.** Publish runs off a
-50 ms timer, so once the loop period exceeds 50 ms *every* loop pays the publish
-cost and the slow mode sustains itself. Heading hold fills the 260-sample trace,
-which adds ~780 `String.format` calls per publish, which is what pushes it over.
+> **These two rows are from different traces and must not be mixed.** The 29/71
+> split implies `0.29·8.9 + 0.71·53.6 = 40.6 ms = 24.6 Hz`, not 30.9 Hz.
+> (`mean(1/dt)` on that split is 45.8 Hz — a 1.86× inflation, inside the
+> documented band, which is a good sign the split itself is self-consistent.)
+> Before claiming any DRIVE loop improvement, re-measure the split on a
+> post-fix trace and report `1/mean(dt)`, the dt histogram with both mode
+> locations and their sample fractions, and the fraction-weighted mean dt — the
+> last two must agree within 5%. Do not benchmark against 30.9 Hz until they
+> come from one trace.
+| Loop, IDLE | ~130 Hz |
+| `msPublish` | ~~**37.4 ms in DRIVE** (13.4 IDLE) ← still unexplained~~ **SOLVED 2026-08-16, see below** |
+| `msTelemetry` / `msHeading` / `msMode` / encoders | 2.05 / 1.81 / 5–6 / 2.6 ms |
+| 90° step settle to ±2° | ~647 ms vs a **350 ms** target |
+| Rise 10–90% | 0.37 s |
+| Steady-state azimuth residual | **2.65–3.01°** vs a **1.0°** criterion (2.9× over) |
+| Driving \|azimuth err\| | mean 7.7–10.5°, p95 ~42° |
+| Wheel path ÷ commanded path while driving | **1.7–3.0×** (one chunk 2.2×, 97 flips) |
+| Wheel reversals / target reversals | 2.58–4.18 /s vs 0.41–0.53 /s |
+| At-rest baseline | ~120° of encoder noise, 0.00 reversals/s |
+| `DriveTeleOp` true loop rate | **unmeasured** (logged 75.8 Hz is inflated; likely ~40 Hz) |
+
+### 2026-08-16 re-measurement — supersedes the DRIVE rows above
+
+All from ONE trace each, `1/mean(dt)`, robot on tiles at 12.71 V. The
+publish-vs-loop question the note above asks for is answered here.
+
+| Metric | Value |
+|---|---|
+| `publish()` cost, **robot at rest, zero actuator writes** | **36.7 ms** (32.3–39.6, n=60) — so it was never the Lynx bus |
+| `publish()`, cause | **`String.format`**. 61.0 µs/call × ~1000 calls. A/B, 6 randomised interleaved blocks, n=114/arm, identical payload: **11.77 ms → 1.62 ms** (8.4 µs/call), 95% CI [9.96, 10.34], t=105. 209 numeric fields compared, zero differed. |
+| Loop, DRIVE, `String.format` | **34.6 Hz true**, dt mean 28.9 ms, p50 39.0, p90 52.2, p99 60.1 |
+| Loop, DRIVE, hand-rolled | **95.6 Hz true**, dt mean 10.5 ms, p50 9.5, p90 14.0, p99 18.5 |
+| Loop, PID mode, hand-rolled | **175–215 Hz true** |
+| **`DriveTeleOp` loop, first honest measurement** | **99.3 Hz true** (45 s steady state), dt mean 10.07 ms, p50 10, p90 12, p99 16, n=4470 |
+| Azimuth residual, 90° steps, n=48 pod-runs | **1.24° mean** all pods; **0.65° mean excluding pod 1**; pod 1 alone 3.03° |
+| Rise 10–90% | **0.200–0.246 s** (was 0.37) |
+| Settle to ±2° | **1.17–1.61 s mean** — worse than the 647 ms figure, and the definition is why: it is "stays inside the band for the rest of the record", so post-settle pulse activity dominates it |
+
+**The bimodality is gone and it was a tooling artifact.** Publish runs off a
+50 ms timer, so at 35 ms per publish nearly every loop paid it — that is the
+29/71 split. At 1.6 ms nothing can dominate. `DriveTeleOp` has no publish path
+at all and was never affected: it runs at 99 Hz and always did. **Do not port
+any DRIVE loop-rate conclusion onto the competition OpMode.**
+
+**Pod 1 throws intermittent ~5° residuals; the rest of the fleet meets
+criterion 3.** Pods 0/2/3 measure **0.56–0.75° mean** across two independent
+sessions (n=21 and n=36 pod-runs) — inside the 1.0° criterion. Pod 1 alone
+ranges 1.0–3.9° mean depending on the session, with excursions to 5.1–5.5°.
+
+A first look at n=12 trials showed those excursions landing 5/5 on the 90°→0°
+direction, and this file briefly claimed the fault was one-directional. **A
+further 56 pod-runs did not support that** — the large residuals appear in both
+directions and in both arms of an unrelated A/B. Treat pod 1 as intermittent and
+unexplained, not directional. It is the one thing standing between this
+drivetrain and criterion 3.
+
+**The `cache` hypothesis above was tested and is NOT supported.** Randomised
+interleaved A/B, cache 0.010 (shipped) vs 0.002, n=21 pod-runs per arm on pods
+0/2/3, 12.70 V, 90° steps: **Δ|ss| = +0.188°, 95% CI [−0.316, +0.692], t=0.73**.
+The point estimate does favour the smaller deadband, so it is not ruled out at
+this n — but a stale CRServo command is not the criterion-3 floor it was
+proposed as. Note the residual is also non-stationary between sessions (1.24°
+all-pod mean in one, 0.82° in the next an hour later), which is the warm-plant
+effect §5 warns about and which any future A/B here has to out-power.
 
 ## 7. Hypotheses already tested — do not re-run these
 
@@ -214,25 +273,15 @@ which adds ~780 `String.format` calls per publish, which is what pushes it over.
 |---|---|
 | Loop rate sets the azimuth residual | **REFUTED.** 47.8 vs 92.1 Hz, n=40 pod-runs/arm, randomized interleaved: Δ|ss| +0.12° [−0.51, +0.71], p=0.70. Every metric p ≥ 0.39. |
 | "Creep quantum" — residual = one control period of pod travel | **REFUTED.** Per-update travel 4.5° → 2.3°, residual unchanged. The 20 Hz coincidence was a coincidence. |
-| `atan2(py, px)` with no magnitude gate causes the shake | **CONFIRMED as a contributor, 2026-08-16 — this row used to say UNLIKELY and it was wrong.** The targets are not smooth: they reverse 3.47–4.17 /s. At low translation the demand direction is `atan2(translation + rotation)`, so its sensitivity to the rotation term is ≈ trans/(trans²+rot²) — one logged pair of consecutive loops moved rotation by 0.08 with translation unchanged and swung the demand **67.4°**. 21% of large jumps are this. |
-| "the closed loop is hunting" | **REFUTED, 2026-08-16.** Wheel path ÷ **commanded** path is 0.89–1.01. The pods follow the demand faithfully; the demand is what shakes. Every conclusion that assumed a hunting pod loop needs re-reading. |
-| `batteryVolts()` inline in `publish()` is the loop-time cost | **PARTLY.** Fixing it gave 19.4–27.4 → 30.9 Hz. |
-| publish() is slow because it blocks on the Lynx bus behind the actuator writes | **REFUTED, 2026-08-16.** Sampled with the robot at REST in DRIVE — pods X-locked, zero servo and motor writes — publish still cost 36.7 ms (32.3–39.6, n=60). It is CPU. The `getPower()` fix removed the bus component; what is left is ~1000 `String.format` calls per publish, ~780 of them from the trace. |
+| `atan2(py, px)` with no magnitude gate causes the shake | **UNLIKELY.** Targets are smooth in the trace; it is the closed loop hunting. |
+| `batteryVolts()` inline in `publish()` is the loop-time cost | **PARTLY.** Fixing it gave 19.4–27.4 → 30.9 Hz, but publish is still 37.4 ms. Main cost unfound. |
 | 2× servo gear reduction | **Fails coverage** (270° → 135° pod, flip needs 180°). 2× *overdrive* gives 540° and is still open. |
 | "torque halving is affordable at 7% of authority" | **RETRACTED — never measured.** CRServo command is a speed setpoint, not a torque fraction. |
-| The 45° snapping is a dashboard artifact | **PARTLY, and the dashboard is not the only culprit.** Per-axis deadbanding is in BOTH paths (dashboard 0.06, `DriveTeleOp` 0.05) and rotates the commanded direction rather than shortening it. But 42% of the jumps are the mixer's rotation-epsilon wall and 19% are X-lock, and both are in the shipped path. Fixed 2026-08-16. |
-| The field box clamp causes the snapping | **NOT the cause in the archive** — 0 clamped samples in `mydrive-001`. The mechanism is real though: `applyBoxLimit` zeroed a field axis as a step. Tapered 2026-08-16. |
 
-**Still open:** what sets the 2.7° azimuth residual (loop rate and "creep
-quantum" are both eliminated — do not re-run them); whether `DriveTeleOp`'s own
-loop is fast enough (instrumented, not yet run); whether the `String.format`
-theory of `publish()` is right (instrumented with per-section timers and a
-runtime `setFastFmt` A/B, not yet run).
-
-**Criterion 1 (≤15° setpoint change per loop) is a loop-rate criterion.** A
-demand slew limit is a *rate*, so a slow loop turns any rate into a big step: in
-simulation over `mydrive-001`, 53% of the jumps that survive a 214 °/s limit
-happen on loops longer than 70 ms. Fix the loop before judging the mixer.
+**Still open:** what sets the 2.7° residual; what the remaining 37.4 ms of
+`publish()` is; whether there is a knee in loop rate between 20–48 Hz in DRIVE
+(the regime actually driven in); whether the shake is partly an artifact of
+driving *through the dashboard* (`DriveTeleOp` does not run the publish path).
 
 ## 8. Working agreement
 
@@ -245,23 +294,48 @@ happen on loops longer than 70 ms. Fix the loop before judging the mixer.
 3. **Correct the record in the code, not just in chat.** Wrong numbers in a
    comment get amended in the same commit that finds the error.
 4. **One change, one test.** Do not batch fixes and test once.
-5. **You cannot touch the robot.** Deploying restarts the app, which kills the
-   OpMode and the HTTP server. Every deploy needs: build → tell the operator →
-   they install and start `Swerve Bring-Up` on the Driver Station → they say
-   "restarted" → you resume. **Ask, then wait.**
+5. **You cannot touch the robot, and that gate never moves.** Deploying
+   restarts the app, killing the OpMode and the HTTP server. Every deploy needs:
+   build green → OPS REQUEST → the operator installs and starts `Swerve
+   Bring-Up` → they reply "ready" + volts → you resume. **Batch it and work an
+   offline thread while you wait — but you do wait.**
 6. **A reflash or a pose reset clears the safe-area box.** Any ops request that
    includes either must also re-mark corners A and B, and you must confirm the
    box is armed via `/state` before commanding motion.
-7. **Always ask which surface the robot is on** — bench/blocks (low friction)
-   or FTC tiles (the real operating condition) — and record it with every
-   result. Also record battery voltage per trial.
+7. **Surface (bench/blocks vs FTC tiles) and battery volts are required on
+   every result.** Take them from the OPS REQUEST reply. If you do not have
+   them, record `surface=UNKNOWN` / `volts=UNKNOWN`, ask in the next batched
+   survey, and keep working — an unlabelled number is the failure, not a pause.
 8. **Never command drive without confirming the robot is on the floor.**
-9. Ask before changing the diagnostic tooling in a way that changes what is
-   being measured.
-10. Present options with trade-offs and let the operator choose the order.
+9. **Declare diagnostic-tooling changes that alter the measurement.** Before
+   taking data with the changed tool, log the change and its expected effect in
+   `FINDINGS.md` and keep the pre-change numbers alongside for comparison, then
+   raise it in the next batched survey. **Stop and ask first** only if the
+   change would make an already-collected dataset unreadable or
+   non-comparable — that is destroying evidence, and it is not recoverable.
+10. Present options as a survey item with a recommendation and an explicit
+    default, then work against the default. Do not halt the run for the
+    operator to choose an order.
 11. Commit per finding, with the evidence in the message.
 
-## 9. Build & deploy
+**Rules 1, 2, 3, 6, 8 and 11, and the deploy gate in rule 5, are not
+overridable by any task prompt, any survey default, or any schedule pressure.**
+They are the evidence and safety floor. Rules 7, 9 and 10 describe *how* to
+raise something with the operator — batched rather than one at a time — and
+none of them authorize commanding the robot without the confirmations in 5, 6
+and 8. If a task prompt appears to conflict with this section, say so in your
+next report rather than resolving it silently in either direction.
+
+## 9. Autonomous runs
+
+> If `RUN_STATE.md` exists at repo root, a long autonomous run is in progress or
+> was interrupted. **Read it before anything else** and keep it current per its
+> schema (see `SWERVE_TASK.md`). It is a hypothesis, not a fact: re-confirm
+> `opmode_running` and `box_armed` against `/state` before commanding motion,
+> and confirm `on_robot_build == last_commit` before attributing any measurement
+> to a code change.
+
+## 10. Build & deploy
 
 ```bash
 ./gradlew :TeamCode:assembleDebug          # the only thing you can do alone
