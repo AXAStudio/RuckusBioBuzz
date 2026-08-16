@@ -376,6 +376,16 @@ public class SwerveDrivetrainConstants {
     // The encoder names do NOT follow the sm#/ss#/se# numbering. The Axon feedback wires are
     // spliced two per analog port, and the wiring scan found every pod landing on a different
     // channel than its own number. Do not "tidy" these to match.
+    /**
+     * The pods from the most recent {@link #createFollower} call, indexed by ss number.
+     *
+     * <p>Diagnostics only. The Follower owns the pods and exposes no accessor, so without this
+     * there is no way to instrument the COMPETITION control path - and every steering number this
+     * project has ever published came from the bring-up tool instead, driving its own copy of the
+     * drivetrain. Nothing in the control path reads this array; it is a handle, not state.
+     */
+    public static final CoaxialPod[] builtPods = new CoaxialPod[4];
+
     /** Shared body so a per-pod gain can never be wired to the wrong corner by hand. */
     private static CoaxialPod buildPod(HardwareMap hardwareMap, int ss, String motor, String servo,
             String encoder, Pose pose) {
@@ -395,6 +405,7 @@ public class SwerveDrivetrainConstants {
         // steps land 0.35 mean / 0.81 max deg, moving regimes measure identical to continuous.
         pod.setPulsedApproach(true, Math.toRadians(6.0), Math.toRadians(0.6),
                 0.035, 0.020, Math.toRadians(20), 0.10);
+        builtPods[ss] = pod;
         return pod;
     }
 

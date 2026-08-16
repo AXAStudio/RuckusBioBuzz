@@ -29,8 +29,14 @@ public class PodRecorder {
      */
     private static final int GLOBAL_COLS = 14;
 
-    /** Columns recorded per pod. */
-    private static final int POD_COLS = 6;
+    /**
+     * Columns recorded per pod. Grew 6 -> 7 on 2026-08-16: {@code ctgt}, the demand read back out
+     * of the pod itself ({@code CoaxialPod.getLastTargetWheelRad}). {@code tgt} is a host-side
+     * mirror of the mixer and mirrors drift - it disagreed with the real demand on 4.0% of the
+     * samples in mydrive-001. Both are kept: {@code tgt} so the whole archive stays comparable,
+     * {@code ctgt} because it cannot be wrong.
+     */
+    private static final int POD_COLS = 7;
 
     private static final int POD_COUNT = 4;
     private static final int COLS = GLOBAL_COLS + POD_COUNT * POD_COLS;
@@ -106,6 +112,7 @@ public class PodRecorder {
      * @param podVolts raw encoder voltage per pod
      * @param wheelDeg measured wheel heading per pod, degrees
      * @param targetDeg commanded wheel heading per pod, degrees; NaN when nothing is commanded
+     * @param cmdTargetDeg the demand read back out of the pod, degrees; NaN when it never moved
      * @param errDeg signed post-flip pod error per pod, degrees; NaN when the loop is not closed
      * @param power turn servo power actually written per pod
      * @param flipped whether the pod took the 180 degree flip this loop
@@ -119,7 +126,7 @@ public class PodRecorder {
      */
     public void add(double dt, double volts, double loopHz, int mode, double servoMa,
             double batteryMa, double[] podVolts, double[] wheelDeg, double[] targetDeg,
-            double[] errDeg, double[] power, boolean[] flipped,
+            double[] cmdTargetDeg, double[] errDeg, double[] power, boolean[] flipped,
             double headingDeg, double headingTgtDeg, double poseX, double poseY,
             double cmdF, double cmdS, double cmdT) {
         if (!recording) {
@@ -155,6 +162,7 @@ public class PodRecorder {
             data[p + 3] = (float) errDeg[i];
             data[p + 4] = (float) power[i];
             data[p + 5] = flipped[i] ? 1 : 0;
+            data[p + 6] = (float) cmdTargetDeg[i];
         }
 
         count++;
@@ -184,7 +192,8 @@ public class PodRecorder {
                     .append(",p").append(i).append("_tgt")
                     .append(",p").append(i).append("_err")
                     .append(",p").append(i).append("_pwr")
-                    .append(",p").append(i).append("_flip");
+                    .append(",p").append(i).append("_flip")
+                    .append(",p").append(i).append("_ctgt");
         }
         sb.append('\n');
 

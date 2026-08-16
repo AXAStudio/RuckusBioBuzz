@@ -43,6 +43,19 @@ public class CoaxialPod implements SwervePod {
     private double lastErrorRad = 0;
     private boolean lastMoveFlipped = false;
 
+    /**
+     * RUCKUS PATCH: instrumentation only - the wheel-space theta this pod was last asked for,
+     * before the shortest-path flip and before any encoder-frame conversion.
+     *
+     * <p>The recorder's {@code tgt} column used to come from SwerveBringUp.computeTargets, a
+     * host-side MIRROR of the mixer. Mirrors drift: on 2026-08-15 the mirror still used the old
+     * 0.05 rotation epsilon while the mixer had moved to 0.015, so 4.0% of the samples in
+     * mydrive-001 recorded a demand the pods were never given (worst disagreement 15.0 deg).
+     * This is the demand itself, taken from inside the pod, and it cannot disagree with what
+     * the pod acted on.
+     */
+    private double lastTargetWheelRad = Double.NaN;
+
     /** RUCKUS PATCH: flip-decision hysteresis half-band. See the flip block in {@link #move}. */
     private static final double FLIP_HYSTERESIS_RAD = Math.toRadians(10);
 
@@ -304,6 +317,7 @@ public class CoaxialPod implements SwervePod {
      */
     @Override
     public void move(double targetAngleRad, double drivePower, boolean ignoreAngleChanges) {
+        lastTargetWheelRad = targetAngleRad;
         // Convert hardware angle to radians and normalize
         double actualRad = getAngleAfterOffsetRad();
         actualRad = MathFunctions.normalizeAngle(actualRad);
@@ -725,6 +739,18 @@ public class CoaxialPod implements SwervePod {
      */
     public boolean wasLastMoveFlipped() {
         return lastMoveFlipped;
+    }
+
+    /**
+     * RUCKUS PATCH: the wheel-space theta passed to the last {@link #move} call, in radians.
+     *
+     * <p>The demand as the mixer produced it: pre-flip, pre-encoder-frame, and taken from inside
+     * the pod so no host-side reimplementation can drift away from it. NaN until the first move.
+     *
+     * @return last commanded wheel heading in radians, or NaN
+     */
+    public double getLastTargetWheelRad() {
+        return lastTargetWheelRad;
     }
 
     /**

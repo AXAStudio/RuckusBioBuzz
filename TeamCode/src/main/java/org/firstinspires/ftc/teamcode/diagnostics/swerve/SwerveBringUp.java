@@ -98,6 +98,18 @@ public class SwerveBringUp extends OpMode {
      * reproduces {@code Swerve.arcadeDrive}'s kinematics to show the commanded pod state.
      */
     private static final double SWERVE_EPSILON = 0.05;
+
+    /**
+     * The mixer's rotation deadband, mirroring {@code Swerve.ROTATION_EPSILON}. Translation keeps
+     * SWERVE_EPSILON; rotation gets its own, much lower wall so fine heading corrections survive.
+     */
+    private static final double SWERVE_ROTATION_EPSILON = 0.015;
+
+    /** Mirrors {@code Swerve.X_LOCK_ENGAGE_DELAY_S}. */
+    private static final double X_LOCK_ENGAGE_DELAY_S = 0.35;
+
+    /** Mirrors the mixer's {@code lastActiveInputNano}, for the X-lock engage delay. */
+    private long lastActiveTargetInputNano;
     private static final double SWERVE_MAX_POWER = 1.0;
 
     /** Minimum total analog movement (volts) for a channel to count as "responded". */
@@ -207,6 +219,8 @@ public class SwerveBringUp extends OpMode {
     // Scratch rows reused each loop so recording allocates nothing in the control path.
     private final double[] recWheel = new double[POD_COUNT];
     private final double[] recTarget = new double[POD_COUNT];
+    /** The demand read back out of each pod, degrees. See PodRecorder's ctgt column. */
+    private final double[] recCmdTarget = new double[POD_COUNT];
     private final double[] recError = new double[POD_COUNT];
     private final boolean[] recFlipped = new boolean[POD_COUNT];
 
@@ -358,6 +372,9 @@ public class SwerveBringUp extends OpMode {
     private double msHeading;
     private double msMode;
     private double msPublish;
+
+    /** Smoothed per-section publish cost, milliseconds. See the "pub" block in {@link #publish}. */
+    private final double[] msPubSection = new double[6];
     private double msTelemetry;
 
     /** Last unrecognised command action, surfaced in errors[] so a typo cannot pass unnoticed. */
@@ -963,11 +980,16 @@ public class SwerveBringUp extends OpMode {
                     ? Double.NaN
                     : Math.toDegrees(normalizeTwoPi(targetTheta[i]));
 
+            recCmdTarget[i] = Double.NaN;
             if (podMoved[i] && pods != null && pods[i] instanceof CoaxialPod) {
                 CoaxialPod cp = (CoaxialPod) pods[i];
                 recError[i] = Math.toDegrees(cp.getLastErrorRad());
                 recFlipped[i] = cp.wasLastMoveFlipped();
                 servoCmd[i] = cp.getLastTurnPower();
+                // The demand from inside the pod, not the computeTargets mirror. See PodRecorder.
+                double ct = cp.getLastTargetWheelRad();
+                recCmdTarget[i] = Double.isNaN(ct) ? Double.NaN
+                        : Math.toDegrees(normalizeTwoPi(ct));
             } else if (podMoved[i] && pods != null && pods[i] instanceof PositionalPod) {
                 // Same error convention so one scorer reads both. Turn power is NaN by
                 // construction - a positional pod has none - and everything downstream that keys
@@ -983,7 +1005,7 @@ public class SwerveBringUp extends OpMode {
         }
 
         recorder.add(dt, batteryVolts(), loopHz, mode.ordinal(), servoRailMa, batteryMa,
-                volts, recWheel, recTarget, recError, servoCmd, recFlipped,
+                volts, recWheel, recTarget, recCmdTarget, recError, servoCmd, recFlipped,
                 headingOk ? Math.toDegrees(headingRad) : Double.NaN,
                 (headingHold && headingOk) ? Math.toDegrees(headingTargetRad) : Double.NaN,
                 poseOk ? poseXIn : Double.NaN,
@@ -2716,6 +2738,17 @@ public class SwerveBringUp extends OpMode {
                 break;
             }
 
+            case "setFastFmt": {
+                // Switchable at runtime so the two number formatters can be interleaved inside
+                // one session - a redeploy between arms would confound the comparison with a
+                // fresh JIT, a different battery state and a different trace length.
+                fastFmt = cmd.get("value") == null
+                        ? !fastFmt
+                        : Boolean.parseBoolean(cmd.get("value"));
+                message = "Publish formatter: " + (fastFmt ? "hand-rolled" : "String.format");
+                break;
+            }
+
             case "setPidf": {
                 // Robot-wide schedule tuning rides along: floor (fraction), velstart (deg/s),
                 // gate (deg). NaN (absent) leaves a value untouched.
@@ -3620,13 +3653,25 @@ public class SwerveBringUp extends OpMode {
         double transMag = Math.min(1.0, Math.hypot(strafe, forward));
         double transTheta = Math.atan2(forward, strafe);
         boolean zeroTrans = transMag < SWERVE_EPSILON;
-        boolean zeroRot = Math.abs(rotation) < SWERVE_EPSILON;
+        // Was SWERVE_EPSILON. The mixer moved its rotation wall to 0.015 on 2026-08-15 and this
+        // mirror did not follow, so for |rotation| in [0.015, 0.05) the recorder logged a
+        // translation-only demand while the pods were given translation PLUS rotation: 4.0% of
+        // the samples in mydrive-001, worst disagreement 15.0 deg, in the one column that is
+        // supposed to discriminate "the demand is shaking" from "the response is shaking".
+        boolean zeroRot = Math.abs(rotation) < SWERVE_ROTATION_EPSILON;
+
+        // Mirror the mixer's X_LOCK engage delay too, so the displayed demand does not lead
+        // reality by 0.35 s at every stick release.
+        if (!(zeroTrans && zeroRot)) {
+            lastActiveTargetInputNano = System.nanoTime();
+        }
+        boolean xLockRipe = zeroTrans && zeroRot
+                && (System.nanoTime() - lastActiveTargetInputNano) / 1.0e9 >= X_LOCK_ENGAGE_DELAY_S;
 
         if (zeroTrans && zeroRot) {
             // Mirrors rebuildPods: X_LOCK whenever xLock is on (heading hold no longer disables
-            // it - the hold phase machine guarantees clean zero rotation at rest). The
-            // Swerve-level engage delay means the first ~0.35 s of this display leads reality.
-            if (!xLock) {
+            // it - the hold phase machine guarantees clean zero rotation at rest).
+            if (!xLock || !xLockRipe) {
                 // Pods just hold their heading, so there is nothing being commanded to show.
                 return;
             }
@@ -3663,6 +3708,8 @@ public class SwerveBringUp extends OpMode {
     // ---------------------------------------------------------------- state publishing
 
     private void publish() {
+        long pubMark = System.nanoTime();
+        int fmtAtEntry = fmtCalls;
         StringBuilder sb = new StringBuilder(2048);
         sb.append("{");
         sb.append("\"live\":true");
@@ -3734,6 +3781,20 @@ public class SwerveBringUp extends OpMode {
                 .append(",\"publish\":").append(fmt(msPublish))
                 .append(",\"telemetry\":").append(fmt(msTelemetry))
                 .append(",\"publishHz\":").append(fmt(publishIntervalS > 0 ? 1 / publishIntervalS : 0))
+                // Where publish() actually spends its time. Sections in emission order: the
+                // scalar header, the four pods, errors/shipped/notes, the 260-sample trace, the
+                // tuner log and tail, and the handoff (sb.toString + the atomic swap).
+                .append(",\"pub\":{\"head\":").append(fmt(msPubSection[0]))
+                .append(",\"pods\":").append(fmt(msPubSection[1]))
+                .append(",\"errs\":").append(fmt(msPubSection[2]))
+                .append(",\"trace\":").append(fmt(msPubSection[3]))
+                .append(",\"tail\":").append(fmt(msPubSection[4]))
+                .append(",\"handoff\":").append(fmt(msPubSection[5]))
+                .append(",\"fmtCalls\":").append(publishFmtCalls)
+                .append(",\"chars\":").append(publishChars)
+                .append(",\"traceLen\":").append(traceCount)
+                .append(",\"fastFmt\":").append(fastFmt)
+                .append('}')
                 .append('}');
         sb.append(",\"rec\":{\"recording\":").append(recorder.recording())
                 .append(",\"runId\":").append(recorder.runId())
@@ -3741,6 +3802,9 @@ public class SwerveBringUp extends OpMode {
                 .append(",\"overflowed\":").append(recorder.overflowed())
                 .append(",\"label\":\"").append(esc(recorder.label()))
                 .append("\"}");
+
+        msPubSection[0] = smooth(msPubSection[0], System.nanoTime() - pubMark);
+        pubMark = System.nanoTime();
 
         sb.append(",\"pods\":[");
         for (int i = 0; i < POD_COUNT; i++) {
@@ -3750,6 +3814,9 @@ public class SwerveBringUp extends OpMode {
             appendPod(sb, i);
         }
         sb.append(']');
+
+        msPubSection[1] = smooth(msPubSection[1], System.nanoTime() - pubMark);
+        pubMark = System.nanoTime();
 
         // Hardware faults first, then any divergence from the shipped gains. The divergence
         // entries are recomputed every publish rather than stored, so they clear themselves the
@@ -3809,6 +3876,9 @@ public class SwerveBringUp extends OpMode {
         }
         sb.append(']');
 
+        msPubSection[2] = smooth(msPubSection[2], System.nanoTime() - pubMark);
+        pubMark = System.nanoTime();
+
         // Emitted oldest-first; the ring buffer's start walks forward once it has wrapped.
         int start = (traceCount < TRACE_LEN) ? 0 : traceHead;
         sb.append(",\"trace\":{\"pod\":").append(tracePod);
@@ -3816,6 +3886,9 @@ public class SwerveBringUp extends OpMode {
         appendTraceSeries(sb, "],\"tgt\":[", traceTarget, start);
         appendTraceSeries(sb, "],\"act\":[", traceActual, start);
         sb.append("]}");
+
+        msPubSection[3] = smooth(msPubSection[3], System.nanoTime() - pubMark);
+        pubMark = System.nanoTime();
 
         sb.append(",\"tune\":{\"running\":").append(tuner.isRunning())
                 .append(",\"pod\":").append(tuner.podIndex())
@@ -3839,7 +3912,15 @@ public class SwerveBringUp extends OpMode {
         sb.append(",\"export\":\"").append(esc(exportText)).append('"');
         sb.append('}');
 
-        SwerveBench.INSTANCE.publish(sb.toString());
+        msPubSection[4] = smooth(msPubSection[4], System.nanoTime() - pubMark);
+        pubMark = System.nanoTime();
+
+        String json = sb.toString();
+        publishChars = json.length();
+        publishFmtCalls = fmtCalls - fmtAtEntry;
+        SwerveBench.INSTANCE.publish(json);
+
+        msPubSection[5] = smooth(msPubSection[5], System.nanoTime() - pubMark);
     }
 
     private void appendPod(StringBuilder sb, int i) {
@@ -3977,11 +4058,62 @@ public class SwerveBringUp extends OpMode {
         return cachedVolts;
     }
 
+    /**
+     * Number of {@link #fmt} calls since the OpMode started, and how many the last publish made.
+     *
+     * <p>The publish cost was the last unexplained item in the loop budget. Caching the eight
+     * {@code getPower()} transactions took it from 37 ms to something smaller but still unmeasured,
+     * and the suspect that remained was this method: {@code String.format} builds a Formatter,
+     * parses the pattern and allocates on every call, and one publish makes roughly a thousand of
+     * them - about 780 of those from the 260-sample trace alone. Counting the calls turns "publish
+     * is slow" into a cost per call that can be checked against the section timers.
+     */
+    private static int fmtCalls;
+    private int publishFmtCalls;
+    private int publishChars;
+
+    /**
+     * Selects the hand-rolled formatter over {@code String.format}. Runtime-switchable
+     * ({@code setFastFmt}) so the two can be A/B'd inside one session against one battery, rather
+     * than across a redeploy.
+     */
+    private static volatile boolean fastFmt;
+
     private static String fmt(double v) {
+        fmtCalls++;
         if (Double.isNaN(v) || Double.isInfinite(v)) {
             return "0";
         }
-        return String.format(Locale.US, "%.4f", v);
+        return fastFmt ? fmtFast(v) : String.format(Locale.US, "%.4f", v);
+    }
+
+    /**
+     * Four decimal places, assembled by hand. Same output as {@code %.4f} over the range this
+     * dashboard publishes (angles, powers, voltages, milliamps, milliseconds); values past
+     * +/-1e9 are not representable in the fixed-point path and fall back to the SDK formatter.
+     */
+    private static String fmtFast(double v) {
+        double a = v < 0 ? -v : v;
+        if (a >= 1e9) {
+            return String.format(Locale.US, "%.4f", v);
+        }
+        long scaled = (long) (a * 10000.0 + 0.5);
+        StringBuilder sb = new StringBuilder(16);
+        if (v < 0 && scaled != 0) {
+            sb.append('-');
+        }
+        sb.append(scaled / 10000).append('.');
+        long frac = scaled % 10000;
+        if (frac < 1000) {
+            sb.append('0');
+        }
+        if (frac < 100) {
+            sb.append('0');
+        }
+        if (frac < 10) {
+            sb.append('0');
+        }
+        return sb.append(frac).toString();
     }
 
     private static String esc(String s) {

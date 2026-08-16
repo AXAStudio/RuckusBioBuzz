@@ -9,6 +9,7 @@ import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
+import org.firstinspires.ftc.teamcode.diagnostics.swerve.TeleLoopProbe;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 
 @TeleOp(name = "Drive TeleOp", group = "TeleOp")
@@ -31,6 +32,16 @@ public class DriveTeleOp extends OpMode {
     private static final double TELEMETRY_INTERVAL_S = 0.1;
     private final ElapsedTime telemetryTimer = new ElapsedTime();
 
+    /**
+     * Loop-rate histogram, pod capture and a /swerve/state snapshot for this OpMode.
+     *
+     * <p>Diagnostic, and deliberately three lines here rather than two hundred: see
+     * {@link TeleLoopProbe}. Until 2026-08-16 this loop's rate had never been measured with
+     * 1/mean(dt) and no capture of the competition path existed, so every steering conclusion in
+     * this project came from a different OpMode with a different publish path.
+     */
+    private final TeleLoopProbe probe = new TeleLoopProbe();
+
     @Override
     public void init() {
         // The swerve pods' turn PID runs at this OpMode's loop rate, so loop rate is a control
@@ -50,6 +61,7 @@ public class DriveTeleOp extends OpMode {
         }
 
         follower = Constants.createFollower(hardwareMap);
+        probe.init(hardwareMap);
         telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
     }
 
@@ -81,6 +93,10 @@ public class DriveTeleOp extends OpMode {
         follower.setTeleOpDrive(forward, strafe, turn, true);
         follower.update();
 
+        Pose probePose = follower.getPose();
+        probe.update(dt, loopHz, Math.toDegrees(probePose.getHeading()),
+                probePose.getX(), probePose.getY(), forward, strafe, turn);
+
         // Telemetry is throttled and no longer includes the drivetrain dump. debugString() calls
         // getRawAngleRad() twice per pod on top of the two reads move() already does, then builds
         // a multi-line string, and MultipleTelemetry pushed all of it to the Driver Station and to
@@ -89,7 +105,11 @@ public class DriveTeleOp extends OpMode {
         if (telemetryTimer.seconds() >= TELEMETRY_INTERVAL_S) {
             telemetryTimer.reset();
             Pose pose = follower.getPose();
+            // loopHz is a smoothed 1/dt for the driver's benefit. The honest statistic - and the
+            // only one that may be quoted - is in probe.summary().
             telemetry.addData("loopHz", loopHz);
+            telemetry.addLine(probe.summary());
+            telemetry.addLine(probe.recStatus());
             telemetry.addData("Drive Mode", gamepad1.left_bumper ? "Slow" : "Normal");
             telemetry.addData("forward", forward);
             telemetry.addData("strafe", strafe);
