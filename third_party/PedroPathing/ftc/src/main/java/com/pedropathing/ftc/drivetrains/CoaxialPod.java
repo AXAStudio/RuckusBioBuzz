@@ -39,6 +39,139 @@ public class CoaxialPod implements SwervePod {
     private double lastDrivePower = 0;
     private double lastTurnPower = 0;
 
+    /** RUCKUS PATCH: instrumentation only. See {@link #getLastErrorRad}. */
+    private double lastErrorRad = 0;
+    private boolean lastMoveFlipped = false;
+
+    /**
+     * RUCKUS PATCH: instrumentation only - the wheel-space theta this pod was last asked for,
+     * before the shortest-path flip and before any encoder-frame conversion.
+     *
+     * <p>The recorder's {@code tgt} column used to come from SwerveBringUp.computeTargets, a
+     * host-side MIRROR of the mixer. Mirrors drift: on 2026-08-15 the mirror still used the old
+     * 0.05 rotation epsilon while the mixer had moved to 0.015, so 4.0% of the samples in
+     * mydrive-001 recorded a demand the pods were never given (worst disagreement 15.0 deg).
+     * This is the demand itself, taken from inside the pod, and it cannot disagree with what
+     * the pod acted on.
+     */
+    private double lastTargetWheelRad = Double.NaN;
+
+    /** RUCKUS PATCH: flip-decision hysteresis half-band. See the flip block in {@link #move}. */
+    private static final double FLIP_HYSTERESIS_RAD = Math.toRadians(10);
+
+    /** RUCKUS PATCH: continuous static-friction term. See {@link #setStaticFriction}. */
+    private double staticFrictionPower = 0.0;
+    private double staticFrictionBandRad = Math.toRadians(2.0);
+
+    /** RUCKUS PATCH: see {@link #setPulsedApproach}. */
+    private boolean pulsedApproach = false;
+    private double pulseBandRad = Math.toRadians(3.0);
+    private double pulseToleranceRad = Math.toRadians(0.5);
+    private double pulsePower = 0.055;
+    private double pulseSeconds = 0.015;
+    private double pulseStationaryRadPerSec = Math.toRadians(20);
+    private double pulseCoastSeconds = 0.10;
+    private long pulseEndNano = 0;
+    private double pulseSign = 0;
+    private boolean lastMovePulsed = false;
+    // Stall escalation: one pulse size cannot straddle this plant. Measured travel per pulse
+    // spans 0.05-0.5 deg across pods at one power (stiction spread), and the friction itself
+    // drifts as pods warm. So the base pulse is sized for the loosest case, and any pulse that
+    // fails to shrink the error grows the next same-direction pulse instead - the pod finds the
+    // size the plant needs right now. Overshoot (sign flip) or convergence resets to base, so
+    // escalation can never feed a cycle: every pulse is still bounded and coast-separated.
+    private double pulseFirePower = 0;
+    private double pulseLastAbsErr = Double.NaN;
+    // Below this commanded drive power the pod counts as approaching rest and pulses engage;
+    // above it the wheels are rolling and the scheduled PD tracks the (possibly rotating)
+    // demand continuously. Sits under the human driver's band (0.1-0.2).
+    private static final double PULSE_DRIVE_GATE = 0.08;
+    private static final double PULSE_ESCALATE = 1.5;
+    // Must clear the stiffest pod's breakaway (podMinV max 0.106 measured) or a stalled ladder
+    // rides the cap forever; 0.09 did exactly that on pod 3.
+    private static final double PULSE_MAX_POWER = 0.13;
+    private static final double PULSE_PROGRESS_FRACTION = 0.75;
+    private static final double PULSE_PROGRESS_MIN_RAD = Math.toRadians(0.35);
+
+    /**
+     * RUCKUS PATCH: largest change in turn-servo power per move() call. 0 disables. See the
+     * comment at the slew clamp in {@link #move} for why this exists.
+     */
+    private double turnSlewPerUpdate = 0.0;
+
+    /** RUCKUS PATCH: see {@link #turnSlewPerUpdate}. */
+    public void setTurnSlewPerUpdate(double limit) {
+        this.turnSlewPerUpdate = Math.abs(limit);
+    }
+
+    /**
+     * RUCKUS PATCH: drive-power gain scheduling for the turn loop.
+     *
+     * <p>Measured 2026-08-14: a ROLLING wheel steers with a fraction of the friction of a
+     * parked one - with the servos frozen, free-castering wheels held a 0.1-0.4 degree band
+     * while driving, i.e. the rolling plant is nearly frictionless. Gains sized to break
+     * parked stiction (kP 0.38-0.44 plus kS) are therefore several times over-gained the
+     * moment the robot moves, and the loop limit-cycled at 3-4 Hz, 25 degrees, on every pod,
+     * at every gain tried - kP 0.14 while rolling collapsed the wheel oscillation from 32-49
+     * to 7-9 degrees. So the turn output scales with commanded drive power: full authority
+     * parked (stiction is real there), ramping down to {@code SCHED_FLOOR} of full by
+     * {@code SCHED_RAMP_DRIVE} of drive power.
+     *
+     * <p>Re-tuned 2026-08-15 against a RECORDED HUMAN SESSION: the driver lives at 0.05-0.20
+     * drive power, a regime every scripted test overshot. Floor 0.24 reached by 0.10 drive,
+     * velocity leg starting at 22 deg/s (slow 1-degree dither peaks near 30 deg/s and flew
+     * under the old 40): wobble/chatter episodes in the driver-mimic pattern fell by 60-90%.
+     * The error gate keeps transitions at full authority, which is what makes a floor this
+     * low safe.
+     */
+    private static final boolean TURN_GAIN_SCHEDULING = true;
+    private static double SCHED_FLOOR = 0.24;
+    private static double SCHED_RAMP_DRIVE = 0.10;
+
+    /** RUCKUS PATCH: runtime tuning of the schedule, robot-wide. NaN leaves a value alone. */
+    public static void setScheduleTuning(double floor, double velStartRadS, double errGateRad) {
+        if (!Double.isNaN(floor)) SCHED_FLOOR = MathFunctions.clamp(floor, 0.05, 1.0);
+        if (!Double.isNaN(velStartRadS)) SCHED_VEL_START_RAD_S = Math.abs(velStartRadS);
+        if (!Double.isNaN(errGateRad)) SCHED_ERR_GATE_RAD = Math.abs(errGateRad);
+    }
+
+    /** RUCKUS PATCH: drive power at which the schedule reaches the floor. Runtime-tunable. */
+    public static void setScheduleRamp(double rampDrive) {
+        if (!Double.isNaN(rampDrive)) SCHED_RAMP_DRIVE = Math.max(0.05, Math.abs(rampDrive));
+    }
+
+    public static double[] getScheduleTuning() {
+        return new double[] {SCHED_FLOOR, SCHED_VEL_START_RAD_S, SCHED_ERR_GATE_RAD};
+    }
+
+    /**
+     * RUCKUS PATCH: the velocity leg of the schedule. A pod swinging fast has a moving contact
+     * patch - partially rolling, low friction - even with zero drive power, which is how the
+     * at-rest hunt sustained itself at full static gains: the oscillation kept the plant in
+     * the regime that made full gains unstable. Scaling authority down with the pod's own
+     * measured steering speed starves the cycle (swing fast -> gains drop -> energy drops ->
+     * slows -> stiction catches it) while a slow, settling pod keeps full stiction-beating
+     * authority. Ramp starts at {@code SCHED_VEL_START} (above noise and normal creep) and
+     * reaches the floor by {@code SCHED_VEL_FULL}.
+     */
+    private static double SCHED_VEL_START_RAD_S = Math.toRadians(22);
+    private static final double SCHED_VEL_FULL_RAD_S = Math.toRadians(260);
+
+    /**
+     * RUCKUS PATCH: the schedule only applies near the target. The limit cycles it suppresses
+     * all live within ~15-18 degrees of the setpoint; a pod slewing a large transition needs
+     * every bit of authority, and scheduling it down made X-to-forward convergence so slow the
+     * robot crabbed 50 degrees off its commanded direction until the pods caught up. Above
+     * this error the gains are simply the gains.
+     */
+    private static double SCHED_ERR_GATE_RAD = Math.toRadians(20);
+
+    /** RUCKUS PATCH: see {@link #setDerivativeOnMeasurement}. */
+    private boolean derivativeOnMeasurement = false;
+    private double previousActualRad = Double.NaN;
+    private long previousMoveNano = 0;
+    private double lastMeasuredVelocityRad = 0;
+
     /**
      * @param motorName drive motor name
      * @param servoName turn servo name
@@ -184,6 +317,7 @@ public class CoaxialPod implements SwervePod {
      */
     @Override
     public void move(double targetAngleRad, double drivePower, boolean ignoreAngleChanges) {
+        lastTargetWheelRad = targetAngleRad;
         // Convert hardware angle to radians and normalize
         double actualRad = getAngleAfterOffsetRad();
         actualRad = MathFunctions.normalizeAngle(actualRad);
@@ -201,8 +335,27 @@ public class CoaxialPod implements SwervePod {
         // PID uses radians (tune PIDF for radian error)
         double errorRad = signedRad;
 
-        // Minimize rotation: flip + invert drive if > 90°
-        if (Math.abs(errorRad) > (Math.PI / 2.0)) {
+        // Minimize rotation: flip + invert drive if > 90 degrees - WITH HYSTERESIS.
+        //
+        // RUCKUS PATCH: the stock decision re-evaluates |error| > 90 every call, so a demand
+        // sitting near the boundary (a diagonal drive from X-parked pods puts it almost
+        // exactly there) flips back and forth every loop: the pod dithers between "go to
+        // theta" and "go to theta+180 reversed", the wheel sweeps 60-110 degrees, and the
+        // asymmetry of four pods doing this shows up as chassis yaw wobble. Measured on
+        // full-speed diagonals 2026-08-14. Inside a +/-10 degree band around the boundary the
+        // previous flip state is kept; the worst cost is accepting a 100 degree rotation
+        // instead of an 80 degree one, once.
+        boolean flip;
+        double absErr = Math.abs(errorRad);
+        if (absErr > Math.PI / 2.0 + FLIP_HYSTERESIS_RAD) {
+            flip = true;
+        } else if (absErr < Math.PI / 2.0 - FLIP_HYSTERESIS_RAD) {
+            flip = false;
+        } else {
+            flip = lastMoveFlipped;
+        }
+        lastMoveFlipped = flip;
+        if (flip) {
             // add 180 degrees (pi radians)
             desiredRad = MathFunctions.normalizeAngle(desiredRad + Math.PI);
             drivePower = -drivePower;
@@ -223,8 +376,113 @@ public class CoaxialPod implements SwervePod {
             turnPID.updateFeedForwardInput(MathFunctions.getTurnDirection(actualRad, desiredRad));
         }
 
-        turnPID.updateError(setpointRad - actualRad);
-        double turnPower = MathFunctions.clamp(turnPID.run(), -1.0, 1.0);
+        // RUCKUS PATCH: measured pod velocity, wrapped correctly across the encoder's 0/2pi seam.
+        long nowNano = System.nanoTime();
+        if (!Double.isNaN(previousActualRad) && previousMoveNano != 0) {
+            double dt = (nowNano - previousMoveNano) / 1.0e9;
+            if (dt > 1e-6) {
+                lastMeasuredVelocityRad =
+                        MathFunctions.normalizeAngleSigned(actualRad - previousActualRad) / dt;
+            }
+        }
+        previousActualRad = actualRad;
+        previousMoveNano = nowNano;
+
+        if (derivativeOnMeasurement) {
+            // d(error)/dt is -d(measurement)/dt whenever the setpoint is holding still, and unlike
+            // differencing the error it does not spike when the setpoint steps or the pod flips.
+            turnPID.updateErrorWithDerivative(setpointRad - actualRad, -lastMeasuredVelocityRad);
+        } else {
+            turnPID.updateError(setpointRad - actualRad);
+        }
+        double raw = turnPID.run();
+
+        // RUCKUS PATCH: continuous static-friction feed-forward. A no-op while
+        // staticFrictionPower is 0, which is every stock configuration.
+        if (staticFrictionPower != 0.0 && staticFrictionBandRad > 0.0) {
+            raw += staticFrictionPower * Math.tanh(errorRad / staticFrictionBandRad);
+        }
+
+        // RUCKUS PATCH: scale the whole turn effort by the schedule - see the field comments.
+        // Two legs, whichever demands more reduction wins: commanded drive power (the robot is
+        // translating, wheels rolling) and the pod's own measured steering speed (the pod is
+        // swinging, contact patch moving). Applied after kS so the feed-forward scales too: a
+        // rolling pod has no stiction to break.
+        if (TURN_GAIN_SCHEDULING && Math.abs(errorRad) < SCHED_ERR_GATE_RAD) {
+            double aDrive = Math.min(1.0, Math.abs(drivePower) / SCHED_RAMP_DRIVE);
+            double aVel = MathFunctions.clamp(
+                    (Math.abs(lastMeasuredVelocityRad) - SCHED_VEL_START_RAD_S)
+                            / (SCHED_VEL_FULL_RAD_S - SCHED_VEL_START_RAD_S), 0.0, 1.0);
+            double a = Math.max(aDrive, aVel);
+            raw *= 1.0 - a * (1.0 - SCHED_FLOOR);
+        }
+
+        double turnPower = MathFunctions.clamp(raw, -1.0, 1.0);
+
+        // RUCKUS PATCH: discrete pulses for the final approach. See setPulsedApproach.
+        // Gated on drive power: pulses own the approach-to-rest, the scheduled PD owns rolling.
+        // A pulse-coast cycle corrects at most ~5-10 deg/s, slower than an arcing demand
+        // rotates, so with pulses active at speed every pod lagged to the band edge and rode
+        // it - median tracking error 8-14 deg through a recorded driving session's turns,
+        // worst on the stiff pod. Straight lines and parking never showed it (their demand
+        // holds still); arcs need the continuous loop.
+        lastMovePulsed = false;
+        if (pulsedApproach && Math.abs(drivePower) < PULSE_DRIVE_GATE
+                && Math.abs(errorRad) < pulseBandRad) {
+            lastMovePulsed = true;
+            if (nowNano < pulseEndNano) {
+                turnPower = pulseSign * pulseFirePower;
+            } else if (nowNano < pulseEndNano + (long) (pulseCoastSeconds * 1.0e9)) {
+                // Mandatory coast. The velocity gate alone is not enough: the hub's analog
+                // registers update more slowly than the control loop, so a stale reading reads as
+                // zero velocity while the pod is still moving, and pulses stack into an overshoot.
+                turnPower = 0;
+            } else if (Math.abs(errorRad) > pulseToleranceRad
+                    && Math.abs(lastMeasuredVelocityRad) < pulseStationaryRadPerSec) {
+                double sign = errorRad >= 0 ? 1.0 : -1.0;
+                // Progress must beat an absolute floor as well as a fraction: near the
+                // tolerance, 25% of a small error is inside encoder noise, and a noise dip
+                // must not reset a ladder that is still climbing toward breakaway.
+                double progressNeeded = Math.max(
+                        (1.0 - PULSE_PROGRESS_FRACTION) * pulseLastAbsErr,
+                        PULSE_PROGRESS_MIN_RAD);
+                boolean stalled = sign == pulseSign && !Double.isNaN(pulseLastAbsErr)
+                        && Math.abs(errorRad) > pulseLastAbsErr - progressNeeded;
+                pulseFirePower = stalled
+                        ? Math.min(PULSE_MAX_POWER, pulseFirePower * PULSE_ESCALATE)
+                        : pulsePower;
+                pulseSign = sign;
+                pulseLastAbsErr = Math.abs(errorRad);
+                pulseEndNano = nowNano + (long) (pulseSeconds * 1.0e9);
+                turnPower = pulseSign * pulseFirePower;
+            } else {
+                // Inside tolerance, or still coasting from the last pulse. Let it stop.
+                turnPower = 0;
+                if (Math.abs(errorRad) <= pulseToleranceRad) {
+                    pulseLastAbsErr = Double.NaN; // converged: next episode starts at base power
+                }
+            }
+        } else if (Math.abs(lastMeasuredVelocityRad) > pulseStationaryRadPerSec) {
+            // Stall history goes stale only when the pod actually moves. Resetting on a mere
+            // band exit let border chatter (a stalled pod sitting at the band edge, PD pushing
+            // it fractionally in and out at loop rate) wipe the ladder every loop, so
+            // escalation never reached breakaway - the exact stall it exists to break.
+            pulseLastAbsErr = Double.NaN;
+        }
+
+        // RUCKUS PATCH: instrumentation only, no control effect.
+        lastErrorRad = errorRad;
+
+        // RUCKUS PATCH: slew-limit the turn output. The corruption loop documented on
+        // getRawAngleRad is fed by the SIZE of each actuation step - a fake 25 degree error
+        // used to slam the servo from -0.45 to +0.45 in one write, and that slam is what
+        // disturbs the next reading. Ramping the output caps the disturbance and breaks the
+        // loop's gain without costing steady-state authority. Released (ignoreAngleChanges)
+        // writes stay instant - letting go must never be rate-limited.
+        if (turnSlewPerUpdate > 0 && !ignoreAngleChanges) {
+            turnPower = MathFunctions.clamp(turnPower,
+                    lastTurnPower - turnSlewPerUpdate, lastTurnPower + turnSlewPerUpdate);
+        }
 
         // please don't change the next 5 lines took like 5 hours to figure ts out
         if (ignoreAngleChanges) {
@@ -251,9 +509,31 @@ public class CoaxialPod implements SwervePod {
     }
 
     /**
-     * Returns the raw encoder angle in radians, in [0, 2pi].
+     * RUCKUS PATCH: median filter master switch. OFF - measured 2026-08-14, the one sample
+     * of lag it adds makes the rolling-plant oscillation WORSE (wheel p95 span tripled), the
+     * same way every lag-adding measure did. Kept for reference, not for use.
+     */
+    private static final boolean RAW_MEDIAN_FILTER = false;
+
+    /** RUCKUS PATCH: median-of-3 state. See {@link #getRawAngleRad}. */
+    private double medA = Double.NaN;
+    private double medB = Double.NaN;
+    private double medLastPushed = Double.NaN;
+
+    /**
+     * Returns the raw encoder angle in radians, in [0, 2pi], median-of-3 filtered.
      *
-     * @return raw encoder angle in radians
+     * <p>RUCKUS PATCH: measured 2026-08-14, the Axon's analog output corrupts when its own
+     * servo motor is drawing current - with the servos silenced the encoders read a 0.1-0.4
+     * degree band while driving, with them active 20-33% of samples implied impossible pod
+     * rates. Each fake error makes the loop act, the act corrupts the next reading, and the
+     * result is a self-sustaining 3-4 Hz, 25-degree oscillation that no gain could touch. A
+     * median of the last three distinct readings deletes isolated fakes outright and costs one
+     * sample of lag on real motion. Wrap-aware: the median is taken after unwrapping the
+     * candidates around the newest reading. Same-loop repeats (bulk-cached, identical) do not
+     * advance the window.
+     *
+     * @return filtered raw encoder angle in radians
      */
     public double getRawAngleRad() {
         double v = turnEncoder.getVoltage();
@@ -262,7 +542,26 @@ public class CoaxialPod implements SwervePod {
             return 0;
         double normalized = (v - analogMinVoltage) / range;
         normalized = MathFunctions.clamp(normalized, 0, 1);
-        return normalized * (2.0 * Math.PI);
+        double raw = normalized * (2.0 * Math.PI);
+
+        if (!RAW_MEDIAN_FILTER) {
+            return raw;
+        }
+        if (raw != medLastPushed) {
+            medA = medB;
+            medB = medLastPushed;
+            medLastPushed = raw;
+        }
+        if (Double.isNaN(medA) || Double.isNaN(medB)) {
+            return raw;
+        }
+        // Unwrap the two older samples around the newest, take the middle value.
+        double b = raw + MathFunctions.normalizeAngleSigned(medB - raw);
+        double a = raw + MathFunctions.normalizeAngleSigned(medA - raw);
+        double lo = Math.min(raw, Math.min(a, b));
+        double hi = Math.max(raw, Math.max(a, b));
+        double mid = raw + a + b - lo - hi;
+        return MathFunctions.normalizeAngle(mid);
     }
 
     /**
@@ -273,6 +572,185 @@ public class CoaxialPod implements SwervePod {
     public double getOffsetAngleRad() {
         double rad = getRawAngleRad() - angleOffsetRad;
         return MathFunctions.normalizeAngle(rad);
+    }
+
+    /**
+     * RUCKUS PATCH: a continuous replacement for the sign-only {@code kF} relay.
+     *
+     * <p>{@code kF} enters {@link PIDFController} as {@code F * feedForwardInput}, and this class
+     * feeds it {@code getTurnDirection(...)}, which is exactly +1 or -1. That makes kF a relay, not
+     * a feed-forward: constant magnitude, switching sign at the target. Measured on this
+     * drivetrain, a kF large enough to break stiction (0.035, matching the measured breakaway of
+     * 0.025-0.050) produced a mean of 15.8 error sign changes per step and a 42.5 degree
+     * post-settle peak-to-peak, while a kF small enough to be stable (0.005) was 5-10x below
+     * breakaway and left the pod parked 3-6 degrees short.
+     *
+     * <p>This term is {@code power * tanh(error / band)}: the same authority far from the target,
+     * tapering smoothly through zero so there is no switching discontinuity to limit-cycle on.
+     * Set {@code power} to the measured breakaway and {@code band} to roughly the settling
+     * tolerance you want.
+     *
+     * <p>A no-op at {@code power = 0}, which is the default and every stock configuration.
+     *
+     * @param power peak static-friction output, in the same units as the PIDF output
+     * @param bandRadians error at which the term reaches tanh(1) = 76% of {@code power}
+     */
+    public void setStaticFriction(double power, double bandRadians) {
+        this.staticFrictionPower = power;
+        this.staticFrictionBandRad = bandRadians;
+    }
+
+    /**
+     * RUCKUS PATCH: close the last few degrees with discrete pulses instead of a continuous loop.
+     *
+     * <p>The pod has no creep regime. Static friction breaks to kinetic and it goes from stopped to
+     * tens of degrees per second with nothing in between, so any continuous controller with enough
+     * authority to correct a small error commits to several degrees of travel before feedback -
+     * 39 ms of transport delay plus a 42 ms velocity time constant - can act on it. That is a limit
+     * cycle by construction, and it is why raising static-friction authority always bought ringing.
+     *
+     * <p>A pulse sidesteps it by being open loop and bounded. One pulse of {@code power} for
+     * {@code seconds} injects a known impulse - travel is roughly the terminal speed at that power
+     * times the pulse length - then the pod coasts to a stop and is measured again. The lag never
+     * enters the stability question because nothing is being stabilised; the loop is a sequence of
+     * measured, bounded steps.
+     *
+     * <p>Outside {@code bandRadians} the normal PD loop runs untouched. Inside it, a pulse fires
+     * only when the error exceeds {@code toleranceRadians} <em>and</em> the pod has come to rest,
+     * so pulses never stack on top of one another.
+     *
+     * <p>Pulse length wants to be short, and the servo PWM frame quantises it - a pulse shorter
+     * than one frame may not be delivered at all. At the SDK default 20 ms frame the shortest
+     * usable pulse is 20 ms; halving the frame to 10 ms halves the quantum, which is the real
+     * argument for changing it.
+     *
+     * <p>A no-op at {@code enabled = false}, which is the default.
+     */
+    public void setPulsedApproach(boolean enabled, double bandRadians, double toleranceRadians,
+            double power, double seconds, double stationaryRadPerSec, double coastSeconds) {
+        this.pulsedApproach = enabled;
+        this.pulseBandRad = bandRadians;
+        this.pulseToleranceRad = toleranceRadians;
+        this.pulsePower = power;
+        this.pulseSeconds = seconds;
+        this.pulseStationaryRadPerSec = stationaryRadPerSec;
+        this.pulseCoastSeconds = coastSeconds;
+    }
+
+    /** RUCKUS PATCH: true when the last {@link #move} call was in pulsed mode. Instrumentation. */
+    public boolean wasLastMovePulsed() {
+        return lastMovePulsed;
+    }
+
+    /**
+     * RUCKUS PATCH: take the derivative from the measurement rather than from the error.
+     *
+     * <p>Measured on this drivetrain, the pod's actuation lag is 106 ms equivalent - 41 ms of
+     * transport plus a 64 ms velocity time constant - against a loop period of 8 ms. Lead
+     * compensation is the only thing that answers a plant lag that large, so the D term has to be
+     * usable. It was not: differencing the error means a 90 degree setpoint step produces
+     * {@code kD * 1.571 rad / 0.008 s}, which saturates the output clamp at kD as small as 0.010,
+     * and the 180 degree flip does the same thing with the opposite sign.
+     *
+     * <p>A no-op at {@code false}, which is the default and every stock configuration.
+     */
+    public void setDerivativeOnMeasurement(boolean enabled) {
+        this.derivativeOnMeasurement = enabled;
+    }
+
+    public boolean isDerivativeOnMeasurement() {
+        return derivativeOnMeasurement;
+    }
+
+    /** RUCKUS PATCH: last measured pod angular velocity, rad/s. Instrumentation. */
+    public double getMeasuredVelocityRad() {
+        return lastMeasuredVelocityRad;
+    }
+
+    /**
+     * RUCKUS PATCH: configures the turn PID's integral behaviour.
+     *
+     * <p>Exposed because the controller is created inside this class, so a caller otherwise has no
+     * way to reach it. See {@link PIDFController#setIntegralLimit},
+     * {@link PIDFController#setIntegralBand} and
+     * {@link PIDFController#setIntegralResetThreshold}. All three are no-ops while I is 0.
+     *
+     * @param limit largest absolute contribution the integral may make to the output
+     * @param bandRadians only accumulate while |error| is inside this band
+     * @param resetThresholdRadians error a sign change must exceed to clear the accumulator
+     */
+    public void setTurnIntegralSettings(double limit, double bandRadians,
+            double resetThresholdRadians) {
+        turnPID.setIntegralLimit(limit);
+        turnPID.setIntegralBand(bandRadians);
+        turnPID.setIntegralResetThreshold(resetThresholdRadians);
+    }
+
+    public double getStaticFrictionPower() {
+        return staticFrictionPower;
+    }
+
+    public double getStaticFrictionBandRad() {
+        return staticFrictionBandRad;
+    }
+
+    /**
+     * RUCKUS PATCH: the turn power most recently <em>written</em> to the servo.
+     *
+     * <p>Not the same as the controller's output: {@link #setServoCachingThreshold} suppresses
+     * writes smaller than its threshold, so this is what the hardware is actually holding. Reading
+     * it from the {@code CRServo} object instead would go through that object's own direction flag,
+     * which a diagnostic tool may have set differently.
+     *
+     * @return last written turn servo power, in [-1, 1]
+     */
+    public double getLastTurnPower() {
+        return lastTurnPower;
+    }
+
+    /**
+     * RUCKUS PATCH: the drive power most recently written to the motor, same caching caveat as
+     * {@link #getLastTurnPower}. Exists so diagnostics can display it without paying a live
+     * {@code DcMotorEx.getPower()} Lynx transaction.
+     *
+     * @return last written drive motor power, in [-1, 1]
+     */
+    public double getLastDrivePower() {
+        return lastDrivePower;
+    }
+
+    /**
+     * RUCKUS PATCH: signed pod heading error from the last {@link #move} call, in radians.
+     *
+     * <p>Measured after the 180 degree flip is resolved, so it is the error the PID actually acted
+     * on, already wrapped to [-pi/2, pi/2]. Scoring a step response against this avoids having to
+     * reproduce the wrap and flip logic outside the pod.
+     *
+     * @return signed error in radians
+     */
+    public double getLastErrorRad() {
+        return lastErrorRad;
+    }
+
+    /**
+     * RUCKUS PATCH: whether the last {@link #move} call took the 180 degree flip.
+     *
+     * @return true if the target was inverted and drive power negated
+     */
+    public boolean wasLastMoveFlipped() {
+        return lastMoveFlipped;
+    }
+
+    /**
+     * RUCKUS PATCH: the wheel-space theta passed to the last {@link #move} call, in radians.
+     *
+     * <p>The demand as the mixer produced it: pre-flip, pre-encoder-frame, and taken from inside
+     * the pod so no host-side reimplementation can drift away from it. NaN until the first move.
+     *
+     * @return last commanded wheel heading in radians, or NaN
+     */
+    public double getLastTargetWheelRad() {
+        return lastTargetWheelRad;
     }
 
     /**

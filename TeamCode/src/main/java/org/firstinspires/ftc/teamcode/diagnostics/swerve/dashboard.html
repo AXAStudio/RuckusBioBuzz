@@ -142,7 +142,7 @@
   <span class="stat">battery <b id="volt">-</b> V</span>
   <span class="stat">loop <b id="hz">-</b> Hz</span>
   <span class="spacer"></span>
-  <button class="stop" onclick="cmd('stop')">STOP ALL</button>
+  <button class="stop" onclick="stopEverything()">STOP ALL</button>
 </header>
 
 <main>
@@ -198,6 +198,8 @@
     <div class="row" style="margin-bottom:10px">
       <span class="stat"><span id="padDot" class="dot off"></span><b id="padName">no gamepad seen</b></span>
       <span class="spacer"></span>
+      <label class="inline" title="Stick up = the way the robot faced when this was ticked. Re-tick to re-capture.">
+        <input type="checkbox" id="focBox" onchange="focChanged()"> field oriented</label>
       <button id="padBtn" class="primary" onclick="togglePadDrive()">Drive with gamepad</button>
     </div>
     <div class="hint" style="margin-bottom:10px">
@@ -311,17 +313,46 @@
         <div class="title">Tune the turn PIDF</div>
         <div class="desc">
           Commands a step on the selected pod using the real <code>CoaxialPod</code> control path, so
-          whatever you tune here transfers directly to competition code. Raise <code>kF</code> until
-          the pod just overcomes stiction, then <code>kP</code> for speed, then <code>kD</code> to
-          damp overshoot.
+          whatever you tune here transfers directly to competition code. Set <code>kS</code> to the
+          measured breakaway first, then <code>kP</code> for speed, then <code>kD</code> to damp
+          overshoot. <b>Do not tune <code>kF</code></b> - <code>CoaxialPod</code> feeds the PIDF a
+          sign, not an error, so the F term is a &plusmn;kF relay rather than a feed-forward. It
+          ships at 0 and <code>kS</code> replaces it.
         </div>
         <div class="row">
           <label class="inline">kP <input type="number" id="kp" step="0.01"></label>
           <label class="inline">kI <input type="number" id="ki" step="0.005"></label>
           <label class="inline">kD <input type="number" id="kd" step="0.001"></label>
           <label class="inline">kF <input type="number" id="kf" step="0.001"></label>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <label class="inline">kS <input type="number" id="ks" step="0.005"></label>
+          <label class="inline">kS band&deg; <input type="number" id="ksband" step="0.5"></label>
+          <label class="inline">cache <input type="number" id="cache" step="0.005"></label>
+          <label class="inline" title="Derivative on measurement instead of on error">
+            <input type="checkbox" id="dom"> D on measurement</label>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <label class="inline">kI limit <input type="number" id="kilimit" step="0.01"></label>
+          <label class="inline">kI band&deg; <input type="number" id="kiband" step="0.5"></label>
+          <label class="inline">kI reset&deg; <input type="number" id="kireset" step="0.5"></label>
+        </div>
+        <div class="row" style="margin-top:6px">
+          <label class="inline" title="Shelved - see tools/swervetune/POSITIONAL_SHELVED.md">
+            <input type="checkbox" id="pulsed"> pulsed</label>
+          <label class="inline">band&deg; <input type="number" id="pband" step="0.5"></label>
+          <label class="inline">tol&deg; <input type="number" id="ptol" step="0.1"></label>
+          <label class="inline">power <input type="number" id="ppow" step="0.005"></label>
+          <label class="inline">on ms <input type="number" id="pms" step="1"></label>
+          <label class="inline">coast ms <input type="number" id="pcoast" step="1"></label>
+        </div>
+        <div class="row" style="margin-top:8px">
           <button onclick="applyPidf(false)">Apply to pod</button>
           <button onclick="applyPidf(true)">Apply to all</button>
+          <span class="hint">
+            Values follow the selected pod and stop updating once you start typing.
+            The pulsed row is a shelved experiment and is a no-op while unchecked.
+          </span>
         </div>
         <div class="row" style="margin-top:8px">
           <button class="primary" onclick="cmd('pidStep', {deg: 0})">Step 0&deg;</button>
@@ -362,11 +393,106 @@
           Hold a button to drive, release to stop.
         </div>
         <div class="row" id="driveButtons"></div>
+        <div class="row" style="margin-top:8px">
+          <button id="hdgPidfBtn" onclick="cmd('setHeadingHold')">heading PIDF: …</button>
+          <span class="hint">
+            ON = right stick steers a heading setpoint (full stick = the robot's true max turn
+            rate). On release it coasts to a stop, snaps the setpoint to the measured heading,
+            and the X-lock takes the hold &mdash; the PIDF never fights the X. OFF = raw rotation.
+          </span>
+        </div>
+        <div class="row" style="margin-top:8px">
+          <button id="xlockBtn" onclick="cmd('setXLock')">zero input: …</button>
+          <span class="hint">
+            X-lock matches competition. Hold-heading is easier to read while tuning, because
+            X-lock yanks all four pods to the X on any momentary loss of input.
+          </span>
+        </div>
         <div class="hint" style="margin-top:6px">
           If a wheel drives backward while the others drive forward, flip that pod's
           <code>drive</code> flag on its card below.
         </div>
       </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Field</h2>
+    <div class="row" style="margin-bottom:8px">
+      <span class="stat">x <b id="poseX">--</b> in</span>
+      <span class="stat">y <b id="poseY">--</b> in</span>
+      <span class="stat">v <b id="poseV">--</b> in/s</span>
+      <span class="stat" id="boxStat">box: none</span>
+      <span class="spacer"></span>
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <button onclick="cmd('boxMark', {corner: 0})">Mark corner A</button>
+      <button onclick="cmd('boxMark', {corner: 1})">Mark corner B</button>
+      <button onclick="cmd('boxClear')">Clear box</button>
+      <button onclick="cmd('resetImu')">Reset pose</button>
+      <button onclick="fieldTrail = []">Clear trail</button>
+    </div>
+    <div class="hint" style="margin-bottom:8px">
+      Drive to one corner of the safe area, mark A; drive to the opposite corner, mark B. The
+      box saves to the hub and becomes a <b>hard limit</b>: any drive command that would carry
+      the robot out is clamped at the wall (edges flash red when clamping). Resetting the pose
+      clears the box &mdash; it lives in the pose frame.
+    </div>
+    <canvas id="fieldCanvas" width="360" height="360"
+            style="background:#0c1015;border:1px solid #2b3542;border-radius:6px;display:block;
+                   width:100%;max-width:480px"></canvas>
+  </section>
+
+  <section>
+    <h2>Robot heading PIDF</h2>
+    <div class="row" style="margin-bottom:10px">
+      <span class="stat">heading <b id="hdgNow">--</b>&deg;</span>
+      <span class="stat">target <b id="hdgTgt">--</b>&deg;</span>
+      <span class="stat">loop <b id="hdgLoop">--</b></span>
+      <span class="spacer"></span>
+      <span class="hint" id="hdgSrc">Pinpoint IMU</span>
+    </div>
+    <div class="hint" style="margin-bottom:10px">
+      Captures the current heading as target, rotates the robot away from it <b>with the controller
+      off</b>, then closes the loop and records the recovery. Starting from a genuine offset is what
+      exposes the gain &mdash; displacing under control only shows the controller chasing itself.
+      Needs clear space to spin.
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <label class="inline">kP <input type="number" id="hkp" step="0.05"></label>
+      <label class="inline">kD <input type="number" id="hkd" step="0.001"></label>
+      <label class="inline">kF <input type="number" id="hkf" step="0.005"></label>
+      <button onclick="applyHeadingPidf()">Apply</button>
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <button id="hdgHoldBtn" onclick="cmd('setHeadingHold')">right stick: …</button>
+      <button class="primary" onclick="cmd('headingStep', {deg: 90})">Displace &#8630; then correct</button>
+      <button class="primary" onclick="cmd('headingStep', {deg: -90})">Displace &#8631; then correct</button>
+      <button class="stop" onclick="stopAllTests()">Stop</button>
+    </div>
+
+    <div class="row" style="margin-bottom:8px">
+      <span class="hint" style="min-width:74px">turn by</span>
+      <button class="small" onclick="cmd('headingGoto', {deg: -135})">-135&deg;</button>
+      <button class="small" onclick="cmd('headingGoto', {deg: -90})">-90&deg;</button>
+      <button class="small" onclick="cmd('headingGoto', {deg: -45})">-45&deg;</button>
+      <button class="small" onclick="cmd('headingGoto', {deg: -15})">-15&deg;</button>
+      <button class="small" onclick="cmd('headingGoto', {deg: 15})">+15&deg;</button>
+      <button class="small" onclick="cmd('headingGoto', {deg: 45})">+45&deg;</button>
+      <button class="small" onclick="cmd('headingGoto', {deg: 90})">+90&deg;</button>
+      <button class="small" onclick="cmd('headingGoto', {deg: 135})">+135&deg;</button>
+      <button class="small" onclick="cmd('headingGoto', {deg: 180})">180&deg;</button>
+      <span class="hint">Turns by that much and holds. Small and large moves stress the loop
+        differently &mdash; big ones saturate the output and arrive carrying momentum.</span>
+    </div>
+
+    <div class="row">
+      <span class="hint" style="min-width:74px">circle test</span>
+      <button id="circleBtn" onclick="toggleCircle()">Start circle</button>
+      <label class="inline">power <input type="number" id="circAmp" value="0.22" step="0.02" style="width:70px"></label>
+      <label class="inline">period s <input type="number" id="circPeriod" value="3.0" step="0.5" style="width:70px"></label>
+      <span class="hint">Drives a circle while holding heading &mdash; needs heading hold on and
+        clear space. Watch the graph stay flat.</span>
     </div>
   </section>
 
@@ -410,13 +536,61 @@ function cmd(action, args) {
   fetch(q).catch(function () { /* transient WiFi drop; the poller reports connection state */ });
 }
 
-function drive(f, s, t) { cmd('drive', {f: f, s: s, t: t}); }
+// Drive commands go through a single-in-flight sender rather than fire-and-forget fetches.
+// During a WiFi stall the browser otherwise queues every drive fetch and flushes the backlog
+// when the link revives - seconds-old nonzero stick values arriving after the operator let go.
+// Here at most one request is on the wire and only the NEWEST command waits behind it; stale
+// intermediates are simply dropped.
+var driveInFlight = false;
+var drivePending = null;
+
+// Field-oriented toggle. Enabling captures the robot's current heading as "away from the
+// driver", so ticking the box doubles as a re-zero: square the robot up first, then tick.
+// The flag rides on every drive command rather than robot-side state, so bench scripts
+// (which never send it) keep their robot-frame semantics no matter what the checkbox says.
+function focChanged() {
+  if (document.getElementById('focBox').checked) cmd('focRef');
+}
+
+function focFlag() {
+  var b = document.getElementById('focBox');
+  return b && b.checked ? 1 : 0;
+}
+
+function drive(f, s, t) {
+  drivePending = {f: f, s: s, t: t, foc: focFlag()};
+  pumpDrive();
+}
+
+function pumpDrive() {
+  if (driveInFlight || drivePending === null) return;
+  var p = drivePending;
+  drivePending = null;
+  driveInFlight = true;
+  var done = function () { driveInFlight = false; pumpDrive(); };
+  fetch('/swerve/cmd?action=drive&pod=' + selected + '&f=' + p.f + '&s=' + p.s + '&t=' + p.t
+      + '&foc=' + p.foc)
+      .then(done, done);
+}
+
+// One stop to rule out every sender: the pad loop, the hold-buttons and the circle test all
+// re-send within 60-150 ms, so a bare cmd('stop') used to be overridden almost immediately -
+// STOP ALL visibly did not stop the robot while gamepad driving was on.
+function stopEverything() {
+  if (typeof padDriving !== 'undefined' && padDriving) setPadDriving(false);
+  if (typeof circleTimer !== 'undefined' && circleTimer !== null) toggleCircle();
+  driveStop();
+  cmd('stop');
+}
 
 // The robot runs a 400 ms drive watchdog, so a held button must keep re-sending. This also means
 // that if this page dies mid-drive, the robot stops on its own.
 var driveTimer = null;
 
 function driveStart(f, s, t) {
+  // Only one sender may own the drive stream. With the pad loop also sending every 60 ms, a
+  // held button and the gamepad used to interleave conflicting commands many times per second.
+  if (typeof padDriving !== 'undefined' && padDriving) setPadDriving(false);
   driveStop();
   drive(f, s, t);
   driveTimer = setInterval(function () { drive(f, s, t); }, 150);
@@ -454,14 +628,46 @@ function driveStop() {
 window.addEventListener('mouseup', driveStop);
 window.addEventListener('blur', driveStop);
 
+// Gamepad driving must stop on blur too. A backgrounded tab keeps its intervals (throttled to
+// ~1 Hz) while the Gamepad API freezes at the last-reported axes, so without this the page
+// re-sends stale stick values once a second and the robot lurches between watchdog trips
+// instead of stopping. setPadDriving(false) also sends one final zero-drive command.
+window.addEventListener('blur', function () {
+  if (padDriving) setPadDriving(false);
+});
+document.addEventListener('visibilitychange', function () {
+  if (document.hidden && padDriving) setPadDriving(false);
+});
+
+// Every tunable CoaxialPod exposes, so a manual session never has to drop to the Python tool
+// and never has to guess which coefficient the robot is actually holding. The backend already
+// accepted all of these; only the UI was short.
+var PIDF_NUM = ['kp', 'ki', 'kd', 'kf', 'ks', 'ksband', 'cache', 'slew',
+                'kilimit', 'kiband', 'kireset',
+                'pband', 'ptol', 'ppow', 'pms', 'pcoast'];
+var PIDF_BOOL = ['dom', 'pulsed'];
+
+// Input ids match the robot-side field names in the pod state, so no id-to-key mapping is needed.
+
+var pidfHoldUntil = 0;
+
 function applyPidf(all) {
-  cmd('setPidf', {
-    kp: document.getElementById('kp').value,
-    ki: document.getElementById('ki').value,
-    kd: document.getElementById('kd').value,
-    kf: document.getElementById('kf').value,
-    scope: all ? 'all' : 'one'
+  // Hold off live mirroring briefly: the next poll or two still carries the PRE-apply gains,
+  // and letting them rewrite the boxes made a fast follow-up "Apply to all" propagate stale
+  // values to every pod.
+  pidfHoldUntil = Date.now() + 700;
+  var p = {scope: all ? 'all' : 'one'};
+  PIDF_NUM.forEach(function (n) {
+    var e = document.getElementById(n);
+    // Skip empty boxes. doubleArg already falls back on an unparseable value, so this is belt and
+    // braces rather than a fix - but it keeps "left blank" and "typed a number" visibly distinct.
+    if (e && e.value !== '') p[n] = e.value;
   });
+  PIDF_BOOL.forEach(function (n) {
+    var e = document.getElementById(n);
+    if (e) p[n] = e.checked ? 'true' : 'false';
+  });
+  cmd('setPidf', p);
   pidfDirty = false;
 }
 
@@ -487,9 +693,14 @@ function copyExport() {
   try { document.execCommand('copy'); } catch (e) { /* user can copy manually */ }
 }
 
-// Mark the PIDF inputs dirty so live polling does not overwrite what is being typed.
-['kp', 'ki', 'kd', 'kf'].forEach(function (id) {
-  document.getElementById(id).addEventListener('input', function () { pidfDirty = true; });
+// Mark the PIDF inputs dirty so live polling does not overwrite what is being typed. Checkboxes
+// count too - a toggle that got reverted by the next poll before Apply was pressed would look
+// like the robot rejecting the change.
+PIDF_NUM.concat(PIDF_BOOL).forEach(function (id) {
+  var e = document.getElementById(id);
+  if (!e) return;
+  e.addEventListener('input', function () { pidfDirty = true; });
+  e.addEventListener('change', function () { pidfDirty = true; });
 });
 
 // ---------------------------------------------------------------- gamepad
@@ -525,7 +736,9 @@ function firstPad() {
 }
 
 function padAxis(v) {
-  return Math.abs(v) < PAD_DEADBAND ? 0 : v;
+  var a = Math.abs(v);
+  if (a < PAD_DEADBAND) return 0;
+  return (v < 0 ? -1 : 1) * (a - PAD_DEADBAND) / (1 - PAD_DEADBAND);
 }
 
 function pollPad() {
@@ -547,8 +760,19 @@ function pollPad() {
   name.textContent = p.id.length > 44 ? p.id.slice(0, 44) + '…' : p.id;
 
   // Standard mapping: 0 = left X, 1 = left Y, 2 = right X.
-  var forward = padAxis(-(p.axes[1] || 0));
-  var strafe = padAxis(-(p.axes[0] || 0));
+  //
+  // The left stick is deadbanded as a VECTOR. Deadbanding each axis separately does not shorten
+  // a shallow-diagonal command, it rotates it - the smaller axis is zeroed and the direction
+  // snaps to the nearest cardinal, which every pod's atan2 then follows. Measured 2026-08-16 on
+  // mydrive-001: 35.5% of driving samples had exactly one axis zeroed, crossing in and out of
+  // that state 1.44 times a second. Rotation stays a scalar deadband: it is one-dimensional, so
+  // there is no direction to distort.
+  var rawF = -(p.axes[1] || 0);
+  var rawS = -(p.axes[0] || 0);
+  var mag = Math.sqrt(rawF * rawF + rawS * rawS);
+  var k = mag > PAD_DEADBAND ? (mag - PAD_DEADBAND) / (1 - PAD_DEADBAND) / mag : 0;
+  var forward = rawF * k;
+  var strafe = rawS * k;
   var turn = padAxis(-(p.axes[2] || 0));
 
   rows.innerHTML =
@@ -806,6 +1030,76 @@ function setGain(id, value) {
   if (document.activeElement !== e && e.value !== text) e.value = text;
 }
 
+var hdgDirty = false;
+['hkp', 'hkd', 'hkf'].forEach(function (id) {
+  var e = document.getElementById(id);
+  if (e) e.addEventListener('input', function () { hdgDirty = true; });
+});
+
+var circleTimer = null;
+var circleStart = 0;
+
+function toggleCircle() {
+  if (circleTimer !== null) {
+    clearInterval(circleTimer);
+    circleTimer = null;
+    drive(0, 0, 0);
+  } else {
+    // The circle test owns the drive stream while it runs; a live pad loop or a held button
+    // would interleave conflicting commands with it at 60-150 ms.
+    if (padDriving) setPadDriving(false);
+    driveStop();
+    var amp = parseFloat(document.getElementById('circAmp').value) || 0.22;
+    var period = Math.max(0.5, parseFloat(document.getElementById('circPeriod').value) || 3.0);
+    circleStart = Date.now();
+    // Re-sent well inside the robot's 400 ms drive watchdog, so closing this tab stops the robot.
+    circleTimer = setInterval(function () {
+      var th = 2 * Math.PI * ((Date.now() - circleStart) / 1000) / period;
+      cmd('drive', {f: (amp * Math.cos(th)).toFixed(3), s: (amp * Math.sin(th)).toFixed(3), t: 0});
+    }, 90);
+  }
+  var b = document.getElementById('circleBtn');
+  b.textContent = circleTimer !== null ? 'Stop circle' : 'Start circle';
+  b.className = circleTimer !== null ? 'stop' : '';
+}
+
+function stopAllTests() {
+  if (circleTimer !== null) toggleCircle();
+  if (padDriving) setPadDriving(false);
+  driveStop();
+  cmd('stop');
+}
+
+function applyHeadingPidf() {
+  cmd('setHeadingPidf', {
+    hkp: document.getElementById('hkp').value,
+    hkd: document.getElementById('hkd').value,
+    hkf: document.getElementById('hkf').value
+  });
+  hdgDirty = false;
+}
+
+function renderHeading(h) {
+  if (!h) return;
+  document.getElementById('hdgNow').textContent = h.ok ? fmt(h.deg, 1) : '--';
+  document.getElementById('hdgTgt').textContent = fmt(h.targetDeg, 1);
+  document.getElementById('hdgLoop').textContent = h.closedLoop ? 'closed' : 'open';
+
+  var hb = document.getElementById('hdgHoldBtn');
+  if (hb) {
+    hb.textContent = h.hold ? 'right stick: heading setpoint' : 'right stick: direct rotation';
+    hb.className = h.hold ? 'primary' : '';
+  }
+  document.getElementById('hdgSrc').textContent = h.ok
+    ? 'Pinpoint IMU (works with no odometry pods)'
+    : 'no heading - check the pinpoint device';
+  if (!hdgDirty) {
+    document.getElementById('hkp').value = Number(h.kp).toFixed(4);
+    document.getElementById('hkd').value = Number(h.kd).toFixed(4);
+    document.getElementById('hkf').value = Number(h.kf).toFixed(4);
+  }
+}
+
 function applyPodPidf(i) {
   var read = function (n) {
     var e = el(podFieldId(i, n));
@@ -831,6 +1125,8 @@ function renderPods(pods) {
 function render() {
   if (!state) return;
 
+  renderField();
+
   var live = !!state.live;
 
   // The OpMode owns the selection, so the gamepad and the dashboard can never disagree - except
@@ -848,6 +1144,19 @@ function render() {
   document.getElementById('hz').textContent = fmt(state.loopHz, 0);
   document.getElementById('message').textContent = state.message || '';
 
+  var xb = document.getElementById('xlockBtn');
+  if (xb) {
+    xb.textContent = state.xLock ? 'zero input: X-lock' : 'zero input: hold heading';
+    xb.className = state.xLock ? 'primary' : '';
+  }
+
+  var hb = document.getElementById('hdgPidfBtn');
+  if (hb && state.heading) {
+    hb.textContent = state.heading.hold ? 'heading PIDF: ON' : 'heading PIDF: off';
+    // Red when on: at the current heading gains this is the shake-the-robot setting.
+    hb.className = state.heading.hold ? 'stop' : '';
+  }
+
   var issues = '';
   (state.errors || []).forEach(function (e) { issues += '<div class="issue">' + esc(e) + '</div>'; });
   (state.notes || []).forEach(function (n) { issues += '<div class="note">' + esc(n) + '</div>'; });
@@ -857,11 +1166,17 @@ function render() {
   renderPods(pods);
 
   var cur = pods[selected];
-  if (cur && !pidfDirty) {
-    document.getElementById('kp').value = Number(cur.kp).toFixed(4);
-    document.getElementById('ki').value = Number(cur.ki).toFixed(4);
-    document.getElementById('kd').value = Number(cur.kd).toFixed(4);
-    document.getElementById('kf').value = Number(cur.kf).toFixed(4);
+  if (cur && !pidfDirty && Date.now() > pidfHoldUntil) {
+    PIDF_NUM.forEach(function (n) {
+      var e = document.getElementById(n);
+      // Only mirror fields the robot actually reports. Blanking an input because a key was
+      // missing would read as "this coefficient is unset" when it is simply not published.
+      if (e && cur[n] !== undefined && cur[n] !== null) e.value = Number(cur[n]).toFixed(4);
+    });
+    PIDF_BOOL.forEach(function (n) {
+      var e = document.getElementById(n);
+      if (e && cur[n] !== undefined && cur[n] !== null) e.checked = !!cur[n];
+    });
   }
 
   if (state.export && document.getElementById('export').value !== state.export) {
@@ -869,6 +1184,7 @@ function render() {
   }
 
   renderTune(state.tune);
+  renderHeading(state.heading);
   drawViz(state);
   renderVizTable(state);
   drawTrace(state.trace);
@@ -1266,6 +1582,113 @@ function drawTrace(tr) {
   g.font = '12px sans-serif';
   g.fillText('pod ' + tr.pod + '   ' + tSpan.toFixed(1) + ' s   error '
     + err.toFixed(1) + '°', 46, 14);
+}
+
+// ---------------------------------------------------------------- field view
+//
+// Field-frame picture of where the robot actually is (Pinpoint odometry) inside the saved
+// bounding box. Screen mapping: field +x is up (the robot's forward at the last pose reset),
+// field +y is left - matching the odometry frame so a forward nudge draws upward.
+
+var fieldTrail = [];
+
+function renderField() {
+  var cv = document.getElementById('fieldCanvas');
+  if (!cv || !state) return;
+
+  // Always a square, whatever the layout does: the backing store follows the DISPLAYED width
+  // and the displayed height is pinned to it. Without this, CSS stretching the canvas to the
+  // section width smeared the square buffer across a wide rectangle.
+  var cssW = Math.round(cv.clientWidth) || 360;
+  if (cv.style.height !== cssW + 'px') cv.style.height = cssW + 'px';
+  if (cv.width !== cssW || cv.height !== cssW) { cv.width = cssW; cv.height = cssW; }
+
+  var g = cv.getContext('2d');
+  var W = cv.width, H = cv.height;
+  g.clearRect(0, 0, W, H);
+
+  var pose = state.pose || {};
+  var box = state.box || {};
+
+  document.getElementById('poseX').textContent = pose.ok ? Number(pose.x).toFixed(1) : '--';
+  document.getElementById('poseY').textContent = pose.ok ? Number(pose.y).toFixed(1) : '--';
+  document.getElementById('poseV').textContent = pose.ok
+      ? Math.hypot(pose.vx || 0, pose.vy || 0).toFixed(1) : '--';
+  var bs = document.getElementById('boxStat');
+  if (box.valid) {
+    bs.textContent = 'box: ' + (box.maxX - box.minX).toFixed(0) + ' x '
+        + (box.maxY - box.minY).toFixed(0) + ' in (hard limit armed)';
+  } else if (box.marked0) {
+    bs.textContent = 'box: corner A marked - drive to the opposite corner, mark B';
+  } else {
+    bs.textContent = 'box: none';
+  }
+
+  if (pose.ok) {
+    var last = fieldTrail[fieldTrail.length - 1];
+    if (!last || Math.hypot(pose.x - last[0], pose.y - last[1]) > 0.5) {
+      fieldTrail.push([pose.x, pose.y]);
+      if (fieldTrail.length > 400) fieldTrail.shift();
+    }
+  }
+
+  // View bounds: the box when there is one, else a window around the robot; padded.
+  var bounds = box.valid
+      ? {x0: box.minX, y0: box.minY, x1: box.maxX, y1: box.maxY}
+      : (pose.ok ? {x0: pose.x - 30, y0: pose.y - 30, x1: pose.x + 30, y1: pose.y + 30}
+                 : {x0: -30, y0: -30, x1: 30, y1: 30});
+  var pad = 0.15 * Math.max(bounds.x1 - bounds.x0, bounds.y1 - bounds.y0);
+  var span = Math.max(bounds.x1 - bounds.x0, bounds.y1 - bounds.y0) + 2 * pad;
+  var scale = Math.min(W, H) / span;
+  var cx = (bounds.x0 + bounds.x1) / 2, cy = (bounds.y0 + bounds.y1) / 2;
+
+  // field(x up, y left) -> screen
+  function sx(fy) { return W / 2 - (fy - cy) * scale; }
+  function sy(fx) { return H / 2 - (fx - cx) * scale; }
+
+  // Grid every 12 in.
+  g.strokeStyle = VIZ.line; g.lineWidth = 1; g.beginPath();
+  for (var gx = Math.ceil((cx - span / 2) / 12) * 12; gx <= cx + span / 2; gx += 12) {
+    g.moveTo(0, sy(gx)); g.lineTo(W, sy(gx));
+  }
+  for (var gy = Math.ceil((cy - span / 2) / 12) * 12; gy <= cy + span / 2; gy += 12) {
+    g.moveTo(sx(gy), 0); g.lineTo(sx(gy), H);
+  }
+  g.stroke();
+
+  if (box.valid) {
+    g.strokeStyle = box.clamped ? VIZ.bad : '#2ea043';
+    g.lineWidth = box.clamped ? 3 : 2;
+    g.strokeRect(sx(box.maxY), sy(box.maxX),
+                 (box.maxY - box.minY) * scale, (box.maxX - box.minX) * scale);
+  }
+
+  if (fieldTrail.length > 1) {
+    g.strokeStyle = 'rgba(57,135,229,0.45)'; g.lineWidth = 1.5; g.beginPath();
+    g.moveTo(sx(fieldTrail[0][1]), sy(fieldTrail[0][0]));
+    for (var i = 1; i < fieldTrail.length; i++) {
+      g.lineTo(sx(fieldTrail[i][1]), sy(fieldTrail[i][0]));
+    }
+    g.stroke();
+  }
+
+  if (pose.ok) {
+    var hdg = (state.heading && state.heading.ok) ? state.heading.deg * Math.PI / 180 : 0;
+    var hw = 6.1 * scale, hl = 5.8 * scale;  // half width/length, 12.2 x 11.5 in chassis
+    g.save();
+    g.translate(sx(pose.y), sy(pose.x));
+    g.rotate(-hdg);  // field +x is up on screen; positive heading turns left (CCW)
+    g.strokeStyle = VIZ.ink; g.lineWidth = 2;
+    g.strokeRect(-hw, -hl, 2 * hw, 2 * hl);
+    g.strokeStyle = VIZ.target; g.beginPath();
+    g.moveTo(0, 0); g.lineTo(0, -hl * 1.45); g.stroke();
+    g.fillStyle = VIZ.actual;
+    g.beginPath(); g.arc(0, 0, 3, 0, 2 * Math.PI); g.fill();
+    g.restore();
+  } else {
+    g.fillStyle = VIZ.muted; g.font = '13px sans-serif';
+    g.fillText('no pose from the Pinpoint', 14, 20);
+  }
 }
 
 function poll() {

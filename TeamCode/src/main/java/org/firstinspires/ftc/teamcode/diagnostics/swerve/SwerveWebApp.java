@@ -36,6 +36,7 @@ public class SwerveWebApp {
     private static final String CMD = "/swerve/cmd";
     private static final String CONFIG = "/swerve/config";
     private static final String RESTART = "/swerve/restart";
+    private static final String REC = "/swerve/rec.csv";
 
     /** Delay before exiting, so the HTTP response reaches the browser first. */
     private static final long RESTART_DELAY_MS = 600;
@@ -48,6 +49,7 @@ public class SwerveWebApp {
 
     private static final String MIME_HTML = "text/html";
     private static final String MIME_JSON = "application/json";
+    private static final String MIME_CSV = "text/csv";
 
     /** Cached page body; the asset never changes at runtime. */
     private static volatile String cachedPage;
@@ -120,12 +122,27 @@ public class SwerveWebApp {
                 }
             };
 
+            // Rendered here rather than in the OpMode so a 3000-row CSV build never lands inside
+            // the control loop. Safe because the recorder is only read once it has stopped writing.
+            WebHandler rec = new WebHandler() {
+                @Override
+                public NanoHTTPD.Response getResponse(NanoHTTPD.IHTTPSession session) {
+                    PodRecorder recorder = SwerveBench.INSTANCE.recorder();
+                    String body = recorder == null
+                            ? "# no recorder; run the Swerve Bring-Up OpMode\n"
+                            : recorder.toCsv();
+                    return noCache(NanoHTTPD.newFixedLengthResponse(
+                            NanoHTTPD.Response.Status.OK, MIME_CSV, body));
+                }
+            };
+
             manager.register(ROOT, page);
             manager.register(ROOT + "/", page);
             manager.register(STATE, state);
             manager.register(CMD, cmd);
             manager.register(CONFIG, config);
             manager.register(RESTART, restart);
+            manager.register(REC, rec);
 
             RobotLog.ii(TAG, "Swerve bring-up dashboard registered at %s", ROOT);
         } catch (RuntimeException e) {
@@ -180,10 +197,20 @@ public class SwerveWebApp {
         boolean ok;
         String message;
 
-        if ("1".equals(p.get("builtin"))) {
-            SwerveConfigWriter.Result result = SwerveConfigWriter.activateBuiltIn();
+        if (p.get("builtin") != null) {
+            // "1" keeps the original meaning; any other value names a res/xml file,
+            // so the positional A/B config is reachable without a Driver Station.
+            String which = "1".equals(p.get("builtin"))
+                    ? SwerveConfigWriter.BUILT_IN_RESOURCE
+                    : p.get("builtin");
+            SwerveConfigWriter.Result result = SwerveConfigWriter.activateBuiltIn(which);
             ok = result.ok;
             message = result.message;
+            // Report what was activated, not the write path's generated preview. Handing back a
+            // freshly generated CR configuration in response to a request for a positional one is
+            // worse than an error: it looks like confirmation.
+            name = which;
+            xml = result.xml;
         } else if (write) {
             SwerveConfigWriter.Result result = SwerveConfigWriter.writeAndActivate(name, xml);
             ok = result.ok;

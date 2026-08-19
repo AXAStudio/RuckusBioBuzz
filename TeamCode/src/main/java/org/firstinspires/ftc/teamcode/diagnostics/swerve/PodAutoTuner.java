@@ -219,13 +219,35 @@ public class PodAutoTuner {
     }
 
     private void finishKf(PodCal cal, double wheelDeg) {
-        cal.kF = (kfForward + kfReverse) / 2.0;
-        log.add(String.format(Locale.US, "kF = %.4f", cal.kF));
+        // The measured breakaway goes into kS, the continuous tanh feed-forward, NOT into kF.
+        // CoaxialPod feeds the PIDF's F term a bare sign, so kF at breakaway magnitude is a
+        // relay - the configuration measured at 15.8 sign changes per step and 42.5 deg of
+        // post-settle peak-to-peak, and the reason kF ships at 0. Writing kF here re-introduced
+        // exactly that, and persisted it to the calibration file.
+        cal.kS = (kfForward + kfReverse) / 2.0;
+        cal.kF = 0;
+        log.add(String.format(Locale.US, "breakaway = %.4f -> kS (kF stays 0)", cal.kS));
         rebuildRequested = true;
 
         cal.kP = baseKp * KP_STEPS[0];
         cal.kD = baseKd;
         beginTrial(cal, wheelDeg);
+    }
+
+    /**
+     * Stops the tuner mid-run, leaving the calibration exactly as the last completed phase set
+     * it. Without this, leaving AUTOTUNE mode stranded {@code isRunning()} true forever - the
+     * dashboard showed "Tuning pod N" for the rest of the session and a fresh start() was the
+     * only way out.
+     */
+    public void abort(String reason) {
+        if (phase == Phase.DONE) {
+            return;
+        }
+        phase = Phase.DONE;
+        rawServoPower = 0;
+        status = "aborted: " + reason;
+        log.add("Aborted mid-run: " + reason);
     }
 
     // ---- trials -----------------------------------------------------------------------

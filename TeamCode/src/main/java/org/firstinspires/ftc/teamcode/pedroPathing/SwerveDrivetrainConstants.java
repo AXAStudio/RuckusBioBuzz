@@ -22,18 +22,60 @@ import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
  */
 public class SwerveDrivetrainConstants {
     public static FollowerConstants followerConstants = new FollowerConstants()
-            .forwardZeroPowerAcceleration(-197.1)
-            .lateralZeroPowerAcceleration(-197.1)
+            // Measured 2026-08-14 by coast-down on the tiles (accelerate, cut power, fit the
+            // velocity decay): -40 in/s^2, against the -197.1 that had been configured - the
+            // follower was assuming 5x more passive braking than the drivetrain has, which is
+            // why every path arrival overshot by 4-7 inches regardless of drive PIDF. Swerve is
+            // isotropic (the pods point wherever the motion goes), so forward and lateral share
+            // the value.
+            .forwardZeroPowerAcceleration(-40.0)
+            .lateralZeroPowerAcceleration(-40.0)
             .useSecondaryDrivePIDF(false).useSecondaryHeadingPIDF(false)
             .useSecondaryTranslationalPIDF(false)
 
-            .translationalPIDFCoefficients(new PIDFCoefficients(0.125, 0, 0.008, 0))
+            // Retuned 2026-08-14 through the bring-up tool's follower bench (pedrotune.py),
+            // odometry pods live, 8 in lateral hold-point steps on the tiles: 0.125/0.008
+            // settled in 1.39 s; 0.26/0.025 settles in 0.68 s with ZERO overshoot over n=8 and
+            // 0.32 in residual. 0.34/0.035 was no faster - the step is velocity-limited - so
+            // the lower gain wins on robustness.
+            .translationalPIDFCoefficients(new PIDFCoefficients(0.26, 0, 0.025, 0))
             //.secondaryTranslationalPIDFCoefficients(new PIDFCoefficients(0.0825, 0, 0.008, 0))
 
-            .headingPIDFCoefficients(new PIDFCoefficients(1.75, 0, 0.003, 0))
+            // Measured 2026-08-11 on the Pinpoint IMU (no odometry pods needed), across commanded
+            // rotations of 15/45/90/135/180 degrees in both directions.
+            //
+            // kP: below ~1.0 the robot never settles (0.80 left 3-4 degrees standing); 1.40 hits a
+            // stability edge, overshooting 22 then 51 degrees. 1.20 settles in ~0.65s.
+            // kD: 0.003 overshot 8-12 degrees on anything past 45 degrees, because the output
+            // saturates on large errors and the robot arrives carrying momentum. 0.030 cuts that to
+            // 3-5 degrees for ~0.5 degrees more residual, and leaves small rotations clean
+            // (15 degrees: no overshoot, settles in 0.22s).
+            // kF stays 0: like the pod turn PIDF it is applied as a sign-only relay, and 0.06
+            // produced 23-26 oscillations per step.
+            //
+            // Verified holding heading to +/-3 degrees while translating through two full circles.
+            //
+            // If you change these, change SwerveBringUp's headingKp/headingKd to match. The
+            // bring-up tool keeps its own copy for live experimentation and does not read this
+            // file; it sat at the pre-tuning 1.75/0.003 for a week after this line moved to
+            // 1.20/0.030, so anyone opening the heading routine was measuring against a
+            // baseline the robot had stopped using.
+            //
+            // kD 0.030 -> 0.080 on 2026-08-13 late: the loop now runs ~2-3x faster and the pod
+            // turn loop underneath is much snappier (per-pod kP 0.38-0.44 vs 0.20), so 0.030
+            // overshot a 90 deg heading step by 11-15 deg. At 0.080 the same step settles in
+            // 0.56 s with 2.3 deg worst overshoot and 20 deg steps do not overshoot at all.
+            // Measured through the bring-up tool's headingGoto harness (tools/swervetune/
+            // headtune.py, results in current_runs/headtune.jsonl); path-following has not yet
+            // been re-validated at this value.
+            .headingPIDFCoefficients(new PIDFCoefficients(1.20, 0, 0.080, 0))
             //.secondaryHeadingPIDFCoefficients(new PIDFCoefficients(0.8, 0, 0.015, 0))
 
-            .drivePIDFCoefficients(new FilteredPIDFCoefficients(0.005, 0, 0.00003, 0.6, 0.13))
+            // Retuned 2026-08-14 with the honest zero-power acceleration in place (the two
+            // interact: at ZPA -197 every candidate overshot 4-7 in because the follower braked
+            // late; at the measured -40, 24 in lines at 0.7 power arrive in 1.56 s with 0.40 in
+            // worst overshoot and zero oscillation).
+            .drivePIDFCoefficients(new FilteredPIDFCoefficients(0.008, 0, 0.0001, 0.6, 0.10))
             //.secondaryDrivePIDFCoefficients(
             //        new FilteredPIDFCoefficients(0.004, 0, 0.000002, 0.6, 0.13))
 
@@ -49,84 +91,338 @@ public class SwerveDrivetrainConstants {
             .centripetalScaling(0.0005).
             mass(13.732);
 
+    // Calibrated 2026-08-14 against reality, the day the pods were physically attached. The
+    // values that had been sitting here were never measured on this robot: both encoder
+    // directions were backwards (forward drove x negative, strafe-left drove y negative) and
+    // the two offsets appear to have been SWAPPED - rotating 90 degrees in place orbited the
+    // pose by 18 inches. Directions fixed by nudge tests; offsets solved by paired +/-45 deg
+    // rotations (slip bias cancels in the pairing) and a linear fit to the fake-translation
+    // rate. Verified residual: ~0.6 in of orbit per 45 degrees of rotation, which is the
+    // measurement noise floor of the method.
+    // Centripetal stays 0.0005: swept 0.0-0.003 on 12 in curves at 0.7 power on 2026-08-14 and
+    // the tracking error would not separate - the tuning box is too small to sustain the
+    // v^2 * curvature regime the term corrects. Retune on a full field.
+
     public static PinpointConstants localizerConstants = new PinpointConstants()
-            .forwardPodY(-2.9350393701) //-74.5mm
-            .strafePodX(-5.9133858268) //-150.2
+            .forwardPodY(-5.376)
+            .strafePodX(-3.912)
             .distanceUnit(DistanceUnit.INCH).hardwareMapName("pinpoint")
             .encoderResolution(GoBildaPinpointDriver.GoBildaOdometryPods.goBILDA_4_BAR_POD)
-            .forwardEncoderDirection(GoBildaPinpointDriver.EncoderDirection.FORWARD)
-            .strafeEncoderDirection(GoBildaPinpointDriver.EncoderDirection.REVERSED);
+            .forwardEncoderDirection(GoBildaPinpointDriver.EncoderDirection.REVERSED)
+            .strafeEncoderDirection(GoBildaPinpointDriver.EncoderDirection.FORWARD);
 
     public static SwerveConstants swerveConstants = new SwerveConstants()
             .velocity(73.9)
-            // BRING-UP SETTING: pods hold their heading when the sticks are neutral. Switch back to
-            // X_LOCK for competition, where snapping to an X to resist being pushed is what you
-            // want. During bring-up it hides what the pods are actually doing, because every
-            // momentary drop to zero input yanks all four back to the X.
-            .zeroPowerBehavior(SwerveConstants.ZeroPowerBehavior.IGNORE_ANGLE_CHANGES)
+            // Pods snap to an X with no input, so the robot resists being pushed. Note this makes
+            // any momentary drop to zero input visible as all four pods yanking to the X - which is
+            // correct behaviour, but during bring-up it hides what the pods are doing. Swap to
+            // IGNORE_ANGLE_CHANGES while diagnosing, then put this back.
+            .zeroPowerBehavior(SwerveConstants.ZeroPowerBehavior.X_LOCK)
             .useBrakeModeInTeleOp(true);
 
     // Zero offsets, analog ranges, encoder pairings and drive directions below come from a
     // Swerve Bring-Up session on 2026-08-10, verified driving.
     //
-    // Gains from an OFF-GROUND baseline (2026-08-11), then verified on carpet.
+    // ---------------------------------------------------------------------------------------
+    // TURN GAINS: retuned 2026-08-13 on the FTC game tiles after a pod repair and lubrication
+    // of all four steering paths. Still NOT validated on a drained battery (criterion 12).
+    // ---------------------------------------------------------------------------------------
     //
-    // kF is a bang-bang relay, not a smooth feed-forward: CoaxialPod applies the full magnitude
-    // outside a 2 degree band and only varies its SIGN. Every extra bit of it buys limit cycling.
-    // Measured off the ground on ss2, rings per step: kF 0.005 -> 2.7, 0.011 -> 4.3, 0.022 -> 7.7,
-    // 0.035 -> 13.7. kP does the same above ~0.35, and kD ADDS ringing above ~0.010 because it
-    // differentiates analog encoder noise. Ground friction hides all of this - on carpet the old
-    // gains looked fine at 0-3 rings while ringing 14-18 off the ground.
+    // Everything below the 2026-08-12 block was measured before the mechanical work and no
+    // longer describes this robot's friction. Kept because the negative results are still
+    // valid and re-running them would cost days.
     //
-    // Net: keep kF at the minimum that still breaks stiction, kP <= 0.35, kD <= 0.010. Expect
-    // 3-6 degrees of residual heading error; that is the price of a kF low enough to stay stable.
+    // Post-lube retune, all on the tiles at 12.9-13.6 V, randomised and interleaved:
     //
-    // I stays 0 - swept on ss3 and every non-zero value produced 30-45 degrees of hunting.
+    //   kD: 0.022 confirmed. At kS 0.050, raising kD made things worse, not better -
+    //       4/31 loose at 0.022, 7/30 at 0.030, 24/32 at 0.040. Damping does not buy back
+    //       the wide mode.
+    //   kS: 0.035 confirmed against 0.050 at n=60/53, Fisher exact p=0.025 - 1.7% loose
+    //       against 13.2%, worst peak-to-peak 7.98 deg against 47.67. This REVERSES the
+    //       pre-lube result where 0.045 beat 0.035 on the same tiles. The story is
+    //       consistent: lubrication cut kinetic friction, so a kS sized to static breakaway
+    //       (measured 0.050 on tiles) now overdrives the pod once it is moving. kS wants to
+    //       track the kinetic regime, which is why the measured breakaway is the wrong target.
+    //   kP: 0.200 -> 0.320. Residual falls monotonically and unambiguously across 534
+    //       pod-runs: 3.24 / 2.64 / 1.86 / 1.09 deg mean at kP 0.200 / 0.230 / 0.260 / 0.320.
+    //
+    // The reason kP went UP rather than down, which is the opposite of the usual instinct:
+    // large excursions (>15 deg post-settle peak-to-peak) occur at EVERY kP tested - 8 out of
+    // 534 pod-runs overall, including one 30.7 deg event at kP 0.200 and a 43.4 deg event at
+    // 0.230. Their rate does not separate by kP (0.5 / 1.0 / 2.4 / 3.3 percent, all four 95%
+    // intervals overlapping). Backing kP off therefore buys no measurable protection while
+    // costing the one criterion still being missed. The point estimates do trend upward, so
+    // if more data ever separates them this decision should be revisited.
+    //
+    // Also measured post-lube and worth keeping:
+    //   - Breakaway is 0.050 on tiles, 0.030 off the ground, uniform across all four pods
+    //     (it was 0.05/0.07/0.06/0.05 before the mechanical work). The pod-to-pod spread is
+    //     gone; the surface difference is not.
+    //   - No backlash after the repair. Directional dead zone 0.05-0.45 deg, nothing
+    //     significant on any pod, so criteria 5 and 6 remain mechanically unblocked.
+    //   - Servo current at breakaway is under ~1% of the 3300 mA stall figure (Axon MINI+,
+    //     interpolated to the 5 V rail). Torque headroom is large and is not the constraint.
+    //
+    // Committed because they are a large, measured improvement on what shipped, not because they
+    // are finished. Randomised interleaved A/B against the previous gains, same battery, 40
+    // pod-runs each, 90 degree steps on blocks at 13.1 V:
+    //
+    //     steady-state error   3.23 -> 0.96 deg mean,  7.24 -> 2.52 deg max
+    //     error sign changes   2.35 -> 0.85 per step
+    //     post-settle p-p      0.53 -> 0.21 deg mean, 0.45 max
+    //
+    // kD chosen at n=60 pod-runs against three rivals, randomised, 12.87-12.95 V. Selection was
+    // lexicographic: zero loose-mode runs first, then lowest residual. kD 0.022 was the only one
+    // of four to hold 0/60 (true rate bounded below 6%); kD 0.020, 0.014 and 0.010 drew 3, 1 and 1.
+    // At kD 0.022: residual at t=3 s 0.77 deg mean / 2.36 max, settle to +/-2.0 deg 0.647 s with
+    // 97% of pods settling, post-settle p-p 1.24 max. Per pod the residual is 0.76 / 0.73 / 1.06 /
+    // 0.52 deg, so it is a broad distribution rather than one bad pod - 35% of pod-runs exceed
+    // 1.0 deg and 12% exceed 1.5 deg.
+    //
+    // What was actually wrong, in order of size:
+    //
+    // 1. Loop rate. The turn PID runs at the OpMode loop rate, which was 33 Hz under a four-pod
+    //    hold - slower than the servos' own 20 ms PWM frame. Raising it to ~100 Hz cut error sign
+    //    changes from 1-4 to 0-1 with the gains untouched. DriveTeleOp was 30.7 Hz and is now
+    //    75.8 Hz; see that file. This was the single biggest lever and it is not a gain.
+    //
+    // 2. kF is a relay, not a feed-forward. CoaxialPod feeds the PIDF a sign, so the F term is
+    //    +/-kF. Measured breakaway is 0.025-0.050, so the shipped kF of 0.005 was 5-10x too small
+    //    to do anything, and the pod parked where kP*e fell under breakaway: 0.035/0.300 = 6.7 deg.
+    //    Setting kF to breakaway does fix the residual (3.52 -> 1.25 deg) and limit-cycles at
+    //    42.5 deg peak-to-peak. Replaced by kS, a continuous tanh static-friction term with the
+    //    same authority away from the target and no switching discontinuity at it. kF is now 0.
+    //
+    // 3. servoCachingThreshold 0.05 was wider than the entire breakaway range, so a settled pod's
+    //    written power was frozen across a ~19 degree error window. Now 0.01; below that the extra
+    //    bus traffic costs loop rate (96 -> 77 Hz) for no measurable gain.
+    //
+    // Negative results, all measured, so nobody repeats them:
+    //
+    //   - Encoder noise is NOT why kD misbehaves. Noise floor is sigma 0.042-0.054 deg against a
+    //     0.1125 deg read granularity, which pushes 0.0006 of output through kD 0.010. The old
+    //     "kD above 0.010 adds ringing" note was a loop-rate artefact.
+    //   - Derivative-on-measurement does not permit more damping. Implemented and available
+    //     (default off); kD 0.040 rings 16x, 0.070 and 0.110 are unusable.
+    //   - Widening the servo PWM pulse range 600-2400 -> 500-2500 us does nothing. The servo
+    //     already reaches ~90% of top speed at 0.3 power, so the extra range is never used.
+    //   - No measurable backlash. Approaching one heading from both sides 8 times each, the
+    //     directional gap is 0.01-0.60 deg and no pod's gap exceeds twice its standard error.
+    //   - No mechanical outlier pod. Loose-mode rate is 12.8/17.4/18.2/20.7 percent across the
+    //     four, statistically one band.
+    //   - kI is still 0, but the old "30-45 degrees of hunting" result is not why. That predates
+    //     both the caching fix and PIDFController's integral band and reset threshold. Re-testable.
+    //   - Loop rate ABOVE ~48 Hz buys nothing. Randomised interleaved A/B on 2026-08-13, 40
+    //     pod-runs per arm, 47.8 Hz against 92.1 Hz with only the dashboard publish rate changed:
+    //     steady state 2.65 -> 2.77 deg (95% CI -0.51 to +0.71, p 0.70), err at 3 s 2.80 -> 2.93
+    //     (p 0.69), rings 3.95 -> 6.22 (p 0.39), post-settle p-p 0.84 -> 1.02 (p 0.46), rise
+    //     10-90% unchanged at 0.37 s. Nothing moved. The servos' own 20 ms PWM frame is ~50 Hz, so
+    //     updating faster than that cannot reach them. This does NOT contradict the loop-rate win
+    //     recorded above, which was climbing out of ~18 Hz; it bounds where that win stops. It
+    //     also kills the tempting story that the residual is "one control period of pod travel" -
+    //     per-update travel went 4.5 -> 2.3 deg and the residual did not follow.
+
+    // IMPORTANT, loop rate figures: every rate quoted in this file before 2026-08-13 was computed
+    // as the mean of an instantaneous 1/dt column, which overweights short loops and reads ~1.8x
+    // optimistic on every trace in tools/swervetune/runs. True throughput is 1/mean(dt). The
+    // "33 Hz" and "~100 Hz" above are that inflated statistic; the honest pair is roughly 18 Hz
+    // and 50 Hz. The direction and the ranking of the fixes are unaffected - the absolute numbers
+    // were wrong. The scorer now records loop_hz_true alongside the old figure.
+    //
+    // Known not met, off the ground: 90 degree settle to +/-2.0 deg is ~0.5 s against a 350 ms
+    // target; residual at t=3 s is 0.54-1.0 deg mean but up to 2.5 deg worst case; pod-to-pod
+    // spread is 24-84% against 15%. Roughly 17% of step responses land in a wide mode with 25 deg
+    // of peak-to-peak rather than the usual 0.23 deg - that bimodality is gain-controllable and
+    // is the open problem. Full trial log and traces in tools/swervetune.
+
+    // Public so the bring-up tool can read them and report any divergence from its own working
+    // copy. The tool is supposed to be able to hold different gains - that is what it is for - but
+    // it should never be possible to measure at gains nobody intended, which is what happened when
+    // its calibration file sat at kD 0.010 while this file said 0.022.
+    //
+    // PER-POD as of 2026-08-13 evening, indexed by servo number ss0..ss3 like podZeroDeg
+    // (0=RB, 1=RF, 2=LF, 3=LB). The pods are not interchangeable plants: re-scoring the day's
+    // 534-run kP sweep per pod shows pod 0 carrying the highest residual at every kP while almost
+    // never drawing the loose mode (1/159), and pod 3 the lowest residual while drawing it in a
+    // quarter of runs at kP 0.320. One shared gain set cannot serve both, which is why criterion
+    // 10 (pod-to-pod settle spread) never passed. The scalar turnKP/turnKD/turnKS survive as the
+    // pooled-tune values; the factories read the arrays.
+    //
+    // How the per-pod values were chosen (game tiles, 12.28-12.40 V, randomised interleaved
+    // 90-degree steps, n=15-25 per cell per pod, 210 sweep trials total, tools in
+    // tools/swervetune/current_runs/perpod_*.jsonl):
+    //
+    //   The controlling discovery: the wide mode (>=10 deg post-settle excursions) is fuelled by
+    //   kS, not tamed by kD. At kS 0.035, kP 0.44 drew 5/25 wide on pod 0; at kS 0.028 the same
+    //   kP drew 0/20 wide on pods 0 and 2 and 1/20 on pod 1 - and with the wide mode defuelled,
+    //   the extra P authority is free residual: pod 0 |e3| 1.31 -> 0.92, pod 1 0.57 -> 0.49,
+    //   pod 2 1.40 -> 0.57 versus their kP 0.320 / kS 0.035 cells. kS below the kinetic need
+    //   parks the pod short at low kP (pod 0 at kP .32 / kS .022: 2.84 deg) - the two must move
+    //   together.
+    //
+    //   Pod 3 is the outlier: it draws wide events at EVERY cell tested (kS 0.022-0.050, kP
+    //   0.32-0.44), best rate ~7% (1/15) at kS 0.022. Its assignment favours the smallest events
+    //   and residual among the tame cells, not zero events, because zero was not on the menu
+    //   today. If pod 3's wide mode matters at competition, the fix is mechanical (or the shelved
+    //   pulsed/dom experiments), not more gain search on these axes.
+    //
+    //   Second discovery, and the reason the final values lean conservative: the plant is not
+    //   stationary. Pod 0's kS 0.028 cell measured 0/20 wide, then 6/25 wide THIRTY MINUTES
+    //   later at the same gains - kinetic friction keeps falling as the pods warm through
+    //   sustained testing, so a kS fitted to the friction of the moment goes unstable as the
+    //   session runs on. The final choices reduce near-target feed-forward (lower kS, or the
+    //   same kS with a wider tanh band) because that direction FAILS SAFE: too little
+    //   feed-forward parks a cold pod slightly short; too much feeds the wide mode. Pod 0 takes
+    //   the wider band (0/15 wide, 0 wobbles, |e3| 0.79 on the hot plant), pods 1-2 take kS
+    //   0.024 (pod 2: 0/15 wide, 0 wobbles), measured per pod, not assumed transferable.
+    public static final double turnKP = 0.320;
+    public static final double turnKD = 0.022;
+
+    // 2026-08-14 late, the rolling-plant discovery (see CoaxialPod.TURN_GAIN_SCHEDULING): a
+    // rolling wheel steers nearly friction-free, so gains sized against parked stiction were
+    // several times over-gained the moment the robot moved - a 3-4 Hz, 25 degree limit cycle
+    // on every pod that no static tuning could see, because every static test ran at zero
+    // drive power. With the schedule scaling turn effort down against drive power AND the
+    // pod's own steering speed (the at-rest hunt kept its own contact patch rolling - it
+    // sustained the regime that fed it), one gentle recipe now wins on every pod: steady-drive
+    // pod error fell from 33-89 to 3-8 deg p-p and the X-lock hold went from hunting
+    // indefinitely to actuation-silent. The per-pod kP 0.44 aggression that won the static
+    // shootout is exactly what the schedule now provides only when parked.
+    public static final double[] turnKPPerPod = {0.380, 0.380, 0.380, 0.380};
+    public static final double[] turnKDPerPod = {0.022, 0.022, 0.022, 0.022};
+    public static final double[] turnKSPerPod = {0.022, 0.022, 0.022, 0.022};
+    public static final double[] turnKSBandDegPerPod = {2.0, 2.0, 2.0, 2.0};
+
+    /**
+     * Static-friction feed-forward, set to the measured breakaway. Replaces the kF relay.
+     *
+     * 0.035 is the OFF-GROUND breakaway. A carpet re-fit on the competition surface, at
+     * competition weight, produced a rival value of 0.045 - measured, not estimated, and the
+     * two INVERT between surfaces. Randomised, 10 repeats, n=40 pod-runs per cell, kP 0.200 /
+     * kD 0.022 / cache 0.01, 12.5 V:
+     *
+     *                        kS 0.035                      kS 0.045
+     *   game surface   |ss| 2.92 / 7.37 deg           |ss| 1.48 / 4.59 deg
+     *                  rings 1.57, p-p max 1.80       rings 2.38, p-p max 3.04
+     *   off ground     |ss| 0.56 / 2.22 deg           |ss| 1.23 / 7.26 deg
+     *                  rings 1.40, p-p max 9.00       rings 11.43, p-p max 49.31
+     *                  1/40 loose                     13/40 loose
+     *
+     * So 0.045 roughly halves the residual on the surface we actually compete on, and falls
+     * apart off the ground. Note the two failures are not the same size: on carpet 0.045's
+     * worst peak-to-peak is 3.04 deg, a wiggle; off the ground it is 49 deg.
+     *
+     * Staying at 0.035 for now, deliberately. A mechanical pass (clean and lubricate the
+     * steering path) is planned, and reducing friction moves the plant TOWARD the off-ground
+     * condition, which is exactly where 0.045 breaks. 0.035 is the value that holds across the
+     * whole friction range measured so far; 0.045 is fitted to the friction the pods have
+     * today. Re-fit kS after the mechanical pass and revisit this - if friction ends up low and
+     * stable, 0.045 may no longer be the right rival either.
+     *
+     * Criterion 7 (surface robustness) was written to guard against venue-to-venue variation.
+     * That rationale is weaker than assumed: the carpet tested on is the official FTC game
+     * surface, the same tiles used at competition. Off-ground robustness is a bench convenience,
+     * not an operating condition - it is being weighted here only because of the pending
+     * mechanical change.
+     */
+    public static final double turnKS = 0.035;
+    public static final double turnKSBandDeg = 2.0;
+
+    /** Servo output caching threshold applied to every pod. */
+    public static final double turnServoCaching = 0.01;
 
     private static double dtLength = 146.420; //distance from robot center to front/back pod center
     private static double dtWidth = 154.240; // distance from robot center to left/right pod center
 
+    /**
+     * Per-pod zero offset and analog range, indexed by servo number: ss0, ss1, ss2, ss3.
+     *
+     * <p>These were literals inside the pod factories, which meant nothing could compare them
+     * against the bring-up tool's live calibration. The tool's divergence guard covered gains only,
+     * so on 2026-08-13, after a pod repair and a re-zero of all four, this file was carrying zeros
+     * 30-175 degrees away from the calibrated hardware and absolutely nothing said so. Gains being
+     * wrong costs tuning; zeros being wrong points the wheels the wrong way.
+     *
+     * <p>Keep these as the single source of truth - the factories below read them, and
+     * SwerveBringUp compares against them.
+     */
+    // Re-captured 2026-08-15 after the operator's full re-zero (which also flipped drive
+    // direction on ss0 and ss3 - a re-zero near +-180 and a direction flip are two halves of
+    // the same physical statement). Source of truth: /sdcard/FIRST/swerve_bringup_cal.txt, the
+    // stored radians converted at full precision - NOT the /state "zeroDeg" field, which is a
+    // live telemetry value that moves with wheel position and briefly ended up in this array
+    // (sync from the cal file or the export, never from telemetry). History that still
+    // matters: the 2026-08-14 zeros carried a +13.13 deg common trim solved from the odometry
+    // crab angle (all four wheels parallel but 13 deg left of true chassis-forward - invisible
+    // to every pod-relative measurement). Whether THIS by-eye re-zero has a similar collective
+    // bias is unverified: redo the crawl-speed crab check before trusting field-frame autos.
+    public static final double[] podZeroDeg = {222.32446, 150.14969, 345.92838, 94.87920};
+
+    /** Analog encoder low/high voltage per pod, same ss0..ss3 indexing as {@link #podZeroDeg}. */
+    public static final double[] podMinV = {0.072, 0.094, 0.091, 0.106};
+    public static final double[] podMaxV = {3.236, 3.302, 3.289, 3.297};
+
+    /**
+     * Drive-motor reversal per pod, ss0..ss3, same indexing. The other half of "which way does
+     * this corner push": a wrong zero and a wrong drive direction produce the same haywire
+     * symptom, and until 2026-08-13 late the divergence guard compared neither directions nor
+     * zeros-at-drive-time - the factories hardcoded these and nothing could disagree out loud.
+     * Servo direction is REVERSE on all four (Axon MINI+ orientation) and the encoders read
+     * un-reversed; those stay literals in the builder until one actually varies per pod.
+     */
+    // ss0 and ss3 flipped with the 2026-08-15 re-zero, paired with their ~180 zero moves.
+    public static final boolean[] podDriveReversed = {false, true, false, true};
+
     // The encoder names do NOT follow the sm#/ss#/se# numbering. The Axon feedback wires are
     // spliced two per analog port, and the wiring scan found every pod landing on a different
     // channel than its own number. Do not "tidy" these to match.
-    private static CoaxialPod leftFront(HardwareMap hardwareMap) {
-        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm2", "ss2", "se3",
-                new PIDFCoefficients(0.300000, 0, 0.010000, 0.005000), DcMotorSimple.Direction.FORWARD,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(338.2), new Pose(dtLength, dtWidth),
-                0.136, 3.336, false);
+    /**
+     * The pods from the most recent {@link #createFollower} call, indexed by ss number.
+     *
+     * <p>Diagnostics only. The Follower owns the pods and exposes no accessor, so without this
+     * there is no way to instrument the COMPETITION control path - and every steering number this
+     * project has ever published came from the bring-up tool instead, driving its own copy of the
+     * drivetrain. Nothing in the control path reads this array; it is a handle, not state.
+     */
+    public static final CoaxialPod[] builtPods = new CoaxialPod[4];
+
+    /** Shared body so a per-pod gain can never be wired to the wrong corner by hand. */
+    private static CoaxialPod buildPod(HardwareMap hardwareMap, int ss, String motor, String servo,
+            String encoder, Pose pose) {
+        CoaxialPod pod = new CoaxialPod(hardwareMap, motor, servo, encoder,
+                new PIDFCoefficients(turnKPPerPod[ss], 0, turnKDPerPod[ss], 0),
+                podDriveReversed[ss] ? DcMotorSimple.Direction.REVERSE
+                        : DcMotorSimple.Direction.FORWARD,
+                DcMotorSimple.Direction.REVERSE, Math.toRadians(podZeroDeg[ss]), pose,
+                podMinV[ss], podMaxV[ss], false);
         pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(0.05);
+        pod.setServoCachingThreshold(turnServoCaching);
+        pod.setStaticFriction(turnKSPerPod[ss], Math.toRadians(turnKSBandDegPerPod[ss]));
+        // Pulsed final approach with the stall-escalation ladder (see CoaxialPod). Inside 6 deg
+        // the servo is silent except for discrete stationary pulses; base pulse 0.035/20 ms is
+        // measured travel on the lubricated plant (pulsecal2, 2026-08-15), tolerance 0.6 deg.
+        // Bench A/B: parked pods go actuation-silent instantly (continuous never fully quiets),
+        // steps land 0.35 mean / 0.81 max deg, moving regimes measure identical to continuous.
+        pod.setPulsedApproach(true, Math.toRadians(6.0), Math.toRadians(0.6),
+                0.035, 0.020, Math.toRadians(20), 0.10);
+        builtPods[ss] = pod;
         return pod;
+    }
+
+    private static CoaxialPod leftFront(HardwareMap hardwareMap) {
+        return buildPod(hardwareMap, 2, "sm2", "ss2", "se3", new Pose(dtLength, dtWidth));
     }
 
     private static CoaxialPod rightFront(HardwareMap hardwareMap) {
-        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm1", "ss1", "se0",
-                new PIDFCoefficients(0.300000, 0, 0.010000, 0.005000), DcMotorSimple.Direction.FORWARD,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(323.3), new Pose(dtLength, -dtWidth),
-                0.145, 3.350, false);
-        pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(0.05);
-        return pod;
+        return buildPod(hardwareMap, 1, "sm1", "ss1", "se0", new Pose(dtLength, -dtWidth));
     }
 
     private static CoaxialPod leftBack(HardwareMap hardwareMap) {
-        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm3", "ss3", "se2",
-                new PIDFCoefficients(0.300000, 0, 0.010000, 0.005000), DcMotorSimple.Direction.REVERSE,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(62.2), new Pose(-dtLength, dtWidth),
-                0.266, 3.467, false);
-        pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(0.05);
-        return pod;
+        return buildPod(hardwareMap, 3, "sm3", "ss3", "se2", new Pose(-dtLength, dtWidth));
     }
 
     private static CoaxialPod rightBack(HardwareMap hardwareMap) {
-        CoaxialPod pod = new CoaxialPod(hardwareMap, "sm0", "ss0", "se1",
-                new PIDFCoefficients(0.300000, 0, 0.010000, 0.005000), DcMotorSimple.Direction.REVERSE,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(32.0), new Pose(-dtLength, -dtWidth),
-                0.075, 3.247, false);
-        pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(0.05);
-        return pod;
+        return buildPod(hardwareMap, 0, "sm0", "ss0", "se1", new Pose(-dtLength, -dtWidth));
     }
 
     public static PathConstraints pathConstraints =

@@ -108,13 +108,13 @@ public abstract class CustomDrivetrain extends Drivetrain {
         // to robot relative
         
         translationalVector.rotateVector(-robotHeading); // this should make it field centric when field centric is desired and robot centric otherwise
-        
-        double clampedForward = clampReversePower(translationalVector.getXComponent(),
-                                                  robotVelocity.getXComponent());
-        double clampedStrafe = clampReversePower(translationalVector.getYComponent(),
-                                                 robotVelocity.getYComponent());
-        
-        arcadeDrive(clampedForward, clampedStrafe, calculatedDrive[2]);
+
+        double[] clamped = clampReversePower(translationalVector.getXComponent(),
+                                             translationalVector.getYComponent(),
+                                             robotVelocity.getXComponent(),
+                                             robotVelocity.getYComponent());
+
+        arcadeDrive(clamped[0], clamped[1], calculatedDrive[2]);
     }
 
     @Deprecated
@@ -129,18 +129,35 @@ public abstract class CustomDrivetrain extends Drivetrain {
      * very minimal. Even a tiny opposite voltage (e.g., -0.0001) locks the wheels like
      * zero-power brake mode, using the motor’s own momentum for braking without consuming
      * significant energy.
+     *
+     * <p>RUCKUS PATCH: this used to run per axis - {@code clampReversePower(vx, motionX)} and
+     * {@code clampReversePower(vy, motionY)} independently. Capping one component and not the
+     * other does not shorten the command, it ROTATES it: braking out of a forward-right drive
+     * clamped x to -0.2 while y kept -0.9, swinging the commanded direction by 30-45 degrees,
+     * and it released the moment that velocity component crossed zero, so it chattered as well.
+     * On a swerve every pod's azimuth is {@code atan2} of that vector, so the rotation lands
+     * straight on the pod demands. Same intent, applied to the vector: project onto the
+     * direction of travel, and if the opposing component exceeds the cap scale the WHOLE vector
+     * down until it does. Direction is preserved exactly; only magnitude changes.
+     *
+     * @return the clamped {x, y} command
      */
-    private double clampReversePower(double power, double directionOfMotion) {
-        boolean isOpposingMotion = directionOfMotion * power < 0;
-        if (!isOpposingMotion) {
-            return power;
+    private double[] clampReversePower(double x, double y, double motionX, double motionY) {
+        double speed = Math.hypot(motionX, motionY);
+        if (speed < 1e-6) {
+            return new double[] {x, y};
         }
-        double clampedPower;
-        if (power < 0) {
-            clampedPower = Math.max(power, -0.2);
-        } else {
-            clampedPower = Math.min(power, 0.2);
+        double ux = motionX / speed;
+        double uy = motionY / speed;
+        double along = x * ux + y * uy;
+        if (along >= -REVERSE_POWER_CAP) {
+            // Not opposing motion, or opposing it by less than the cap allows.
+            return new double[] {x, y};
         }
-        return clampedPower;
+        double scale = REVERSE_POWER_CAP / -along;
+        return new double[] {x * scale, y * scale};
     }
+
+    /** Largest command component allowed against the direction of travel. */
+    private static final double REVERSE_POWER_CAP = 0.2;
 }

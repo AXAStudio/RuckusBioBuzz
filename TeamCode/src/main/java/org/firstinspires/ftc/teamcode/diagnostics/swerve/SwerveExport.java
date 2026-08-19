@@ -69,6 +69,7 @@ public final class SwerveExport {
                         + "            %.3f, %.3f, %s);%n"
                         + "    pod.setMotorCachingThreshold(0.05);%n"
                         + "    pod.setServoCachingThreshold(%.3f);%n"
+                        + "%s"
                         + "    return pod;%n"
                         + "}%n",
                 methodName,
@@ -80,6 +81,39 @@ public final class SwerveExport {
                 xExpr, yExpr,
                 p.analogMin, p.analogMax,
                 p.encoderReversed,
-                p.servoCaching);
+                p.servoCaching,
+                extras(p));
+    }
+
+    /**
+     * Emits the Ruckus-patch pod settings, and only the ones that are doing something.
+     *
+     * <p>Each is a no-op at its default, so writing them all out unconditionally would put four
+     * lines of noise in every generated pod for the benefit of the one that is set. A pod that
+     * uses none of them exports exactly as it did before these existed.
+     */
+    private static String extras(PodCal p) {
+        StringBuilder sb = new StringBuilder();
+        if (p.kS != 0.0) {
+            sb.append(String.format(Locale.US,
+                    "    pod.setStaticFriction(%.4f, Math.toRadians(%.2f));%n", p.kS, p.kSBandDeg));
+        }
+        if (p.kI != 0.0) {
+            sb.append(String.format(Locale.US,
+                    "    pod.setTurnIntegralSettings(%.4f, Math.toRadians(%.2f), "
+                            + "Math.toRadians(%.2f));%n",
+                    p.kILimit, p.kIBandDeg, p.kIResetDeg));
+        }
+        if (p.derivativeOnMeasurement) {
+            sb.append("    pod.setDerivativeOnMeasurement(true);%n".replace("%n", "\n"));
+        }
+        if (p.pulsed) {
+            sb.append(String.format(Locale.US,
+                    "    pod.setPulsedApproach(true, Math.toRadians(%.2f), Math.toRadians(%.2f), "
+                            + "%.4f, %.4f, Math.toRadians(%.1f), %.4f);%n",
+                    p.pulseBandDeg, p.pulseTolDeg, p.pulsePower, p.pulseMs / 1000.0,
+                    p.pulseStationaryDegPerSec, p.pulseCoastMs / 1000.0));
+        }
+        return sb.toString();
     }
 }

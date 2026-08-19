@@ -25,6 +25,12 @@ public final class SwerveBench {
     private final ConcurrentLinkedQueue<Map<String, String>> commands = new ConcurrentLinkedQueue<>();
     private volatile long lastPublishMs = 0;
 
+    /**
+     * The running OpMode's loop-rate recorder, so {@code /swerve/rec.csv} can render it directly on
+     * the web thread instead of making the control loop pay for a 3000-row string build.
+     */
+    private final AtomicReference<PodRecorder> recorder = new AtomicReference<>();
+
     private SwerveBench() {
     }
 
@@ -65,7 +71,22 @@ public final class SwerveBench {
         commands.clear();
     }
 
-    /** Marks the OpMode as gone so the dashboard stops showing live data immediately. */
+    /** Published by the OpMode at init so the CSV route can find it. */
+    public void setRecorder(PodRecorder podRecorder) {
+        recorder.set(podRecorder);
+    }
+
+    /** The active recorder, or null when no OpMode has run. */
+    public PodRecorder recorder() {
+        return recorder.get();
+    }
+
+    /**
+     * Marks the OpMode as gone so the dashboard stops showing live data immediately.
+     *
+     * <p>The recorder deliberately outlives the OpMode: a run is usually pulled after the OpMode
+     * has been stopped, and dropping it here would throw the data away at exactly the wrong moment.
+     */
     public void markStopped() {
         lastPublishMs = 0;
         commands.clear();

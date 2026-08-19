@@ -24,6 +24,12 @@ public class PIDFController {
 
     /** RUCKUS PATCH: see {@link #setIntegralLimit}. */
     private double integralLimit = 0.25;
+
+    /** RUCKUS PATCH: see {@link #setIntegralResetThreshold}. */
+    private double integralResetThreshold = 0.0;
+
+    /** RUCKUS PATCH: see {@link #setIntegralBand}. */
+    private double integralBand = Double.POSITIVE_INFINITY;
     private double errorDerivative;
     private double feedForwardInput;
 
@@ -78,6 +84,61 @@ public class PIDFController {
     }
 
     /**
+     * RUCKUS PATCH: how large the error must be for a sign change to clear the integral.
+     *
+     * <p>The sign-change reset added alongside {@link #setIntegralLimit} clears the integral
+     * whenever the error crosses zero. Near the target the error sign flips on sensor noise every
+     * few loops, so the integral was being cleared continuously in exactly the place it exists to
+     * help - grinding out a stiction-limited residual. Measured on this drivetrain the encoder
+     * noise floor is 0.05 degrees, so a threshold of a degree or two makes the reset fire on real
+     * crossings only.
+     *
+     * <p>Defaults to 0, which is the reset-on-any-crossing behaviour it replaces.
+     */
+    public void setIntegralResetThreshold(double threshold) {
+        this.integralResetThreshold = Math.abs(threshold);
+    }
+
+    public double getIntegralResetThreshold() {
+        return integralResetThreshold;
+    }
+
+    /**
+     * RUCKUS PATCH: only accumulate the integral while |error| is inside this band.
+     *
+     * <p>Conditional integration. An integral term meant to break static friction at the target has
+     * no business accumulating across a 90 degree slew, where the error is large for a long time
+     * and the proportional term already saturates the output; all that does is guarantee an
+     * overshoot on arrival. Outside the band the accumulator is held at zero, so the term is purely
+     * an endgame device.
+     *
+     * <p>Defaults to infinity, which is the always-accumulate behaviour it replaces.
+     */
+    public void setIntegralBand(double band) {
+        this.integralBand = Math.abs(band);
+    }
+
+    public double getIntegralBand() {
+        return integralBand;
+    }
+
+    /**
+     * Shared by {@link #updateError} and {@link #updatePosition}: decides whether this sample adds
+     * to the accumulator, leaves it alone, or clears it.
+     */
+    private void accumulateIntegral(double seconds) {
+        if (Math.abs(error) > integralBand) {
+            errorIntegral = 0;
+            return;
+        }
+        if (error * previousError < 0
+                && Math.max(Math.abs(error), Math.abs(previousError)) > integralResetThreshold) {
+            errorIntegral = 0;
+        }
+        errorIntegral += error * seconds;
+    }
+
+    /**
      * This can be used to update the PIDF's current position when inputting a current position and
      * a target position to calculate error. This will update the error from the current position to
      * the target position specified.
@@ -92,14 +153,9 @@ public class PIDFController {
         deltaTimeNano = System.nanoTime() - previousUpdateTimeNano;
         previousUpdateTimeNano = System.nanoTime();
 
-        // RUCKUS PATCH: drop the accumulated integral when the error changes sign. Whatever it
-        // built up approaching the target is stale once the target is crossed, and carrying it
-        // across a swerve pod's 180 degree flip would push hard in the wrong direction.
-        if (error * previousError < 0) {
-            errorIntegral = 0;
-        }
-
-        errorIntegral += error * (deltaTimeNano / Math.pow(10.0, 9));
+        // RUCKUS PATCH: see accumulateIntegral - drops the accumulator on a real sign change or
+        // outside the integral band, and is unchanged from stock at the default settings.
+        accumulateIntegral(deltaTimeNano / Math.pow(10.0, 9));
         errorDerivative = (error - previousError) / (deltaTimeNano / Math.pow(10.0, 9));
     }
 
@@ -117,15 +173,37 @@ public class PIDFController {
         deltaTimeNano = nanoTime - previousUpdateTimeNano;
         previousUpdateTimeNano = nanoTime;
 
-        // RUCKUS PATCH: drop the accumulated integral when the error changes sign. Whatever it
-        // built up approaching the target is stale once the target is crossed, and carrying it
-        // across a swerve pod's 180 degree flip would push hard in the wrong direction.
-        if (error * previousError < 0) {
-            errorIntegral = 0;
-        }
-
-        errorIntegral += error * (deltaTimeNano / Math.pow(10.0, 9));
+        // RUCKUS PATCH: see accumulateIntegral - drops the accumulator on a real sign change or
+        // outside the integral band, and is unchanged from stock at the default settings.
+        accumulateIntegral(deltaTimeNano / Math.pow(10.0, 9));
         errorDerivative = (error - previousError) / (deltaTimeNano / Math.pow(10.0, 9));
+    }
+
+    /**
+     * RUCKUS PATCH: as {@link #updateError}, but the caller supplies the derivative.
+     *
+     * <p>Differencing the error assumes the setpoint holds still. A swerve pod's does not: it steps
+     * by up to 90 degrees on a new command, and jumps discontinuously whenever {@code move()} takes
+     * the plus-or-minus 180 degree flip. Both put a spike into the D term that has nothing to do
+     * with how fast the pod is moving — at a 90 degree step and 120 Hz, {@code kD = 0.010} alone
+     * produces 1.96 of output and saturates the clamp.
+     *
+     * <p>Passing the negated measured velocity instead gives derivative-on-measurement: identical
+     * behaviour while the setpoint is constant, no kick when it moves.
+     *
+     * @param error the current error
+     * @param derivative d(error)/dt to use, normally the negated measurement velocity
+     */
+    public void updateErrorWithDerivative(double error, double derivative) {
+        previousError = this.error;
+        this.error = error;
+        long nanoTime = System.nanoTime();
+
+        deltaTimeNano = nanoTime - previousUpdateTimeNano;
+        previousUpdateTimeNano = nanoTime;
+
+        accumulateIntegral(deltaTimeNano / Math.pow(10.0, 9));
+        errorDerivative = derivative;
     }
 
     /**
