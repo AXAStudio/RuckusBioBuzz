@@ -19,6 +19,30 @@ git remote set-url --push pedro-upstream DISABLED
 
 The vendored Gradle metadata currently reports PedroPathing version `2.1.2`.
 
+**Base verified 2026-09-10:** the tree vendored in `9761b95` was fingerprinted against every
+upstream commit since 2025-06 (line endings normalised — the raw checkout differs from upstream
+in every file on CRLF alone). Closest tag is `v2.1.2` (`96df977`). The `pedro-upstream` remote
+described above does **not** exist in this clone; the check used a scratch clone of upstream.
+
+### Complete inventory vs. `v2.1.2` (as of `a6edf00`)
+
+The dated entries below cover only some of these. Everything that differs from the tag:
+
+| File | Change | Dated entry |
+|---|---|---|
+| `core/build.gradle.kts` | Dokka removed | 2026-08-09 |
+| `core/.../control/PIDFController.java` | integral clamp, sign-change reset threshold, integral band, `updateErrorWithDerivative` | 2026-08-11, 08-12 |
+| `core/.../drivetrain/CustomDrivetrain.java` | reverse-power clamp applied **along the direction of travel** instead of per axis (per-axis capping rotated the command 30–45° on swerve) | **none** |
+| `core/.../follower/FollowerConstants.java` | `stuckTValue = 0.8` → `stuckTValueLow = 0.1`, `stuckTValueHigh = 0.8` (present since vendoring) | **none** |
+| `ftc/.../drivetrains/CoaxialPod.java` | kS `tanh` term, pulsed approach, derivative-on-measurement, instrumentation getters | 2026-08-12 |
+| ″ | **flip hysteresis** ±10° around the 90° flip boundary | **none** |
+| ″ | **turn gain scheduling** — drive-power and pod-velocity legs, 20° error gate, floor 0.24, runtime setters `setScheduleTuning` / `setScheduleRamp` | **none** |
+| ″ | measured pod velocity (seam-wrapped), `setTurnSlewPerUpdate` output slew limit, pulse stall-escalation ladder + drive-power gate, `getLastTargetWheelRad`, `getLastDrivePower`, median-of-3 encoder filter (compiled **off**) | **none** |
+| `ftc/.../drivetrains/Swerve.java` | rotation epsilon 0.015 (translation keeps 0.05); smoothstep **epsilon taper**; per-pod **demand slew limit** 214 °/s (skipped past 90°); **X_LOCK engage delay** 0.35 s; voltage-compensation fix (stock discarded the `times()` result) | **none** |
+| `gradle/libs.versions.toml` | AGP plugin 8.7.3 → 8.7.0 (match the root build) | **none** |
+| `settings.gradle.kts`, `telemetry/**` | `:telemetry` module added — `SelectableOpMode` etc., used by `TeamCode/.../Tuning.java`. Not part of the upstream PedroPathing repo | **none** |
+| `README.md`, `gradlew` (mode bit) | cosmetic | — |
+
 ## Local Patches
 
 ### 2026-08-12 — Derivative on measurement, and a pulsed final approach, on `CoaxialPod`
