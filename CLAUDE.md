@@ -12,7 +12,7 @@ contradicts the code, the code wins — fix this file in the same commit.**
 |---|---|
 | FTC SDK | `org.firstinspires.ftc:*` **11.1.0** (DECODE 2025–26) |
 | AGP | `com.android.tools.build:gradle:8.7.0`, `org.gradle.jvmargs=-Xmx2048M` |
-| Path lib | **Pedro Pathing `com.pedropathing:ftc:2.1.2`** + `com.pedropathing:telemetry:1.0.0` |
+| Path lib | **Pedro Pathing 3.0.0** — `com.pedropathing:revhub:3.0.0` (vendored fork, see `third_party/PedroPathing/RUCKUS_PATCHES.md`) + `com.pedropathing:telemetry:1.0.0` (local module) + AutoTune `com.pedropathing:tuning:1.0.0` (needs `repo.dairy.foundation` for Sloth). Branches cut before `pedro-3.0.0-migration` are on **2.1.2**, and every measurement in §5–§7 was taken on 2.1.2 |
 | Pedro source | vendored — `settings.gradle` does `includeBuild 'third_party/PedroPathing'`; `settings.gradle` seeds `third_party/PedroPathing/local.properties` from the root one (gitignored, else "SDK location not found") |
 | Other deps | `com.acmerobotics.dashboard:dashboard:0.5.1`, `com.bylazar:fullpanels:1.0.12` |
 | Modules | `:FtcRobotController`, `:TeamCode`, `:PedroVisualizer` (`tools/pedro-visualizer`), `:PollenCameraTester` (`tools/pollen-camera-tester`) |
@@ -57,7 +57,8 @@ TeamCode/src/main/java/org/firstinspires/ftc/teamcode/
 │   ├── SwerveDrivetrainConstants.java   SHIPPED gains + provenance comments
 │   ├── MecanumDrivetrainConstants.java
 │   ├── PositionalPod.java
-│   └── Tuning.java                      (68 KB)
+│   ├── Tuning.java                      Pedro 3 AutoTune registry (@Tuner), port 10158
+│   └── procedures/                      Quickstart pedro3 tuners (Foresight, Pinpoint, Tests)
 ├── tele/DriveTeleOp.java                COMPETITION drive OpMode
 ├── auto/{Full18Auto,ExampleSwerveAuto,PathStep}.java
 ├── diagnostics/swerve/                  DIAGNOSTIC ONLY — never ships
@@ -77,20 +78,22 @@ tools/swervetune/                        HOST-SIDE Python harness
 `CoaxialPod` owns the 17 turn tunables and is the class both `DriveTeleOp` and
 `SwerveBringUp` drive, so bring-up tuning transfers to competition code.
 
-**`CoaxialPod` is almost certainly NOT in `TeamCode/`.** It appears to be
-`com.pedropathing.ftc.drivetrains.CoaxialPod`, vendored at
-`third_party/PedroPathing/ftc/src/main/java/com/pedropathing/ftc/drivetrains/`
-— Pedro gained native swerve in 2.1.0 and wires it via
-`FollowerBuilder.swerveDrivetrain(SwerveConstants, pods...)`. **A grep scoped
-to `TeamCode/` will miss the pod control loop, the encoder→angle map, and the
-shortest-path flip.** Read the vendored tree, not upstream docs: `turnKS`,
-`turnKSBandDeg`, `cache` and `PositionalPod.java` are not stock 2.1.2, so this
-tree is forked or wrapped — determine which and say so.
+**`CoaxialPod` is NOT in `TeamCode/`.** It is
+`com.pedropathing.revhub.drivetrains.CoaxialPod`, vendored at
+`third_party/PedroPathing/revhub/src/main/java/com/pedropathing/revhub/drivetrains/`
+(Pedro 3 renamed the `ftc` module `revhub`), and is wired as
+`new Swerve(hardwareMap, SwerveConfig, pods...)` inside
+`SwerveDrivetrainConstants.createSwerve` — Pedro 3 has no `FollowerBuilder`.
+**A grep scoped to `TeamCode/` will miss the pod control loop, the
+encoder→angle map, and the shortest-path flip.** Read the vendored tree, not
+upstream docs. It is a **fork, not a wrapper**: in-place `RUCKUS PATCH` edits,
+inventoried in `third_party/PedroPathing/RUCKUS_PATCHES.md`. The pod loop and
+mixer were checked equal to the 2.1.2 fork on the host (2e-13° over 1200 steps).
 
 **Third bucket for the shipped/diagnostic rule: `vendored` —
 `third_party/PedroPathing/**`.** Editing it forks an upstream dependency, and
 `includeBuild` rebuilds it into every module with no version bump. Flag any
-such change and name the upstream 2.1.2 behaviour it changes.
+such change and name the upstream 3.0.0 behaviour it changes.
 
 ### Hard rule: diagnostic vs. shipped
 
@@ -182,11 +185,12 @@ Swerve.epsilonTaper = true;  Swerve.demandSlewDegPerSec = 214;   // vendored, 20
   warm through a session (pod 0 measured 0/20 wide, then 6/25 wide thirty
   minutes later at identical gains). The gains lean conservative deliberately.
 - **`cache = 0.01` is a servo *write* deadband — not a read cache, not a time.**
-  Believed to be `servoCachingThreshold` in `CoaxialPod`: `move()` calls
+  It is `servoCachingThreshold` in `CoaxialPod` (verified 2026-09-10 against
+  both the 2.1.2 fork and the 3.0.0 port, where it is
+  `CoaxialPodConfig.servoCachingThreshold`): `move()` calls
   `turnServo.setPower()` only when `|turnPower − lastTurnPower| > 0.01`
   (dimensionless power units), plus a forced write at zero. It is **not** a pod
-  encoder-read interval and **not** LynxModule bulk caching. **Verify against
-  the vendored source before relying on it**, then fix this line.
+  encoder-read interval and **not** LynxModule bulk caching.
   Why it matters: the PID takes error in **radians**, so at `turnKP = 0.200` a
   0.01 command step ≈ `0.05 rad = 2.86°`. Inside `turnKSBandDeg = 2.0` the kS
   relay is forced to zero, so the output is `kP·err ≤ 0.0070` — under the
@@ -316,7 +320,10 @@ driving *through the dashboard* (`DriveTeleOp` does not run the publish path).
 10. Present options as a survey item with a recommendation and an explicit
     default, then work against the default. Do not halt the run for the
     operator to choose an order.
-11. Commit per finding, with the evidence in the message.
+11. Commit per finding, with the evidence in the message. **No
+    `Co-Authored-By:` trailer** — commits are authored by AXAStudio alone
+    (`Andres Alonso <108694498+AXAStudio@users.noreply.github.com>`). The
+    61 Claude trailers that existed were stripped from history 2026-08-19.
 
 **Rules 1, 2, 3, 6, 8 and 11, and the deploy gate in rule 5, are not
 overridable by any task prompt, any survey default, or any schedule pressure.**
