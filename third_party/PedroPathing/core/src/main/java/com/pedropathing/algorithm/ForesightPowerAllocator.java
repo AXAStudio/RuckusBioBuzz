@@ -117,19 +117,16 @@ public class ForesightPowerAllocator {
         Vector2D robotFrameDrivePower =
                 fieldRelativeDrivePower.rotate(-state.pose().heading());
 
-        double forward =
+        // RUCKUS PATCH: upstream clamps x and y independently, which rotates the command - see
+        // Control.clampBrakingPower(Vector2D, Vector2D, double). Twist is body-frame, the same
+        // frame as robotFrameDrivePower.
+        Vector2D clamped =
                 Control.clampBrakingPower(
-                        robotFrameDrivePower.x(),
-                        state.twist().vx,
+                        robotFrameDrivePower,
+                        state.twist().toVector2D(),
                         config.maxBrakingPower.get());
 
-        double strafe =
-                Control.clampBrakingPower(
-                        robotFrameDrivePower.y(),
-                        state.twist().vy,
-                        config.maxBrakingPower.get());
-
-        return new DrivePowers(forward, strafe, headingPower);
+        return new DrivePowers(clamped.x(), clamped.y(), headingPower);
     }
 
     public double maxScaling(
