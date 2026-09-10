@@ -1,6 +1,6 @@
 package org.firstinspires.ftc.teamcode.diagnostics.swerve;
 
-import com.pedropathing.ftc.drivetrains.CoaxialPod;
+import com.pedropathing.revhub.drivetrains.CoaxialPod;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.util.ElapsedTime;

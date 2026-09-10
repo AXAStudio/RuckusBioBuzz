@@ -454,3 +454,65 @@ Everything below is blocked on robot time, in this order:
    Criteria 1–6 and the graphs.
 4. **`HeadingHold`'s first run.** It is new, in shipped code, and untested. Criteria 7, 8, 11.
 5. **The path run**, via `pedroStart` + `pedroChain`. Criterion 9 and the last graph.
+
+---
+
+## Pedro 3.0.0 migration — declared under rule 9 before any data is taken
+
+2026-09-10, branch `pedro-3.0.0-migration`. **Nothing here was measured on the robot**; the
+evidence is host-side (surface N/A, volts N/A). Patch-level detail is in
+`third_party/PedroPathing/RUCKUS_PATCHES.md`. Every number in the sections above was taken on
+Pedro 2.1.2.
+
+### What is provably unchanged: the pod loop and the mixer
+
+`CoaxialPod` + `Swerve`, 2.1.2 fork (`a6edf00`) against the v3 port, driven side by side on the
+host with a shared stepped clock: 1200 steps at 8/10/25 ms, pod demand equal to 2e-13°, servo
+power to 6e-15, identical write counts. So criteria 1–6 measured on 2.1.2 still describe the
+steering code. Exception, and it is real: at exactly zero input the pod demand direction is now
+0° where 2.1.2 gave front pods 180° / back pods 0° (IEEE signed zeros). The pods are released
+either way; only the remembered flip state differs, which can change the first flip decision
+after a release when the new demand lands 80–100° from the pod.
+
+### `DriveTeleOp` (shipped) — behaviour changes, all unmeasured
+
+1. The 0.2 reverse-power clamp that the 2.x follower applied to every teleop command is gone from
+   Pedro 3's `manual()`. It is re-applied in `DriveTeleOp`, same cap, same vector form, but
+   against the **previous loop's** body velocity (2.x clamped after the pose refresh): ~10 ms older.
+2. Saturated commands budget differently. 2.x's follower treated turn as a vector along the
+   heading and scaled translation down before the mixer (forward 1.0 + turn 0.5 → 0.5 / 0.5); v3
+   has only the mixer's per-pod normalisation (estimated ~0.68 / 0.34 for the same stick).
+   Identical whenever no pod vector exceeds magnitude 1.
+3. The Pinpoint is no longer re-origined at construction (2.x wrote 0,0,0), and `resetMode NONE`
+   keeps v3 from recalibrating the IMU at every init. The pose-preservation code stays as a guard.
+4. `DriveTeleOp`'s loop rate on v3 is **unknown**. New code sits on that path (`ConfigVar.get()`
+   validation per read, the v3 `Follower`). Criterion 10's 99.3 Hz is a 2.1.2 number until
+   re-measured.
+
+### Bring-up tool (diagnostic) — changes that alter what it measures or accepts
+
+1. `pedroStart activate=` — v3 has no per-term PIDF switches; anything but `all` is refused.
+2. Bench `power` now sets Foresight `maxPathSpeed`, a fraction of max achievable **velocity**, not
+   motor power. Restored on break-off and `stop()`.
+3. `pedroPidf`: `tp/ti/td` replace both Foresight translational controllers with a PID (dropping
+   any piecewise controller); `fzpa/lzpa` set natural deceleration to their absolute value;
+   `tf`, `dp/di/dd/dt/df`, `cent` have no Foresight counterpart and are ignored, named in the reply.
+4. `holdPoint` → v3 `hold(pose)`, which applies no hold scaling.
+5. `/state` `pedro.terr` now comes from `Foresight.translationalError()` (distance to the closest
+   pose) — the same concept, a different implementation. 0 when the algorithm is not Foresight.
+6. `pedroBreak` = `stop()` + `drivetrain.stop()`, so the pods release immediately as in 2.x.
+7. The heading-tune bench still reproduces the 2.x heading law (sign feed-forward); Foresight's
+   heading path differs (feedback + static FF + a feed-forward split, P only), so bench heading
+   gains no longer map one-to-one onto `foresightConfig.headingFeedback`.
+8. Bench `SwerveConfig`: `maxPower(1.0)` and `velocity(73.9)` dropped (the mixer already normalises
+   to 1). The recorder's `tgt` column and `computeTargets()` are untouched, and the pods still
+   receive θ in [0, 2π) - existing traces stay comparable.
+
+### Path following is new and on placeholder constants
+
+Foresight replaces the 2.x PIDF follower. Of its required constants, only natural deceleration
+(40 in/s², the 2026-08-14 coast-down) is measured; max velocity, brake coefficients, coast/brake
+kV and heading brake are placeholders. `SwerveDrivetrainConstants.requireForesightMeasured()`
+stops the autos and the tuner's path tests until the Foresight Tuner has been run. Criterion 9
+needs that first. Note the tuner's default drive distances (48 in) exceed the 46 in side of the
+practice area and ignore the bring-up safe-area box.

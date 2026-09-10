@@ -201,7 +201,7 @@ costs a guarded walk to both mechanical limits to obtain and was being discarded
 
 | state | why it does not persist |
 | --- | --- |
-| heading kP/kD/kF | the source of truth is `FollowerConstants.headingPIDFCoefficients`; a saved copy would be a second place to disagree. Seeded from the shipped values at startup |
+| heading kP/kD/kF | the source of truth is `SwerveDrivetrainConstants.foresightConfig.headingFeedback`; a saved copy would be a second place to disagree. Seeded from the shipped values at startup |
 | `xLock`, `headingHold` | diagnostic view toggles, not calibration |
 | servo PWM range and enable | controller-side settings the Robot Controller resets on restart. If you set a non-default PWM range, **re-apply it after every restart** — it silently reverts, and a measurement taken afterwards is not the one you set up |
 

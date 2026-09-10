@@ -1,9 +1,10 @@
 package org.firstinspires.ftc.teamcode.pedroPathing;
 
-import com.pedropathing.ftc.drivetrains.CoaxialPod;
-import com.pedropathing.ftc.drivetrains.SwervePod;
-import com.pedropathing.geometry.Pose;
-import com.pedropathing.math.MathFunctions;
+import com.pedropathing.math.Vector2D;
+import com.pedropathing.revhub.drivetrains.CoaxialPod;
+import com.pedropathing.revhub.drivetrains.SwervePod;
+import com.pedropathing.utils.Angle;
+import com.pedropathing.utils.Utils;
 import com.qualcomm.robotcore.hardware.AnalogInput;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
@@ -11,13 +12,15 @@ import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.Servo;
 
+import java.util.Collections;
 import java.util.Locale;
+import java.util.Map;
 
 /**
  * A swerve pod steered by a servo running its own internal position loop.
  *
  * <p>Sits alongside {@link CoaxialPod} rather than replacing it. Both implement
- * {@code SwervePod} and {@code FollowerBuilder.swerveDrivetrain} takes a varargs of that
+ * {@code SwervePod} and {@code Swerve}'s constructor takes a varargs of that
  * interface, so a drivetrain can mix them - which is exactly what the one-pod A/B needs, and what
  * the fallback needs if positional mode turns out worse.
  *
@@ -76,7 +79,7 @@ public class PositionalPod implements SwervePod {
     private final Servo turnServo;
     private final AnalogInput turnEncoder;
     private final DcMotorEx driveMotor;
-    private final Pose offset;
+    private final Vector2D offset;
     private final String label;
 
     /** Raw encoder angle, degrees, at servo position 0.0 and 1.0. The whole calibration. */
@@ -143,7 +146,7 @@ public class PositionalPod implements SwervePod {
 
     public PositionalPod(HardwareMap hardwareMap, String motorName, String servoName,
             String turnEncoderName, DcMotorSimple.Direction driveDirection,
-            double rawDegAtPos0, double rawDegAtPos1, double angleOffsetRad, Pose podOffset,
+            double rawDegAtPos0, double rawDegAtPos1, double angleOffsetRad, Vector2D podOffset,
             double analogMinVoltage, double analogMaxVoltage, boolean encoderReversed) {
 
         this.driveMotor = hardwareMap.get(DcMotorEx.class, motorName);
@@ -231,7 +234,7 @@ public class PositionalPod implements SwervePod {
             // Desired heading in the same encoder frame CoaxialPod uses, so a mixed drivetrain
             // computes Swerve's avgScaling consistently across both pod types.
             double desiredRaw = Math.toDegrees(
-                    MathFunctions.normalizeAngle(adjustThetaForEncoder(targetAngleRad)
+                    Angle.normalize(adjustThetaForEncoder(targetAngleRad)
                             + angleOffsetRad));
 
             // A heading and that heading plus 180 are the same demand. Take whichever candidate is
@@ -258,7 +261,7 @@ public class PositionalPod implements SwervePod {
                 lastMoveFlipped = bestFlipped;
                 if (maxSlewDegPerSec > 0 && dt > 0) {
                     double step = maxSlewDegPerSec * dt;
-                    double delta = MathFunctions.clamp(best - commandedRawDeg, -step, step);
+                    double delta = Utils.clamp(best - commandedRawDeg, -step, step);
                     commandedRawDeg = commandedRawDeg + delta;
                 } else {
                     commandedRawDeg = best;
@@ -306,7 +309,7 @@ public class PositionalPod implements SwervePod {
     }
 
     private double clampToWindow(double rawDeg) {
-        return MathFunctions.clamp(rawDeg, windowLo(), windowHi());
+        return Utils.clamp(rawDeg, windowLo(), windowHi());
     }
 
     public void setCalibrated(boolean value) {
@@ -326,7 +329,7 @@ public class PositionalPod implements SwervePod {
      * smaller than the servo's programmed travel, and nothing else would notice.
      */
     public void setRawPositionForCalibration(double position) {
-        turnServo.setPosition(MathFunctions.clamp(position, 0.0, 1.0));
+        turnServo.setPosition(Utils.clamp(position, 0.0, 1.0));
     }
 
     public void setClampMarginDeg(double marginDeg) {
@@ -366,7 +369,7 @@ public class PositionalPod implements SwervePod {
         }
         double worst = Double.MAX_VALUE;
         for (double wheel = 0; wheel < 360.0; wheel += stepDeg) {
-            double desiredRaw = Math.toDegrees(MathFunctions.normalizeAngle(
+            double desiredRaw = Math.toDegrees(Angle.normalize(
                     adjustThetaForEncoder(Math.toRadians(wheel)) + angleOffsetRad));
             double best = Double.NaN;
             double bestMargin = -Double.MAX_VALUE;
@@ -410,7 +413,7 @@ public class PositionalPod implements SwervePod {
         if (Math.abs(span) < 1e-9) {
             return 0.5;
         }
-        return MathFunctions.clamp((rawDeg - rawDegAtPos0) / span, 0.0, 1.0);
+        return Utils.clamp((rawDeg - rawDegAtPos0) / span, 0.0, 1.0);
     }
 
     // ---- feedback, kept for init, verification and fault detection ---------------------
@@ -421,7 +424,7 @@ public class PositionalPod implements SwervePod {
         if (range == 0) {
             return 0;
         }
-        return MathFunctions.clamp((v - analogMinVoltage) / range, 0, 1) * (2.0 * Math.PI);
+        return Utils.clamp((v - analogMinVoltage) / range, 0, 1) * (2.0 * Math.PI);
     }
 
     @Override
@@ -432,7 +435,7 @@ public class PositionalPod implements SwervePod {
     @Override
     public double adjustThetaForEncoder(double wheelTheta) {
         double t = encoderReversed ? wheelTheta : (2 * Math.PI - wheelTheta);
-        return MathFunctions.normalizeAngle(t + Math.PI / 2.0);
+        return Angle.normalize(t + Math.PI / 2.0);
     }
 
     /**
@@ -499,8 +502,13 @@ public class PositionalPod implements SwervePod {
     }
 
     @Override
-    public Pose getOffset() {
+    public Vector2D getOffset() {
         return offset;
+    }
+
+    @Override
+    public String name() {
+        return label;
     }
 
     @Override
@@ -514,6 +522,10 @@ public class PositionalPod implements SwervePod {
     }
 
     @Override
+    public Map<String, Object> debug() {
+        return Collections.singletonMap("positional", debugString());
+    }
+
     public String debugString() {
         return String.format(Locale.US,
                 "%s {positional%n  raw %.1f deg, commanded %.1f deg, slip %.2f deg%n"

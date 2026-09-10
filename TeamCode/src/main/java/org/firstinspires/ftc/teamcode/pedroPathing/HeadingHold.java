@@ -2,7 +2,8 @@ package org.firstinspires.ftc.teamcode.pedroPathing;
 
 import com.pedropathing.control.PIDFController;
 import com.pedropathing.control.PIDFCoefficients;
-import com.pedropathing.math.MathFunctions;
+import com.pedropathing.utils.Angle;
+import com.pedropathing.utils.Utils;
 
 /**
  * Closed-loop heading hold for teleop: the turn stick sets a heading RATE, and whatever setpoint
@@ -131,7 +132,7 @@ public class HeadingHold {
         }
 
         // Wrap-aware rotation rate, for the stopped gate and the stuck guard.
-        rateRadS = MathFunctions.normalizeAngleSigned(headingRad - previousHeadingRad) / dt;
+        rateRadS = Angle.normalizeSigned(headingRad - previousHeadingRad) / dt;
         previousHeadingRad = headingRad;
 
         boolean stickActive = Math.abs(stick) > STICK_ACTIVE;
@@ -146,13 +147,13 @@ public class HeadingHold {
                 pidf.reset();
             }
             if (stickActive) {
-                targetRad = MathFunctions.normalizeAngle(targetRad + stick * STICK_RATE_RAD_S * dt);
-                double lead = MathFunctions.getTurnDirection(headingRad, targetRad)
-                        * MathFunctions.getSmallestAngleDifference(headingRad, targetRad);
+                targetRad = Angle.normalize(targetRad + stick * STICK_RATE_RAD_S * dt);
+                double lead = Angle.turnDirection(headingRad, targetRad)
+                        * Angle.smallestDifference(headingRad, targetRad);
                 if (lead > MAX_LEAD_RAD) {
-                    targetRad = MathFunctions.normalizeAngle(headingRad + MAX_LEAD_RAD);
+                    targetRad = Angle.normalize(headingRad + MAX_LEAD_RAD);
                 } else if (lead < -MAX_LEAD_RAD) {
-                    targetRad = MathFunctions.normalizeAngle(headingRad - MAX_LEAD_RAD);
+                    targetRad = Angle.normalize(headingRad - MAX_LEAD_RAD);
                 }
             }
             turn = correction(headingRad);
@@ -194,10 +195,10 @@ public class HeadingHold {
 
     private double correction(double headingRad) {
         // Signed shortest-path error, so the controller never takes the long way round.
-        double error = MathFunctions.getTurnDirection(headingRad, targetRad)
-                * MathFunctions.getSmallestAngleDifference(headingRad, targetRad);
+        double error = Angle.turnDirection(headingRad, targetRad)
+                * Angle.smallestDifference(headingRad, targetRad);
         pidf.updateError(error);
-        return MathFunctions.clamp(pidf.run(), -1.0, 1.0);
+        return Utils.clamp(pidf.run(), -1.0, 1.0);
     }
 
     /** Forces the setpoint to the current heading. Call on start, or after any pose reset. */
@@ -240,7 +241,7 @@ public class HeadingHold {
 
     /** Signed error, degrees, for telemetry and the recorder. */
     public double errorDeg(double headingRad) {
-        return Math.toDegrees(MathFunctions.getTurnDirection(headingRad, targetRad)
-                * MathFunctions.getSmallestAngleDifference(headingRad, targetRad));
+        return Math.toDegrees(Angle.turnDirection(headingRad, targetRad)
+                * Angle.smallestDifference(headingRad, targetRad));
     }
 }

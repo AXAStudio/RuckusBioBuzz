@@ -1,10 +1,12 @@
 package org.firstinspires.ftc.teamcode.diagnostics.swerve;
 
 import com.pedropathing.control.PIDFCoefficients;
-import com.pedropathing.ftc.drivetrains.CoaxialPod;
-import com.pedropathing.ftc.drivetrains.SwervePod;
+import com.pedropathing.control.PIDFController;
+import com.pedropathing.math.Vector2D;
+import com.pedropathing.revhub.drivetrains.CoaxialPod;
+import com.pedropathing.revhub.drivetrains.CoaxialPodConfig;
+import com.pedropathing.revhub.drivetrains.SwervePod;
 import org.firstinspires.ftc.teamcode.pedroPathing.PositionalPod;
-import com.pedropathing.geometry.Pose;
 import com.qualcomm.robotcore.hardware.CRServo;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
@@ -250,7 +252,7 @@ public class PodCal {
         if (POSITIONAL_ENABLED && positional) {
             PositionalPod pod = new PositionalPod(hardwareMap, motorName, servoName, encoderName,
                     driveDirection, rawDegAtPos0, rawDegAtPos1, angleOffsetRad,
-                    new Pose(podX, podY), analogMin, analogMax, encoderReversed);
+                    Vector2D.cartesian(podX, podY), analogMin, analogMax, encoderReversed);
             pod.setClampMarginDeg(clampMarginDeg);
             pod.setCalibrated(posCalibrated);
             return pod;
@@ -260,21 +262,23 @@ public class PodCal {
 
     /** Builds a real Pedro pod from the current calibration. */
     public CoaxialPod toCoaxialPod(HardwareMap hardwareMap) {
-        CoaxialPod pod = new CoaxialPod(
-                hardwareMap,
-                motorName,
-                servoName,
-                encoderName,
-                new PIDFCoefficients(kP, kI, kD, kF),
-                driveDirection,
-                servoDirection,
-                angleOffsetRad,
-                new Pose(podX, podY),
-                analogMin,
-                analogMax,
-                encoderReversed);
-        pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(servoCaching);
+        CoaxialPod pod = new CoaxialPod(hardwareMap, new CoaxialPodConfig(c -> {
+            c.name.set(servoName);
+            c.motorName.set(motorName);
+            c.servoName.set(servoName);
+            c.servoEncoderName.set(encoderName);
+            // A fresh controller per build: it carries integral and derivative state.
+            c.turnController.set(new PIDFController(new PIDFCoefficients(kP, kI, kD, kF)));
+            c.driveDirection.set(driveDirection);
+            c.servoDirection.set(servoDirection);
+            c.angleOffsetRad.set(angleOffsetRad);
+            c.podOffset.set(Vector2D.cartesian(podX, podY));
+            c.analogMinVoltage.set(analogMin);
+            c.analogMaxVoltage.set(analogMax);
+            c.encoderReversed.set(encoderReversed);
+            c.motorCachingThreshold.set(0.05);
+            c.servoCachingThreshold.set(servoCaching);
+        }));
         pod.setTurnSlewPerUpdate(servoSlewPerUpdate);
         pod.setStaticFriction(kS, Math.toRadians(kSBandDeg));
         pod.setTurnIntegralSettings(kILimit, Math.toRadians(kIBandDeg), Math.toRadians(kIResetDeg));

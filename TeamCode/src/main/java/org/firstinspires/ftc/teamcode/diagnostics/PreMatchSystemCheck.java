@@ -1,16 +1,18 @@
 package org.firstinspires.ftc.teamcode.diagnostics;
 
+import com.pedropathing.drivetrain.DrivePowers;
 import com.pedropathing.follower.Follower;
-import com.pedropathing.geometry.Pose;
-import com.pedropathing.math.Vector;
+import com.pedropathing.math.Pose;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
+import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 @Autonomous(name = "PreMatchSystemCheck", group = "Diagnostics")
 public class PreMatchSystemCheck extends OpMode {
@@ -27,6 +29,9 @@ public class PreMatchSystemCheck extends OpMode {
     private static final double MAX_HEADING_DRIFT_RADIANS = Math.toRadians(18.0);
     private static final double MIN_COMMANDED_DRIVE_POWER = 0.04;
     private static final double MIN_OBSERVED_VELOCITY = 0.75;
+
+    /** Pods Swerve.debug() must report, one nested map each. */
+    private static final int EXPECTED_PODS = 4;
 
     private static final CheckStep[] STEPS = new CheckStep[] {
             new CheckStep("Settle before checks", CheckType.SETTLE, 0.0, 0.0, 0.0, 0.40),
@@ -55,6 +60,8 @@ public class PreMatchSystemCheck extends OpMode {
     private final List<String> warnings = new ArrayList<>();
 
     private Follower follower;
+    /** The sensor Pedro 2's Swerve.getVoltage() read; Pedro 3's Drivetrain has no accessor. */
+    private VoltageSensor voltageSensor;
     private Pose stepStartPose = START_POSE;
     private int stepIndex;
     private boolean running;
@@ -71,10 +78,12 @@ public class PreMatchSystemCheck extends OpMode {
     public void init() {
         try {
             follower = Constants.createFollower(hardwareMap);
-            follower.setStartingPose(START_POSE);
-            follower.update();
-            lastDebugString = follower.getDrivetrain().debugString();
-            validateDebugString(lastDebugString);
+            voltageSensor = hardwareMap.voltageSensor.iterator().next();
+            follower.setPose(START_POSE);
+            // Pedro 2's update() with no path only refreshed the pose; Pedro 3's IDLE update()
+            // writes every servo. Keep init actuator-silent.
+            follower.localizer.update();
+            validateDebug(follower.drivetrain.debug());
         } catch (RuntimeException e) {
             fatalInitError = e.getClass().getSimpleName() + ": " + e.getMessage();
             addFailure("Follower failed to initialize. Check hardware names and Pedro constants.");
@@ -86,9 +95,8 @@ public class PreMatchSystemCheck extends OpMode {
     @Override
     public void init_loop() {
         if (follower != null) {
-            follower.update();
-            lastDebugString = follower.getDrivetrain().debugString();
-            validateDebugString(lastDebugString);
+            follower.localizer.update();
+            validateDebug(follower.drivetrain.debug());
         }
 
         updateTelemetry();
@@ -101,9 +109,8 @@ public class PreMatchSystemCheck extends OpMode {
             return;
         }
 
-        follower.setStartingPose(START_POSE);
-        follower.startTeleopDrive(true);
-        follower.setTeleOpDrive(0.0, 0.0, 0.0, true);
+        follower.setPose(START_POSE);
+        follower.manual(DrivePowers.zero());
         follower.update();
 
         checkBatteryVoltage();
@@ -123,7 +130,7 @@ public class PreMatchSystemCheck extends OpMode {
         }
 
         CheckStep step = STEPS[stepIndex];
-        follower.setTeleOpDrive(step.forward, step.strafe, step.turn, true);
+        follower.manual(new DrivePowers(step.forward, step.strafe, step.turn));
         follower.update();
 
         sampleStepHealth();
@@ -153,7 +160,7 @@ public class PreMatchSystemCheck extends OpMode {
     }
 
     private void beginStep() {
-        stepStartPose = follower.getPose();
+        stepStartPose = follower.pose();
         maxVelocityThisStep = 0.0;
         maxDrivePowerThisStep = 0.0;
         maxServoPowerThisStep = 0.0;
@@ -163,10 +170,10 @@ public class PreMatchSystemCheck extends OpMode {
 
     private void finishStep(CheckStep step) {
         int failureCountBeforeStep = failures.size();
-        Pose endPose = follower.getPose();
-        double dx = endPose.getX() - stepStartPose.getX();
-        double dy = endPose.getY() - stepStartPose.getY();
-        double headingDelta = angleDelta(endPose.getHeading(), stepStartPose.getHeading());
+        Pose endPose = follower.pose();
+        double dx = endPose.x() - stepStartPose.x();
+        double dy = endPose.y() - stepStartPose.y();
+        double headingDelta = angleDelta(endPose.heading(), stepStartPose.heading());
 
         validatePose(endPose);
 
@@ -251,21 +258,19 @@ public class PreMatchSystemCheck extends OpMode {
     }
 
     private void sampleStepHealth() {
-        Pose pose = follower.getPose();
+        Pose pose = follower.pose();
         validatePose(pose);
 
-        Vector velocity = follower.getVelocity();
-        if (velocity != null && isFinite(velocity.getMagnitude())) {
-            maxVelocityThisStep = Math.max(maxVelocityThisStep, velocity.getMagnitude());
+        double speed = follower.velocity().toVector2D().magnitude();
+        if (isFinite(speed)) {
+            maxVelocityThisStep = Math.max(maxVelocityThisStep, speed);
         }
 
-        lastDebugString = follower.getDrivetrain().debugString();
-        validateDebugString(lastDebugString);
+        Map<String, Object> debug = follower.drivetrain.debug();
+        validateDebug(debug);
 
-        maxDrivePowerThisStep = Math.max(maxDrivePowerThisStep,
-                maxAbsDebugValue(lastDebugString, "drive Power = "));
-        maxServoPowerThisStep = Math.max(maxServoPowerThisStep,
-                maxAbsDebugValue(lastDebugString, "servo Power = "));
+        maxDrivePowerThisStep = Math.max(maxDrivePowerThisStep, maxAbsPodValue(debug, "drivePower"));
+        maxServoPowerThisStep = Math.max(maxServoPowerThisStep, maxAbsPodValue(debug, "servoPower"));
     }
 
     private void checkBatteryVoltage() {
@@ -274,7 +279,7 @@ public class PreMatchSystemCheck extends OpMode {
         }
 
         batteryChecked = true;
-        double voltage = follower.getDrivetrain().getVoltage();
+        double voltage = readVoltage();
         if (!isFinite(voltage)) {
             addFailure("Battery voltage reading is invalid.");
         } else if (voltage < LOW_BATTERY_WARNING_VOLTS) {
@@ -282,30 +287,76 @@ public class PreMatchSystemCheck extends OpMode {
         }
     }
 
+    private double readVoltage() {
+        return voltageSensor == null ? Double.NaN : voltageSensor.getVoltage();
+    }
+
     private void validatePose(Pose pose) {
         if (pose == null
-                || !isFinite(pose.getX())
-                || !isFinite(pose.getY())
-                || !isFinite(pose.getHeading())) {
+                || !isFinite(pose.x())
+                || !isFinite(pose.y())
+                || !isFinite(pose.heading())) {
             addFailure("Follower/localizer returned an invalid pose.");
         }
     }
 
-    private void validateDebugString(String debugString) {
-        if (debugString == null || debugString.length() == 0) {
-            addFailure("Pedro drivetrain debug string is empty.");
+    /**
+     * Pedro 2 exposed a debug STRING and this check parsed it ("pod0".."pod3", "drive Power = ").
+     * Pedro 3's Drivetrain.debug() is a map - scalar mixer fields plus one nested map per pod,
+     * keyed by the pod's configured name - so the same checks run on the map directly.
+     */
+    private void validateDebug(Map<String, Object> debug) {
+        lastDebugString = debug == null ? "" : debug.toString();
+
+        if (debug == null || debug.isEmpty()) {
+            addFailure("Pedro drivetrain debug output is empty.");
             return;
         }
 
-        if (debugString.contains("NaN") || debugString.contains("Infinity")) {
-            addFailure("Pedro drivetrain debug string contains invalid numeric values.");
+        if (!allFinite(debug)) {
+            addFailure("Pedro drivetrain debug output contains invalid numeric values.");
         }
 
-        for (int i = 0; i < 4; i++) {
-            if (!debugString.contains("pod" + i)) {
-                addFailure("Pedro drivetrain debug is missing pod" + i + ".");
+        int pods = 0;
+        for (Object value : debug.values()) {
+            if (value instanceof Map) {
+                pods++;
             }
         }
+        if (pods != EXPECTED_PODS) {
+            addFailure("Pedro drivetrain debug reports " + pods + " pods, expected "
+                    + EXPECTED_PODS + ".");
+        }
+    }
+
+    private boolean allFinite(Map<?, ?> map) {
+        for (Object value : map.values()) {
+            if (value instanceof Map) {
+                if (!allFinite((Map<?, ?>) value)) {
+                    return false;
+                }
+            } else if (value instanceof Number && !isFinite(((Number) value).doubleValue())) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private double maxAbsPodValue(Map<String, Object> debug, String key) {
+        double max = 0.0;
+        for (Object value : debug.values()) {
+            if (!(value instanceof Map)) {
+                continue;
+            }
+            Object field = ((Map<?, ?>) value).get(key);
+            if (field instanceof Number) {
+                double v = ((Number) field).doubleValue();
+                if (isFinite(v)) {
+                    max = Math.max(max, Math.abs(v));
+                }
+            }
+        }
+        return max;
     }
 
     private void updateTelemetry() {
@@ -326,14 +377,14 @@ public class PreMatchSystemCheck extends OpMode {
         }
 
         if (follower != null) {
-            Pose pose = follower.getPose();
-            telemetry.addData("X Position (in)", "%.2f", pose.getX());
-            telemetry.addData("Y Position (in)", "%.2f", pose.getY());
-            telemetry.addData("Heading (deg)", "%.1f", Math.toDegrees(pose.getHeading()));
+            Pose pose = follower.pose();
+            telemetry.addData("X Position (in)", "%.2f", pose.x());
+            telemetry.addData("Y Position (in)", "%.2f", pose.y());
+            telemetry.addData("Heading (deg)", "%.1f", Math.toDegrees(pose.heading()));
             telemetry.addData("Max Velocity This Step", "%.2f", maxVelocityThisStep);
             telemetry.addData("Max Drive Power This Step", "%.2f", maxDrivePowerThisStep);
             telemetry.addData("Max Servo Power This Step", "%.2f", maxServoPowerThisStep);
-            telemetry.addData("Battery (V)", "%.2f", follower.getDrivetrain().getVoltage());
+            telemetry.addData("Battery (V)", "%.2f", readVoltage());
         }
 
         addIssueTelemetry("Failures", failures);
@@ -379,8 +430,7 @@ public class PreMatchSystemCheck extends OpMode {
             return;
         }
 
-        follower.startTeleopDrive(true);
-        follower.setTeleOpDrive(0.0, 0.0, 0.0, true);
+        follower.manual(DrivePowers.zero());
         follower.update();
     }
 
@@ -394,49 +444,6 @@ public class PreMatchSystemCheck extends OpMode {
         if (!warnings.contains(issue)) {
             warnings.add(issue);
         }
-    }
-
-    private double maxAbsDebugValue(String debugString, String label) {
-        double max = 0.0;
-        int searchStart = 0;
-
-        while (debugString != null) {
-            int labelIndex = debugString.indexOf(label, searchStart);
-            if (labelIndex < 0) {
-                return max;
-            }
-
-            int valueStart = labelIndex + label.length();
-            int valueEnd = valueStart;
-            while (valueEnd < debugString.length()
-                    && isNumberCharacter(debugString.charAt(valueEnd))) {
-                valueEnd++;
-            }
-
-            if (valueEnd > valueStart) {
-                try {
-                    double value = Double.parseDouble(debugString.substring(valueStart, valueEnd));
-                    if (isFinite(value)) {
-                        max = Math.max(max, Math.abs(value));
-                    }
-                } catch (NumberFormatException ignored) {
-                    addFailure("Could not parse Pedro drivetrain debug output.");
-                }
-            }
-
-            searchStart = valueEnd + 1;
-        }
-
-        return max;
-    }
-
-    private boolean isNumberCharacter(char value) {
-        return (value >= '0' && value <= '9')
-                || value == '-'
-                || value == '+'
-                || value == '.'
-                || value == 'E'
-                || value == 'e';
     }
 
     private double angleDelta(double current, double previous) {

@@ -2,13 +2,16 @@ package org.firstinspires.ftc.teamcode.diagnostics.swerve;
 
 import com.pedropathing.control.PIDFCoefficients;
 import com.pedropathing.control.PIDFController;
-import com.pedropathing.ftc.drivetrains.CoaxialPod;
-import com.pedropathing.ftc.drivetrains.Swerve;
-import com.pedropathing.ftc.drivetrains.SwervePod;
+import com.pedropathing.revhub.drivetrains.CoaxialPod;
+import com.pedropathing.revhub.drivetrains.Swerve;
+import com.pedropathing.revhub.drivetrains.SwervePod;
 import org.firstinspires.ftc.teamcode.pedroPathing.PositionalPod;
 import org.firstinspires.ftc.teamcode.pedroPathing.SwerveDrivetrainConstants;
-import com.pedropathing.ftc.drivetrains.SwerveConstants;
-import com.pedropathing.math.MathFunctions;
+import com.pedropathing.revhub.drivetrains.SwerveConfig;
+import com.pedropathing.algorithm.ForesightConfig;
+import com.pedropathing.drivetrain.DrivePowers;
+import com.pedropathing.utils.Angle;
+import com.pedropathing.utils.Utils;
 import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
 import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.hardware.lynx.LynxNackException;
@@ -96,8 +99,8 @@ public class SwerveBringUp extends OpMode {
     private static final long DRIVE_WATCHDOG_MS = 400;
 
     /**
-     * Must match the {@link SwerveConstants} used to build the drivetrain, because the visualizer
-     * reproduces {@code Swerve.arcadeDrive}'s kinematics to show the commanded pod state.
+     * Must match the {@link SwerveConfig} used to build the drivetrain, because the visualizer
+     * reproduces {@code Swerve.applyDrive}'s kinematics to show the commanded pod state.
      */
     private static final double SWERVE_EPSILON = 0.05;
 
@@ -605,7 +608,7 @@ public class SwerveBringUp extends OpMode {
      * frame; the box guard runs on the raw Pinpoint pose regardless and breaks the follower the
      * moment it strays past the fence.
      *
-     * <p>Gain changes go through pedroPidf, which mutates the shared followerConstants and
+     * <p>Gain changes go through pedroPidf, which mutates the shared foresightConfig and
      * throws the follower away - the next pedroStart rebuilds from clean state, so no stale
      * internal copy of a coefficient can survive into a measurement.
      */
@@ -844,15 +847,17 @@ public class SwerveBringUp extends OpMode {
             // constants object so the two can never quietly disagree. Configuring does NOT
             // reset the pose - continuity across OpMode restarts is what makes a saved box
             // survive a redeploy. resetImu is the deliberate way to re-origin.
-            pinpoint.setOffsets(
-                    SwerveDrivetrainConstants.localizerConstants.forwardPodY,
-                    SwerveDrivetrainConstants.localizerConstants.strafePodX,
-                    SwerveDrivetrainConstants.localizerConstants.distanceUnit);
-            pinpoint.setEncoderResolution(
-                    SwerveDrivetrainConstants.localizerConstants.encoderResolution);
-            pinpoint.setEncoderDirections(
-                    SwerveDrivetrainConstants.localizerConstants.forwardEncoderDirection,
-                    SwerveDrivetrainConstants.localizerConstants.strafeEncoderDirection);
+            // Mirrors PinpointLocalizer's constructor, minus its reset().
+            com.pedropathing.revhub.localizers.PinpointConfig pc =
+                    SwerveDrivetrainConstants.pinpointConfig;
+            pinpoint.setOffsets(pc.xPodOffset.get(), pc.yPodOffset.get(), pc.offsetUnits.get());
+            if (pc.ticksPerUnit.get().isPresent()) {
+                pinpoint.setEncoderResolution(pc.ticksPerUnit.get().getAsDouble(),
+                        pc.encoderResolutionUnit.get());
+            } else {
+                pinpoint.setEncoderResolution(pc.podType.get());
+            }
+            pinpoint.setEncoderDirections(pc.xPodDirection.get(), pc.yPodDirection.get());
             pinpoint.update();
         } catch (RuntimeException e) {
             pinpoint = null;
@@ -898,6 +903,7 @@ public class SwerveBringUp extends OpMode {
     @Override
     public void stop() {
         allStop();
+        restorePedroSpeedCap();
         SwerveBench.INSTANCE.markStopped();
     }
 
@@ -1259,7 +1265,7 @@ public class SwerveBringUp extends OpMode {
                     //     last written - that is a reset, not a robot that drove home;
                     //   * there is no witness at all (a box file written before this check
                     //     existed), in which case the frame cannot be verified.
-                    double absHeading = Math.abs(MathFunctions.normalizeAngleSigned(headingRad));
+                    double absHeading = Math.abs(Angle.normalizeSigned(headingRad));
                     boolean atOrigin = Math.abs(poseXIn) < 1.0 && Math.abs(poseYIn) < 1.0
                             && absHeading < Math.toRadians(2.0);
                     boolean witnessFar = !boxWitnessValid
@@ -1511,21 +1517,23 @@ public class SwerveBringUp extends OpMode {
             }
             pods = built;
 
-            SwerveConstants sc = new SwerveConstants()
-                    .velocity(73.9)
+            SwerveConfig sc = new SwerveConfig(c -> {
+                    c.voltageCompensation.set(false);
                     // X_LOCK now coexists with heading hold. It used to be disabled under hold
                     // because the heading PID output dipping under epsilon toggled the X on and
                     // off - but the hold phase machine passes EXACTLY zero rotation once it
                     // decides to rest, so the X engages once (after the Swerve-level delay) and
                     // stays. In RESTING the heading PIDF is silent by design: the X owns the
                     // hold and is never overridden.
-                    .zeroPowerBehavior(xLock
-                            ? SwerveConstants.ZeroPowerBehavior.X_LOCK
-                            : SwerveConstants.ZeroPowerBehavior.IGNORE_ANGLE_CHANGES)
-                    .useBrakeModeInTeleOp(false)
-                    // Set explicitly so they cannot drift from the visualizer's copy of the math.
-                    .maxPower(SWERVE_MAX_POWER)
-                    .epsilon(SWERVE_EPSILON);
+                    c.zeroPowerBehavior.set(xLock
+                            ? SwerveConfig.ZeroPowerBehavior.X_LOCK
+                            : SwerveConfig.ZeroPowerBehavior.IGNORE_ANGLE_CHANGES);
+                    c.manualBrakeMode.set(false);
+                    // Set explicitly so it cannot drift from the visualizer's copy of the math.
+                    // SWERVE_MAX_POWER has no setting in v3: the mixer always normalises to 1.0,
+                    // which is the value it holds.
+                    c.epsilon.set(SWERVE_EPSILON);
+            });
             // Pedro's builder passes pods as leftFront, rightFront, leftBack, rightBack; each pod
             // carries its own offset so ordering only affects debug output.
             swerve = new Swerve(hardwareMap, sc, pods[2], pods[1], pods[3], pods[0]);
@@ -1551,7 +1559,7 @@ public class SwerveBringUp extends OpMode {
      */
     /** Drives the bench drivetrain and notes that every pod went through {@code move()}. */
     private void arcade(double forward, double strafe, double rotation) {
-        swerve.arcadeDrive(forward, strafe, rotation);
+        swerve.applyDrive(new DrivePowers(forward, strafe, rotation));
         for (int i = 0; i < POD_COUNT; i++) {
             podMoved[i] = true;
         }
@@ -1655,7 +1663,7 @@ public class SwerveBringUp extends OpMode {
         // Leaving FOLLOW must break the follower - its pods are separate objects the bench's
         // allStop cannot reach, and an abandoned holdPoint would keep servoing forever.
         if (mode == Mode.FOLLOW && next != Mode.FOLLOW && pedro != null) {
-            pedro.breakFollowing();
+            pedroBreak();
         }
         // A wiring scan forces every turn servo to Direction.FORWARD so "positive power" is
         // unambiguous. Only finishWireScan restored them, so aborting a scan (STOP, another
@@ -2173,8 +2181,8 @@ public class SwerveBringUp extends OpMode {
             return;
         }
 
-        calPos += MathFunctions.clamp(calTargetPos - calPos, -CAL_STEP, CAL_STEP);
-        posServos[i].setPosition(MathFunctions.clamp(calPos, 0.0, 1.0));
+        calPos += Utils.clamp(calTargetPos - calPos, -CAL_STEP, CAL_STEP);
+        posServos[i].setPosition(Utils.clamp(calPos, 0.0, 1.0));
         calSteps++;
     }
 
@@ -2208,13 +2216,13 @@ public class SwerveBringUp extends OpMode {
      * {@code VectorCalculator.getHeadingVector} computes it.
      */
     private double headingCorrection() {
-        double direction = MathFunctions.getTurnDirection(headingRad, headingTargetRad);
+        double direction = Angle.turnDirection(headingRad, headingTargetRad);
         double error = direction
-                * MathFunctions.getSmallestAngleDifference(headingRad, headingTargetRad);
+                * Angle.smallestDifference(headingRad, headingTargetRad);
 
         headingPidf.updateFeedForwardInput(direction);
         headingPidf.updateError(error);
-        return MathFunctions.clamp(headingPidf.run(), -SWERVE_MAX_POWER, SWERVE_MAX_POWER);
+        return Utils.clamp(headingPidf.run(), -SWERVE_MAX_POWER, SWERVE_MAX_POWER);
     }
 
     // ---------------------------------------------------------------- heading tuning
@@ -2240,7 +2248,7 @@ public class SwerveBringUp extends OpMode {
             return;
         }
 
-        double error = MathFunctions.normalizeAngleSigned(headingTargetRad - headingRad);
+        double error = Angle.normalizeSigned(headingTargetRad - headingRad);
 
         if (!headingClosedLoop) {
             // Open loop: spin away from the target so the closed-loop phase starts displaced.
@@ -2388,7 +2396,7 @@ public class SwerveBringUp extends OpMode {
             double rateDt = Math.min(0.25, Math.max(1e-3, headingRateTimer.seconds()));
             headingRateTimer.reset();
             if (!Double.isNaN(headingPrevForRate)) {
-                headingRateRadS = MathFunctions.normalizeAngleSigned(
+                headingRateRadS = Angle.normalizeSigned(
                         headingRad - headingPrevForRate) / rateDt;
             }
             headingPrevForRate = headingRad;
@@ -2396,7 +2404,7 @@ public class SwerveBringUp extends OpMode {
             boolean translating = Math.abs(driveForward) >= SWERVE_EPSILON
                     || Math.abs(driveStrafe) >= SWERVE_EPSILON;
             double headingAbsErr =
-                    MathFunctions.getSmallestAngleDifference(headingRad, headingTargetRad);
+                    Angle.smallestDifference(headingRad, headingTargetRad);
 
             if (stickActive) {
                 // Driver input overrides any pending rotate-to-target.
@@ -2417,7 +2425,7 @@ public class SwerveBringUp extends OpMode {
                 }
 
                 if (stickActive) {
-                    headingTargetRad = MathFunctions.normalizeAngle(
+                    headingTargetRad = Angle.normalize(
                             headingTargetRad + driveTurn * HEADING_STICK_RATE * dt);
 
                     // Never let the setpoint lead further than the controller can chase. Past
@@ -2425,12 +2433,12 @@ public class SwerveBringUp extends OpMode {
                     // mid-turn. The lead cap is also what makes the sweep rate battery-proof:
                     // the setpoint runs ahead until the cap, the output saturates, and the
                     // robot turns at whatever its true maximum is today.
-                    double lead = MathFunctions.getTurnDirection(headingRad, headingTargetRad)
-                            * MathFunctions.getSmallestAngleDifference(headingRad, headingTargetRad);
+                    double lead = Angle.turnDirection(headingRad, headingTargetRad)
+                            * Angle.smallestDifference(headingRad, headingTargetRad);
                     if (lead > HEADING_MAX_LEAD) {
-                        headingTargetRad = MathFunctions.normalizeAngle(headingRad + HEADING_MAX_LEAD);
+                        headingTargetRad = Angle.normalize(headingRad + HEADING_MAX_LEAD);
                     } else if (lead < -HEADING_MAX_LEAD) {
-                        headingTargetRad = MathFunctions.normalizeAngle(headingRad - HEADING_MAX_LEAD);
+                        headingTargetRad = Angle.normalize(headingRad - HEADING_MAX_LEAD);
                     }
                 }
 
@@ -2449,7 +2457,7 @@ public class SwerveBringUp extends OpMode {
                     // genuinely zero rotation inside the deadband, and skip the epsilon shift
                     // while the chassis is already rotating fast - a moving chassis is past
                     // stiction and the raw PID owns the approach.
-                    double dir = MathFunctions.getTurnDirection(headingRad, headingTargetRad);
+                    double dir = Angle.turnDirection(headingRad, headingTargetRad);
                     if (headingAbsErr > HEADING_TRIM_ENGAGE_RAD) {
                         headingTrimEngaged = true;
                     } else if (headingAbsErr < HEADING_TRIM_RELEASE_RAD) {
@@ -2585,9 +2593,51 @@ public class SwerveBringUp extends OpMode {
     private void ensurePedro() {
         if (pedro == null) {
             pedro = SwerveDrivetrainConstants.createFollower(hardwareMap);
-            pedro.setStartingPose(new com.pedropathing.geometry.Pose(poseXIn, poseYIn, headingRad));
+            pedro.setPose(new com.pedropathing.math.Pose(poseXIn, poseYIn, headingRad));
             pedro.update();
         }
+    }
+
+    /**
+     * 2.1.2's breakFollowing(). v3's Follower.stop() only changes mode - the drivetrain hears
+     * about it on the next update(), which runFollowMode stops calling the moment it leaves
+     * FOLLOW - so the drivetrain is stopped here directly to release the pods now.
+     */
+    private void pedroBreak() {
+        pedro.stop();
+        pedro.drivetrain.stop();
+        restorePedroSpeedCap();
+    }
+
+    /**
+     * The bench's "power" argument. v3 has no follower max power; the closest control is
+     * Foresight's maxPathSpeed, a cap on target path SPEED as a fraction of the max achievable
+     * velocity. It lives on the shared static config, so it is put back whenever the follower is
+     * broken off or the OpMode stops - otherwise a bench cap would carry into the next auto.
+     */
+    private double pedroSavedMaxPathSpeed = Double.NaN;
+
+    private void setPedroSpeedCap(double fraction) {
+        ForesightConfig fc = SwerveDrivetrainConstants.foresightConfig;
+        if (Double.isNaN(pedroSavedMaxPathSpeed)) {
+            pedroSavedMaxPathSpeed = fc.maxPathSpeed.get();
+        }
+        fc.maxPathSpeed.set(fraction);
+    }
+
+    private void restorePedroSpeedCap() {
+        if (!Double.isNaN(pedroSavedMaxPathSpeed)) {
+            SwerveDrivetrainConstants.foresightConfig.maxPathSpeed.set(pedroSavedMaxPathSpeed);
+            pedroSavedMaxPathSpeed = Double.NaN;
+        }
+    }
+
+    /** Distance to the closest point on the path, when the algorithm is Foresight. */
+    private double pedroTranslationalError() {
+        com.pedropathing.algorithm.Algorithm a = pedro.algorithm();
+        return a instanceof com.pedropathing.algorithm.Foresight
+                ? ((com.pedropathing.algorithm.Foresight) a).translationalError()
+                : Double.NaN;
     }
 
     private void runFollowMode() {
@@ -2603,7 +2653,7 @@ public class SwerveBringUp extends OpMode {
         // actively arrests the momentum, and only once that has had a second to work does the
         // mode drop to IDLE.
         if (!poseOk && boxValid) {
-            pedro.breakFollowing();
+            pedroBreak();
             allStop();
             setMode(Mode.IDLE);
             message = "Pose unreadable while following - broken off and stopped.";
@@ -2618,11 +2668,11 @@ public class SwerveBringUp extends OpMode {
                         Math.min(boxMaxX - PEDRO_TARGET_MARGIN_IN, poseXIn));
                 double hy = Math.max(boxMinY + PEDRO_TARGET_MARGIN_IN,
                         Math.min(boxMaxY - PEDRO_TARGET_MARGIN_IN, poseYIn));
-                pedro.holdPoint(new com.pedropathing.geometry.Pose(hx, hy, headingRad));
+                pedro.hold(new com.pedropathing.math.Pose(hx, hy, headingRad));
                 pedroJob = "BREACH-recovery";
                 message = "Follower hit the fence - braking back inside.";
             } else if (pedroBreachTimer.seconds() > 1.5) {
-                pedro.breakFollowing();
+                pedroBreak();
                 allStop();
                 setMode(Mode.IDLE);
                 message = "Fence breach handled; follower stopped.";
@@ -2631,7 +2681,7 @@ public class SwerveBringUp extends OpMode {
         } else if (pedroBreach && pedroBreachTimer.seconds() > 1.0) {
             // Back inside and settled: stop cleanly rather than resuming the old job.
             pedroBreach = false;
-            pedro.breakFollowing();
+            pedroBreak();
             setMode(Mode.IDLE);
             message = "Recovered inside the box; follower stopped.";
             return;
@@ -2854,17 +2904,17 @@ public class SwerveBringUp extends OpMode {
                 // interleaved inside one session instead of across a redeploy. Absent
                 // parameters are left alone.
                 if (cmd.get("taper") != null) {
-                    com.pedropathing.ftc.drivetrains.Swerve.setEpsilonTaper(
+                    com.pedropathing.revhub.drivetrains.Swerve.setEpsilonTaper(
                             Boolean.parseBoolean(cmd.get("taper")));
                 }
                 if (cmd.get("slew") != null) {
-                    com.pedropathing.ftc.drivetrains.Swerve.setDemandSlewDegPerSec(
+                    com.pedropathing.revhub.drivetrains.Swerve.setDemandSlewDegPerSec(
                             doubleArg(cmd, "slew", 300));
                 }
                 message = String.format(Locale.US,
                         "Mixer: epsilon taper %s, demand slew %.0f deg/s.",
-                        com.pedropathing.ftc.drivetrains.Swerve.getEpsilonTaper() ? "on" : "off",
-                        com.pedropathing.ftc.drivetrains.Swerve.getDemandSlewDegPerSec());
+                        com.pedropathing.revhub.drivetrains.Swerve.getEpsilonTaper() ? "on" : "off",
+                        com.pedropathing.revhub.drivetrains.Swerve.getDemandSlewDegPerSec());
                 break;
             }
 
@@ -2885,7 +2935,7 @@ public class SwerveBringUp extends OpMode {
                 }
                 String[] segTexts = pts.split("\\|");
                 String[] headTexts = (cmd.get("head") == null ? "" : cmd.get("head")).split("\\|");
-                List<com.pedropathing.geometry.Pose[]> segs = new ArrayList<>();
+                List<com.pedropathing.math.Pose[]> segs = new ArrayList<>();
                 boolean bad = false;
                 for (String segText : segTexts) {
                     String[] ptTexts = segText.split(";");
@@ -2895,8 +2945,8 @@ public class SwerveBringUp extends OpMode {
                         bad = true;
                         break;
                     }
-                    com.pedropathing.geometry.Pose[] cps =
-                            new com.pedropathing.geometry.Pose[4];
+                    com.pedropathing.math.Pose[] cps =
+                            new com.pedropathing.math.Pose[4];
                     for (int i = 0; i < 4; i++) {
                         String[] xy = ptTexts[i].split(",");
                         double px = Double.parseDouble(xy[0]);
@@ -2909,7 +2959,7 @@ public class SwerveBringUp extends OpMode {
                             bad = true;
                             break;
                         }
-                        cps[i] = new com.pedropathing.geometry.Pose(px, py);
+                        cps[i] = new com.pedropathing.math.Pose(px, py);
                     }
                     if (bad) {
                         break;
@@ -2919,31 +2969,31 @@ public class SwerveBringUp extends OpMode {
                 if (bad) {
                     break;
                 }
-                com.pedropathing.paths.PathBuilder pb =
-                        new com.pedropathing.paths.PathBuilder(pedro);
+                com.pedropathing.paths.Path[] chain =
+                        new com.pedropathing.paths.Path[segs.size()];
                 for (int i = 0; i < segs.size(); i++) {
-                    com.pedropathing.geometry.Pose[] c = segs.get(i);
-                    pb = pb.addPath(new com.pedropathing.geometry.BezierCurve(
-                            c[0], c[1], c[2], c[3]));
+                    com.pedropathing.math.Pose[] c = segs.get(i);
+                    com.pedropathing.paths.Path seg =
+                            com.pedropathing.api.Paths.curve(c[0], c[1], c[2], c[3]);
                     String head = i < headTexts.length ? headTexts[i] : "tangent";
                     if (head.startsWith("constant")) {
                         double deg = head.contains(":")
                                 ? Double.parseDouble(head.substring(head.indexOf(':') + 1))
                                 : Math.toDegrees(headingRad);
-                        pb = pb.setConstantHeadingInterpolation(Math.toRadians(deg));
+                        seg = seg.constant(Math.toRadians(deg));
                     } else if (head.startsWith("linear")) {
                         String[] parts = head.split(":");
-                        pb = pb.setLinearHeadingInterpolation(
+                        seg = seg.linear(
                                 Math.toRadians(Double.parseDouble(parts[1])),
                                 Math.toRadians(Double.parseDouble(parts[2])));
                     } else {
-                        pb = pb.setHeadingInterpolation(
-                                com.pedropathing.paths.HeadingInterpolator.tangent);
+                        seg = seg.tangent();
                     }
+                    chain[i] = seg;
                 }
                 double chainPower = doubleArg(cmd, "power", 0.5);
-                pedro.setMaxPower(Math.max(0.05, Math.min(1.0, chainPower)));
-                pedro.followPath(pb.build(), true);
+                setPedroSpeedCap(Math.max(0.05, Math.min(1.0, chainPower)));
+                pedro.follow(com.pedropathing.api.Paths.path(chain));
                 pedroJob = "chain";
                 message = String.format(Locale.US, "Following a %d-segment chain at %.2f.",
                         segs.size(), chainPower);
@@ -2964,11 +3014,11 @@ public class SwerveBringUp extends OpMode {
             case "setPidf": {
                 // Robot-wide schedule tuning rides along: floor (fraction), velstart (deg/s),
                 // gate (deg). NaN (absent) leaves a value untouched.
-                com.pedropathing.ftc.drivetrains.CoaxialPod.setScheduleTuning(
+                com.pedropathing.revhub.drivetrains.CoaxialPod.setScheduleTuning(
                         doubleArg(cmd, "floor", Double.NaN),
                         Math.toRadians(doubleArg(cmd, "velstart", Double.NaN)),
                         Math.toRadians(doubleArg(cmd, "gate", Double.NaN)));
-                com.pedropathing.ftc.drivetrains.CoaxialPod.setScheduleRamp(
+                com.pedropathing.revhub.drivetrains.CoaxialPod.setScheduleRamp(
                         doubleArg(cmd, "ramp", Double.NaN));
                 PodCal c = cals[selected];
                 if ("all".equals(cmd.get("scope"))) {
@@ -3083,7 +3133,7 @@ public class SwerveBringUp extends OpMode {
                 }
                 allStop();
                 double before = Math.toDegrees(cals[selected].rawAngleRad(volts[selected]));
-                calPos = MathFunctions.clamp(doubleArg(cmd, "pos", 0.5), 0.0, 1.0);
+                calPos = Utils.clamp(doubleArg(cmd, "pos", 0.5), 0.0, 1.0);
                 posServos[selected].setPosition(calPos);
                 calHomed = true;
                 calLastRaw = before;
@@ -3111,7 +3161,7 @@ public class SwerveBringUp extends OpMode {
                 // calPos is carried forward from calHome and each completed walk, so it tracks
                 // where the servo actually is rather than what the controller last cached.
                 // No ensurePods() here: see runCalPos.
-                calTargetPos = MathFunctions.clamp(doubleArg(cmd, "pos", 0.5), 0.0, 1.0);
+                calTargetPos = Utils.clamp(doubleArg(cmd, "pos", 0.5), 0.0, 1.0);
                 calStalls = 0;
                 calSteps = 0;
                 calLastRaw = Math.toDegrees(cals[selected].rawAngleRad(volts[selected]));
@@ -3193,8 +3243,8 @@ public class SwerveBringUp extends OpMode {
             case "rawServo": {
                 // Open-loop drive at a known power, which is how breakaway, deadband and max slew
                 // rate get measured. Reuses the jog path so the same timeout protects it.
-                double pow = MathFunctions.clamp(doubleArg(cmd, "pow", 0), -1.0, 1.0);
-                double sec = MathFunctions.clamp(doubleArg(cmd, "sec", 0.5), 0.0, 5.0);
+                double pow = Utils.clamp(doubleArg(cmd, "pow", 0), -1.0, 1.0);
+                double sec = Utils.clamp(doubleArg(cmd, "sec", 0.5), 0.0, 5.0);
                 beginJog(pow, sec, String.format(Locale.US,
                         "Pod %d open loop at %.3f for %.2fs.", selected, pow, sec));
                 break;
@@ -3230,7 +3280,7 @@ public class SwerveBringUp extends OpMode {
                     message = "No heading from the Pinpoint.";
                     break;
                 }
-                headingTargetRad = MathFunctions.normalizeAngle(
+                headingTargetRad = Angle.normalize(
                         headingRad + Math.toRadians(doubleArg(cmd, "deg", 90)));
                 headingPidf.reset();
                 headingHold = true;
@@ -3316,6 +3366,16 @@ public class SwerveBringUp extends OpMode {
                             + "Mark the box first.";
                     break;
                 }
+                String act = cmd.get("activate");
+                if (act != null && !"all".equals(act)) {
+                    // 2.1.2 could switch individual follower PIDFs off. Foresight has no such
+                    // switch, so a single-term request is refused rather than silently run with
+                    // every term on.
+                    message = "activate=" + act + " is not available on Pedro 3 (Foresight has "
+                            + "no per-term switch). Use activate=all.";
+                    break;
+                }
+                act = "all";
                 pedroBreach = false;
                 try {
                     ensurePedro();
@@ -3324,23 +3384,8 @@ public class SwerveBringUp extends OpMode {
                     message = "Follower build failed: " + e.getMessage();
                     break;
                 }
-                String act = cmd.get("activate");
-                pedro.deactivateAllPIDFs();
-                if ("translational".equals(act)) {
-                    pedro.activateTranslational();
-                } else if ("heading".equals(act)) {
-                    pedro.activateHeading();
-                } else if ("drive".equals(act)) {
-                    pedro.activateDrive();
-                } else if ("transheading".equals(act)) {
-                    pedro.activateTranslational();
-                    pedro.activateHeading();
-                } else {
-                    pedro.activateAllPIDFs();
-                    act = "all";
-                }
                 setMode(Mode.FOLLOW);
-                pedro.holdPoint(pedro.getPose());
+                pedro.hold(pedro.pose());
                 pedroJob = "hold";
                 message = "Pedro follower active: " + act + ".";
                 break;
@@ -3353,21 +3398,20 @@ public class SwerveBringUp extends OpMode {
                 double dx = doubleArg(cmd, "dx", 20);
                 double dy = doubleArg(cmd, "dy", 0);
                 double power = doubleArg(cmd, "power", 0.5);
-                com.pedropathing.geometry.Pose cur = pedro.getPose();
-                com.pedropathing.geometry.Pose tgt = new com.pedropathing.geometry.Pose(
-                        cur.getX() + dx, cur.getY() + dy, cur.getHeading());
-                if (!pedroPointOk(tgt.getX(), tgt.getY())) {
+                com.pedropathing.math.Pose cur = pedro.pose();
+                com.pedropathing.math.Pose tgt = new com.pedropathing.math.Pose(
+                        cur.x() + dx, cur.y() + dy, cur.heading());
+                if (!pedroPointOk(tgt.x(), tgt.y())) {
                     message = String.format(Locale.US,
                             "REFUSED: line target (%.1f, %.1f) is outside the box minus %.0f in "
                                     + "margin. Nothing moved.",
-                            tgt.getX(), tgt.getY(), PEDRO_TARGET_MARGIN_IN);
+                            tgt.x(), tgt.y(), PEDRO_TARGET_MARGIN_IN);
                     break;
                 }
-                com.pedropathing.paths.Path p = new com.pedropathing.paths.Path(
-                        new com.pedropathing.geometry.BezierLine(cur, tgt));
-                p.setConstantHeadingInterpolation(cur.getHeading());
-                pedro.setMaxPower(Math.max(0.1, Math.min(1.0, power)));
-                pedro.followPath(p, true);
+                com.pedropathing.paths.Path p =
+                        com.pedropathing.api.Paths.line(cur, tgt).constant(cur.heading());
+                setPedroSpeedCap(Math.max(0.1, Math.min(1.0, power)));
+                pedro.follow(p);
                 pedroJob = "line";
                 message = String.format(Locale.US, "Line %+.1f, %+.1f at %.2f.", dx, dy, power);
                 break;
@@ -3379,9 +3423,9 @@ public class SwerveBringUp extends OpMode {
                 }
                 double dx = doubleArg(cmd, "dx", 0);
                 double dy = doubleArg(cmd, "dy", 0);
-                com.pedropathing.geometry.Pose cur = pedro.getPose();
-                double hxT = cur.getX() + dx;
-                double hyT = cur.getY() + dy;
+                com.pedropathing.math.Pose cur = pedro.pose();
+                double hxT = cur.x() + dx;
+                double hyT = cur.y() + dy;
                 if (!pedroPointOk(hxT, hyT)) {
                     message = String.format(Locale.US,
                             "REFUSED: hold point (%.1f, %.1f) is outside the box minus %.0f in "
@@ -3389,7 +3433,7 @@ public class SwerveBringUp extends OpMode {
                             hxT, hyT, PEDRO_TARGET_MARGIN_IN);
                     break;
                 }
-                pedro.holdPoint(new com.pedropathing.geometry.Pose(hxT, hyT, cur.getHeading()));
+                pedro.hold(new com.pedropathing.math.Pose(hxT, hyT, cur.heading()));
                 pedroJob = "hold";
                 message = String.format(Locale.US, "Holding %+.1f, %+.1f from here.", dx, dy);
                 break;
@@ -3404,92 +3448,80 @@ public class SwerveBringUp extends OpMode {
                 // absolute convention never matters.
                 double dCurve = doubleArg(cmd, "d", 18);
                 double power = doubleArg(cmd, "power", 0.6);
-                com.pedropathing.geometry.Pose cur = pedro.getPose();
-                double h = cur.getHeading();
+                com.pedropathing.math.Pose cur = pedro.pose();
+                double h = cur.heading();
                 double fxu = Math.cos(h), fyu = Math.sin(h);
                 double lxu = -Math.sin(h), lyu = Math.cos(h);
                 double ad = Math.abs(dCurve);
-                com.pedropathing.geometry.Pose c1 = new com.pedropathing.geometry.Pose(
-                        cur.getX() + ad * fxu, cur.getY() + ad * fyu, h);
-                com.pedropathing.geometry.Pose c2 = new com.pedropathing.geometry.Pose(
-                        cur.getX() + ad * fxu + dCurve * lxu,
-                        cur.getY() + ad * fyu + dCurve * lyu, h);
+                com.pedropathing.math.Pose c1 = new com.pedropathing.math.Pose(
+                        cur.x() + ad * fxu, cur.y() + ad * fyu, h);
+                com.pedropathing.math.Pose c2 = new com.pedropathing.math.Pose(
+                        cur.x() + ad * fxu + dCurve * lxu,
+                        cur.y() + ad * fyu + dCurve * lyu, h);
                 // A Bezier stays inside its control points' convex hull, so these checks bound
                 // the whole curve.
-                if (!pedroPointOk(c1.getX(), c1.getY()) || !pedroPointOk(c2.getX(), c2.getY())) {
+                if (!pedroPointOk(c1.x(), c1.y()) || !pedroPointOk(c2.x(), c2.y())) {
                     message = String.format(Locale.US,
                             "REFUSED: curve control points (%.1f, %.1f)/(%.1f, %.1f) leave the "
                                     + "box minus %.0f in margin. Nothing moved.",
-                            c1.getX(), c1.getY(), c2.getX(), c2.getY(), PEDRO_TARGET_MARGIN_IN);
+                            c1.x(), c1.y(), c2.x(), c2.y(), PEDRO_TARGET_MARGIN_IN);
                     break;
                 }
-                com.pedropathing.paths.Path p = new com.pedropathing.paths.Path(
-                        new com.pedropathing.geometry.BezierCurve(cur, c1, c2));
-                p.setConstantHeadingInterpolation(h);
-                pedro.setMaxPower(Math.max(0.1, Math.min(1.0, power)));
-                pedro.followPath(p, true);
+                com.pedropathing.paths.Path p =
+                        com.pedropathing.api.Paths.curve(cur, c1, c2).constant(h);
+                setPedroSpeedCap(Math.max(0.1, Math.min(1.0, power)));
+                pedro.follow(p);
                 pedroJob = "curve";
                 message = String.format(Locale.US, "Curve d %+.1f at %.2f.", dCurve, power);
                 break;
             }
             case "pedroPidf": {
-                // Mutate the shared constants, then throw the follower away: the next
+                // Mutate the shared config, then throw the follower away: the next
                 // pedroStart rebuilds from clean state, so no stale internal copy survives.
-                SwerveDrivetrainConstants.followerConstants.coefficientsTranslationalPIDF.P =
-                        doubleArg(cmd, "tp",
-                                SwerveDrivetrainConstants.followerConstants
-                                        .coefficientsTranslationalPIDF.P);
-                SwerveDrivetrainConstants.followerConstants.coefficientsTranslationalPIDF.I =
-                        doubleArg(cmd, "ti",
-                                SwerveDrivetrainConstants.followerConstants
-                                        .coefficientsTranslationalPIDF.I);
-                SwerveDrivetrainConstants.followerConstants.coefficientsTranslationalPIDF.D =
-                        doubleArg(cmd, "td",
-                                SwerveDrivetrainConstants.followerConstants
-                                        .coefficientsTranslationalPIDF.D);
-                SwerveDrivetrainConstants.followerConstants.coefficientsTranslationalPIDF.F =
-                        doubleArg(cmd, "tf",
-                                SwerveDrivetrainConstants.followerConstants
-                                        .coefficientsTranslationalPIDF.F);
-                SwerveDrivetrainConstants.followerConstants.coefficientsDrivePIDF.P =
-                        doubleArg(cmd, "dp",
-                                SwerveDrivetrainConstants.followerConstants
-                                        .coefficientsDrivePIDF.P);
-                SwerveDrivetrainConstants.followerConstants.coefficientsDrivePIDF.I =
-                        doubleArg(cmd, "di",
-                                SwerveDrivetrainConstants.followerConstants
-                                        .coefficientsDrivePIDF.I);
-                SwerveDrivetrainConstants.followerConstants.coefficientsDrivePIDF.D =
-                        doubleArg(cmd, "dd",
-                                SwerveDrivetrainConstants.followerConstants
-                                        .coefficientsDrivePIDF.D);
-                SwerveDrivetrainConstants.followerConstants.coefficientsDrivePIDF.T =
-                        doubleArg(cmd, "dt",
-                                SwerveDrivetrainConstants.followerConstants
-                                        .coefficientsDrivePIDF.T);
-                SwerveDrivetrainConstants.followerConstants.coefficientsDrivePIDF.F =
-                        doubleArg(cmd, "df",
-                                SwerveDrivetrainConstants.followerConstants
-                                        .coefficientsDrivePIDF.F);
-                SwerveDrivetrainConstants.followerConstants.setCentripetalScaling(
-                        doubleArg(cmd, "cent",
-                                SwerveDrivetrainConstants.followerConstants.centripetalScaling));
-                SwerveDrivetrainConstants.followerConstants.forwardZeroPowerAcceleration =
-                        doubleArg(cmd, "fzpa",
-                                SwerveDrivetrainConstants.followerConstants
-                                        .forwardZeroPowerAcceleration);
-                SwerveDrivetrainConstants.followerConstants.lateralZeroPowerAcceleration =
-                        doubleArg(cmd, "lzpa",
-                                SwerveDrivetrainConstants.followerConstants
-                                        .lateralZeroPowerAcceleration);
+                // Pedro 3 keeps part of this command: the translational PID (applied to both
+                // axes, as 2.1.2's single translational PIDF was) and the coast-down
+                // decelerations. The drive PIDF, translational F and centripetal scaling have no
+                // Foresight counterpart and are reported back as ignored.
+                ForesightConfig fc = SwerveDrivetrainConstants.foresightConfig;
+                List<String> ignored = new ArrayList<>();
+                for (String k : new String[] {"tf", "dp", "di", "dd", "dt", "df", "cent"}) {
+                    if (cmd.get(k) != null) {
+                        ignored.add(k);
+                    }
+                }
+                if (cmd.get("tp") != null || cmd.get("ti") != null || cmd.get("td") != null) {
+                    com.pedropathing.controllers.Controller current = fc.forwardTranslational.get();
+                    com.pedropathing.controllers.PIDController base =
+                            current instanceof com.pedropathing.controllers.PIDController
+                                    ? (com.pedropathing.controllers.PIDController) current
+                                    : new com.pedropathing.controllers.PIDController(0, 0, 0);
+                    double tp = doubleArg(cmd, "tp", base.kP);
+                    double ti = doubleArg(cmd, "ti", base.kI);
+                    double td = doubleArg(cmd, "td", base.kD);
+                    fc.forwardTranslational.set(
+                            new com.pedropathing.controllers.PIDController(tp, ti, td));
+                    fc.strafeTranslational.set(
+                            new com.pedropathing.controllers.PIDController(tp, ti, td));
+                }
+                // 2.1.2's zero-power accelerations were negative; Foresight takes the same
+                // coast-down as a positive deceleration.
+                double fzpa = Math.abs(doubleArg(cmd, "fzpa", 0));
+                if (fzpa > 0) {
+                    fc.naturalForwardDeceleration.set(fzpa);
+                }
+                double lzpa = Math.abs(doubleArg(cmd, "lzpa", 0));
+                if (lzpa > 0) {
+                    fc.naturalStrafeDeceleration.set(lzpa);
+                }
                 if (pedro != null) {
-                    pedro.breakFollowing();
+                    pedroBreak();
                     pedro = null;
                 }
                 if (mode == Mode.FOLLOW) {
                     setMode(Mode.IDLE);
                 }
-                message = "Follower gains updated; follower discarded - pedroStart to rebuild.";
+                message = "Follower gains updated; follower discarded - pedroStart to rebuild."
+                        + (ignored.isEmpty() ? "" : " IGNORED, no Pedro 3 equivalent: " + ignored);
                 break;
             }
             case "pedroStop":
@@ -3518,7 +3550,7 @@ public class SwerveBringUp extends OpMode {
             case "odoConfig": {
                 // Live Pinpoint reconfiguration for calibrating the odometry-pod geometry:
                 // directions and offsets can be iterated without a reflash, then the winning
-                // values get baked into SwerveDrivetrainConstants.localizerConstants. Resets
+                // values get baked into SwerveDrivetrainConstants.pinpointConfig. Resets
                 // the pose (config and pose frame are inseparable) and so also clears the box.
                 if (pinpoint == null) {
                     message = "No pinpoint device.";
@@ -3996,13 +4028,13 @@ public class SwerveBringUp extends OpMode {
                 .append(",\"job\":\"").append(esc(pedroJob)).append('"');
         if (pedro != null) {
             try {
-                com.pedropathing.geometry.Pose pp = pedro.getPose();
+                com.pedropathing.math.Pose pp = pedro.pose();
                 sb.append(",\"busy\":").append(pedro.isBusy())
-                        .append(",\"x\":").append(fmt(pp.getX()))
-                        .append(",\"y\":").append(fmt(pp.getY()))
-                        .append(",\"h\":").append(fmt(Math.toDegrees(pp.getHeading())))
+                        .append(",\"x\":").append(fmt(pp.x()))
+                        .append(",\"y\":").append(fmt(pp.y()))
+                        .append(",\"h\":").append(fmt(Math.toDegrees(pp.heading())))
                         .append(",\"terr\":")
-                        .append(fmt(pedro.getTranslationalError().getMagnitude()));
+                        .append(fmt(pedroTranslationalError()));
             } catch (RuntimeException e) {
                 sb.append(",\"busy\":false");
             }

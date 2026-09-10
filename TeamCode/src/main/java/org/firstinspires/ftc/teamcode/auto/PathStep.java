@@ -1,6 +1,6 @@
 package org.firstinspires.ftc.teamcode.auto;
 
-import com.pedropathing.geometry.Pose;
+import com.pedropathing.math.Pose;
 
 /**
  * A helper class to store coordinate data for Pedro Pathing.

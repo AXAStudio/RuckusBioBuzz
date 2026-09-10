@@ -1,15 +1,19 @@
 package org.firstinspires.ftc.teamcode.pedroPathing;
 
-import com.pedropathing.control.FilteredPIDFCoefficients;
+import com.pedropathing.algorithm.Foresight;
+import com.pedropathing.algorithm.ForesightConfig;
 import com.pedropathing.control.PIDFCoefficients;
+import com.pedropathing.control.PIDFController;
+import com.pedropathing.controllers.Controller;
 import com.pedropathing.follower.Follower;
-import com.pedropathing.follower.FollowerConstants;
-import com.pedropathing.ftc.FollowerBuilder;
-import com.pedropathing.ftc.drivetrains.CoaxialPod;
-import com.pedropathing.ftc.drivetrains.SwerveConstants;
-import com.pedropathing.ftc.localization.constants.PinpointConstants;
-import com.pedropathing.geometry.Pose;
-import com.pedropathing.paths.PathConstraints;
+import com.pedropathing.math.Matrix;
+import com.pedropathing.math.Vector2D;
+import com.pedropathing.revhub.drivetrains.CoaxialPod;
+import com.pedropathing.revhub.drivetrains.CoaxialPodConfig;
+import com.pedropathing.revhub.drivetrains.Swerve;
+import com.pedropathing.revhub.drivetrains.SwerveConfig;
+import com.pedropathing.revhub.localizers.PinpointConfig;
+import com.pedropathing.revhub.localizers.PinpointLocalizer;
 import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
@@ -21,75 +25,127 @@ import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
  * config.jsonc declares {@code "drivetrain": "swerve"}.
  */
 public class SwerveDrivetrainConstants {
-    public static FollowerConstants followerConstants = new FollowerConstants()
-            // Measured 2026-08-14 by coast-down on the tiles (accelerate, cut power, fit the
-            // velocity decay): -40 in/s^2, against the -197.1 that had been configured - the
-            // follower was assuming 5x more passive braking than the drivetrain has, which is
-            // why every path arrival overshot by 4-7 inches regardless of drive PIDF. Swerve is
-            // isotropic (the pods point wherever the motion goes), so forward and lateral share
-            // the value.
-            .forwardZeroPowerAcceleration(-40.0)
-            .lateralZeroPowerAcceleration(-40.0)
-            .useSecondaryDrivePIDF(false).useSecondaryHeadingPIDF(false)
-            .useSecondaryTranslationalPIDF(false)
+    // ---------------------------------------------------------------------------------------
+    // PATH FOLLOWING (Pedro 3 "Foresight"). NOT MEASURED ON THIS ROBOT - see FORESIGHT_MEASURED.
+    // ---------------------------------------------------------------------------------------
+    //
+    // Pedro 3.0.0 replaced the 2.x PIDF follower with Foresight, which plans against a braking
+    // model and needs constants the 2.x follower never had. Their status, field by field:
+    //
+    //   naturalForward/StrafeDeceleration  40 in/s^2   MEASURED 2026-08-14, the coast-down below
+    //                                                  (same quantity the v3 tuner measures).
+    //   maxAchievableForward/StrafeVelocity 73.9 in/s  UNMEASURED. Carried from the 2.x
+    //                                                  SwerveConstants.velocity(73.9), which has
+    //                                                  been there since the 2026-05-14 skeleton,
+    //                                                  before the pods existed.
+    //   quadraticBrakeCoefficients 1/(2*40)            DERIVED, not measured: stopping distance
+    //   linearBrakeCoefficients 0                      under pure coast, v^2/(2a). Foresight also
+    //                                                  brakes actively, so this over-predicts the
+    //                                                  stopping distance - it brakes early, the
+    //                                                  safe direction.
+    //   headingBrakeCoefficients 0                     UNMEASURED. Zero disables heading lookahead.
+    //   coast / brake kV 1/73.9                        UNMEASURED. Power = v / vmax, the naive
+    //                                                  feed-forward.
+    //   headingFeedback kP 1.20                        CARRIED from the 2.x heading PIDF (see the
+    //                                                  2.x history below). P only: Foresight calls
+    //                                                  this controller twice per update with two
+    //                                                  different errors, which would corrupt a D
+    //                                                  term - the v3 Quickstart's tuner emits P only
+    //                                                  for the same reason.
+    //   forward/strafeTranslational PD 0.26/0.025      CARRIED from the 2.x translational PIDF,
+    //                                                  2026-08-14. Same units (power per inch).
+    //
+    // Measure all of it with the Foresight Tuner (Tuning.java) before trusting any path, then
+    // set FORESIGHT_MEASURED.
+    public static final boolean FORESIGHT_MEASURED = false;
 
-            // Retuned 2026-08-14 through the bring-up tool's follower bench (pedrotune.py),
-            // odometry pods live, 8 in lateral hold-point steps on the tiles: 0.125/0.008
-            // settled in 1.39 s; 0.26/0.025 settles in 0.68 s with ZERO overshoot over n=8 and
-            // 0.32 in residual. 0.34/0.035 was no faster - the step is velocity-limited - so
-            // the lower gain wins on robustness.
-            .translationalPIDFCoefficients(new PIDFCoefficients(0.26, 0, 0.025, 0))
-            //.secondaryTranslationalPIDFCoefficients(new PIDFCoefficients(0.0825, 0, 0.008, 0))
+    /**
+     * Call before following a path or holding a point. Refuses to let Foresight drive on the
+     * placeholder constants above - an auto on invented numbers is a robot at speed on a guess.
+     */
+    public static void requireForesightMeasured() {
+        if (!FORESIGHT_MEASURED) {
+            throw new IllegalStateException("Foresight constants in SwerveDrivetrainConstants are "
+                    + "placeholders (Pedro 3 migration). Run the Foresight Tuner, paste its "
+                    + "values, then set FORESIGHT_MEASURED = true.");
+        }
+    }
 
-            // Measured 2026-08-11 on the Pinpoint IMU (no odometry pods needed), across commanded
-            // rotations of 15/45/90/135/180 degrees in both directions.
-            //
-            // kP: below ~1.0 the robot never settles (0.80 left 3-4 degrees standing); 1.40 hits a
-            // stability edge, overshooting 22 then 51 degrees. 1.20 settles in ~0.65s.
-            // kD: 0.003 overshot 8-12 degrees on anything past 45 degrees, because the output
-            // saturates on large errors and the robot arrives carrying momentum. 0.030 cuts that to
-            // 3-5 degrees for ~0.5 degrees more residual, and leaves small rotations clean
-            // (15 degrees: no overshoot, settles in 0.22s).
-            // kF stays 0: like the pod turn PIDF it is applied as a sign-only relay, and 0.06
-            // produced 23-26 oscillations per step.
-            //
-            // Verified holding heading to +/-3 degrees while translating through two full circles.
-            //
-            // If you change these, change SwerveBringUp's headingKp/headingKd to match. The
-            // bring-up tool keeps its own copy for live experimentation and does not read this
-            // file; it sat at the pre-tuning 1.75/0.003 for a week after this line moved to
-            // 1.20/0.030, so anyone opening the heading routine was measuring against a
-            // baseline the robot had stopped using.
-            //
-            // kD 0.030 -> 0.080 on 2026-08-13 late: the loop now runs ~2-3x faster and the pod
-            // turn loop underneath is much snappier (per-pod kP 0.38-0.44 vs 0.20), so 0.030
-            // overshot a 90 deg heading step by 11-15 deg. At 0.080 the same step settles in
-            // 0.56 s with 2.3 deg worst overshoot and 20 deg steps do not overshoot at all.
-            // Measured through the bring-up tool's headingGoto harness (tools/swervetune/
-            // headtune.py, results in current_runs/headtune.jsonl); path-following has not yet
-            // been re-validated at this value.
-            .headingPIDFCoefficients(new PIDFCoefficients(1.20, 0, 0.080, 0))
-            //.secondaryHeadingPIDFCoefficients(new PIDFCoefficients(0.8, 0, 0.015, 0))
+    private static final double PLACEHOLDER_MAX_VELOCITY = 73.9;
+    private static final double MEASURED_COAST_DECELERATION = 40.0;
 
-            // Retuned 2026-08-14 with the honest zero-power acceleration in place (the two
-            // interact: at ZPA -197 every candidate overshot 4-7 in because the follower braked
-            // late; at the measured -40, 24 in lines at 0.7 power arrive in 1.56 s with 0.40 in
-            // worst overshoot and zero oscillation).
-            .drivePIDFCoefficients(new FilteredPIDFCoefficients(0.008, 0, 0.0001, 0.6, 0.10))
-            //.secondaryDrivePIDFCoefficients(
-            //        new FilteredPIDFCoefficients(0.004, 0, 0.000002, 0.6, 0.13))
+    public static ForesightConfig foresightConfig = new ForesightConfig(c -> {
+        c.headingFeedback.set(Controller.proportional(1.20));
+        c.forwardTranslational.set(Controller.pid(0.26, 0, 0.025));
+        c.strafeTranslational.set(Controller.pid(0.26, 0, 0.025));
 
+        c.coast.set(Controller.proportionalFeedforward(1.0 / PLACEHOLDER_MAX_VELOCITY));
+        c.brake.set(Controller.proportionalFeedforward(1.0 / PLACEHOLDER_MAX_VELOCITY));
 
-            // .drivePIDFCoefficients(new FilteredPIDFCoefficients(0,0,0,0,0))
-            // .secondaryDrivePIDFCoefficients(new FilteredPIDFCoefficients(0,0,0,0,0))
+        c.maxAchievableForwardVelocity.set(PLACEHOLDER_MAX_VELOCITY);
+        c.maxAchievableStrafeVelocity.set(PLACEHOLDER_MAX_VELOCITY);
+        c.naturalForwardDeceleration.set(MEASURED_COAST_DECELERATION);
+        c.naturalStrafeDeceleration.set(MEASURED_COAST_DECELERATION);
 
-            // .predictiveBrakingCoefficients(new PredictiveBrakingCoefficients(
-            // 0.05, //0.05 to 0.3
-            // 0,//0.38735914623969386,
-            // 0.002)
-            // )
-            .centripetalScaling(0.0005).
-            mass(13.732);
+        c.linearBrakeCoefficients.set(Matrix.diag(0.0, 0.0));
+        c.quadraticBrakeCoefficients.set(Matrix.diag(
+                1.0 / (2 * MEASURED_COAST_DECELERATION), 1.0 / (2 * MEASURED_COAST_DECELERATION)));
+        c.headingBrakeCoefficients.set(Vector2D.cartesian(0.0, 0.0));
+    });
+
+    // 2.x FOLLOWER HISTORY. The Pedro 2.1.2 follower these were tuned on no longer exists; kept
+    // because the measurements are real and the carried values above point here.
+    //
+    // Measured 2026-08-14 by coast-down on the tiles (accelerate, cut power, fit the velocity
+    // decay): -40 in/s^2, against the -197.1 that had been configured - the follower was assuming
+    // 5x more passive braking than the drivetrain has, which is why every path arrival overshot
+    // by 4-7 inches regardless of drive PIDF. Swerve is isotropic (the pods point wherever the
+    // motion goes), so forward and lateral share the value.
+    //
+    // Translational retuned 2026-08-14 through the bring-up tool's follower bench (pedrotune.py),
+    // odometry pods live, 8 in lateral hold-point steps on the tiles: 0.125/0.008 settled in
+    // 1.39 s; 0.26/0.025 settles in 0.68 s with ZERO overshoot over n=8 and 0.32 in residual.
+    // 0.34/0.035 was no faster - the step is velocity-limited - so the lower gain wins on
+    // robustness.
+    //
+    // Heading measured 2026-08-11 on the Pinpoint IMU (no odometry pods needed), across commanded
+    // rotations of 15/45/90/135/180 degrees in both directions.
+    //
+    // kP: below ~1.0 the robot never settles (0.80 left 3-4 degrees standing); 1.40 hits a
+    // stability edge, overshooting 22 then 51 degrees. 1.20 settles in ~0.65s.
+    // kD: 0.003 overshot 8-12 degrees on anything past 45 degrees, because the output
+    // saturates on large errors and the robot arrives carrying momentum. 0.030 cuts that to
+    // 3-5 degrees for ~0.5 degrees more residual, and leaves small rotations clean
+    // (15 degrees: no overshoot, settles in 0.22s).
+    // kF stays 0: like the pod turn PIDF it is applied as a sign-only relay, and 0.06
+    // produced 23-26 oscillations per step.
+    //
+    // Verified holding heading to +/-3 degrees while translating through two full circles.
+    //
+    // If you change these, change SwerveBringUp's headingKp/headingKd to match. The
+    // bring-up tool keeps its own copy for live experimentation and does not read this
+    // file; it sat at the pre-tuning 1.75/0.003 for a week after this line moved to
+    // 1.20/0.030, so anyone opening the heading routine was measuring against a
+    // baseline the robot had stopped using.
+    //
+    // kD 0.030 -> 0.080 on 2026-08-13 late: the loop now runs ~2-3x faster and the pod
+    // turn loop underneath is much snappier (per-pod kP 0.38-0.44 vs 0.20), so 0.030
+    // overshot a 90 deg heading step by 11-15 deg. At 0.080 the same step settles in
+    // 0.56 s with 2.3 deg worst overshoot and 20 deg steps do not overshoot at all.
+    // Measured through the bring-up tool's headingGoto harness (tools/swervetune/
+    // headtune.py, results in current_runs/headtune.jsonl); path-following has not yet
+    // been re-validated at this value.
+    //
+    // Drive PIDF retuned 2026-08-14 with the honest zero-power acceleration in place (the two
+    // interact: at ZPA -197 every candidate overshot 4-7 in because the follower braked late;
+    // at the measured -40, 24 in lines at 0.7 power arrive in 1.56 s with 0.40 in worst
+    // overshoot and zero oscillation): FilteredPIDF 0.008 / 0 / 0.0001 / 0.6 / 0.10. Foresight
+    // has no drive PIDF; its coast/brake controllers replace it.
+    //
+    // Centripetal was 0.0005: swept 0.0-0.003 on 12 in curves at 0.7 power on 2026-08-14 and
+    // the tracking error would not separate - the tuning box is too small to sustain the
+    // v^2 * curvature regime the term corrects. Foresight has no centripetal term. Mass was
+    // 13.732 kg.
 
     // Calibrated 2026-08-14 against reality, the day the pods were physically attached. The
     // values that had been sitting here were never measured on this robot: both encoder
@@ -99,26 +155,38 @@ public class SwerveDrivetrainConstants {
     // rotations (slip bias cancels in the pairing) and a linear fit to the fake-translation
     // rate. Verified residual: ~0.6 in of orbit per 45 degrees of rotation, which is the
     // measurement noise floor of the method.
-    // Centripetal stays 0.0005: swept 0.0-0.003 on 12 in curves at 0.7 power on 2026-08-14 and
-    // the tracking error would not separate - the tuning box is too small to sustain the
-    // v^2 * curvature regime the term corrects. Retune on a full field.
+    //
+    // Pedro 3 mapping, checked against both PinpointLocalizer sources: 2.x forwardPodY and
+    // strafePodX went to GoBildaPinpointDriver.setOffsets(x, y) in that order, exactly as
+    // xPodOffset / yPodOffset do now, and forward/strafe directions are x/y directions.
+    //
+    // resetMode NONE: the 2.x localizer never recalibrated the IMU at construction (it only
+    // wrote the pose to 0,0,0 - see DriveTeleOp.init). v3's default RECALIBRATE_IMU would add
+    // an IMU recalibration to every OpMode init.
+    public static PinpointConfig pinpointConfig = new PinpointConfig(c -> {
+        c.name.set("pinpoint");
+        c.xPodOffset.set(-5.376);
+        c.yPodOffset.set(-3.912);
+        c.offsetUnits.set(DistanceUnit.INCH);
+        c.globalDistanceUnit.set(DistanceUnit.INCH);
+        c.podType.set(GoBildaPinpointDriver.GoBildaOdometryPods.goBILDA_4_BAR_POD);
+        c.xPodDirection.set(GoBildaPinpointDriver.EncoderDirection.REVERSED);
+        c.yPodDirection.set(GoBildaPinpointDriver.EncoderDirection.FORWARD);
+        c.resetMode.set(PinpointLocalizer.ResetMode.NONE);
+    });
 
-    public static PinpointConstants localizerConstants = new PinpointConstants()
-            .forwardPodY(-5.376)
-            .strafePodX(-3.912)
-            .distanceUnit(DistanceUnit.INCH).hardwareMapName("pinpoint")
-            .encoderResolution(GoBildaPinpointDriver.GoBildaOdometryPods.goBILDA_4_BAR_POD)
-            .forwardEncoderDirection(GoBildaPinpointDriver.EncoderDirection.REVERSED)
-            .strafeEncoderDirection(GoBildaPinpointDriver.EncoderDirection.FORWARD);
-
-    public static SwerveConstants swerveConstants = new SwerveConstants()
-            .velocity(73.9)
-            // Pods snap to an X with no input, so the robot resists being pushed. Note this makes
-            // any momentary drop to zero input visible as all four pods yanking to the X - which is
-            // correct behaviour, but during bring-up it hides what the pods are doing. Swap to
-            // IGNORE_ANGLE_CHANGES while diagnosing, then put this back.
-            .zeroPowerBehavior(SwerveConstants.ZeroPowerBehavior.X_LOCK)
-            .useBrakeModeInTeleOp(true);
+    // Pods snap to an X with no input, so the robot resists being pushed. Note this makes any
+    // momentary drop to zero input visible as all four pods yanking to the X - which is correct
+    // behaviour, but during bring-up it hides what the pods are doing. Swap to
+    // IGNORE_ANGLE_CHANGES while diagnosing, then put this back.
+    //
+    // manualBrakeMode is the 2.x useBrakeModeInTeleOp(true). Voltage compensation stays off, as
+    // it was (and in 2.x it was a silent no-op even when on).
+    public static SwerveConfig swerveConfig = new SwerveConfig(c -> {
+        c.voltageCompensation.set(false);
+        c.zeroPowerBehavior.set(SwerveConfig.ZeroPowerBehavior.X_LOCK);
+        c.manualBrakeMode.set(true);
+    });
 
     // Zero offsets, analog ranges, encoder pairings and drive directions below come from a
     // Swerve Bring-Up session on 2026-08-10, verified driving.
@@ -127,6 +195,12 @@ public class SwerveDrivetrainConstants {
     // TURN GAINS: retuned 2026-08-13 on the FTC game tiles after a pod repair and lubrication
     // of all four steering paths. Still NOT validated on a drained battery (criterion 12).
     // ---------------------------------------------------------------------------------------
+    //
+    // Pedro 3 migration: the pod control loop is carried over unchanged (same PIDFController
+    // arithmetic, same kS/pulse/schedule/flip/slew code). Checked on the host by driving the
+    // 2.1.2 and 3.0.0 CoaxialPod + Swerve side by side through identical inputs and simulated
+    // plants: servo commands agree to 1e-14 over 1200 steps at 8, 10 and 25 ms loops. Every
+    // number below still describes the code that runs.
     //
     // Everything below the 2026-08-12 block was measured before the mechanical work and no
     // longer describes this robot's friction. Kept because the negative results are still
@@ -377,7 +451,7 @@ public class SwerveDrivetrainConstants {
     // spliced two per analog port, and the wiring scan found every pod landing on a different
     // channel than its own number. Do not "tidy" these to match.
     /**
-     * The pods from the most recent {@link #createFollower} call, indexed by ss number.
+     * The pods from the most recent {@link #createSwerve} call, indexed by ss number.
      *
      * <p>Diagnostics only. The Follower owns the pods and exposes no accessor, so without this
      * there is no way to instrument the COMPETITION control path - and every steering number this
@@ -388,15 +462,26 @@ public class SwerveDrivetrainConstants {
 
     /** Shared body so a per-pod gain can never be wired to the wrong corner by hand. */
     private static CoaxialPod buildPod(HardwareMap hardwareMap, int ss, String motor, String servo,
-            String encoder, Pose pose) {
-        CoaxialPod pod = new CoaxialPod(hardwareMap, motor, servo, encoder,
-                new PIDFCoefficients(turnKPPerPod[ss], 0, turnKDPerPod[ss], 0),
-                podDriveReversed[ss] ? DcMotorSimple.Direction.REVERSE
-                        : DcMotorSimple.Direction.FORWARD,
-                DcMotorSimple.Direction.REVERSE, Math.toRadians(podZeroDeg[ss]), pose,
-                podMinV[ss], podMaxV[ss], false);
-        pod.setMotorCachingThreshold(0.05);
-        pod.setServoCachingThreshold(turnServoCaching);
+            String encoder, Vector2D offset) {
+        CoaxialPod pod = new CoaxialPod(hardwareMap, new CoaxialPodConfig(c -> {
+            c.name.set(servo);
+            c.motorName.set(motor);
+            c.servoName.set(servo);
+            c.servoEncoderName.set(encoder);
+            // A fresh controller per pod: it carries integral, error and timing state.
+            c.turnController.set(new PIDFController(
+                    new PIDFCoefficients(turnKPPerPod[ss], 0, turnKDPerPod[ss], 0)));
+            c.driveDirection.set(podDriveReversed[ss] ? DcMotorSimple.Direction.REVERSE
+                    : DcMotorSimple.Direction.FORWARD);
+            c.servoDirection.set(DcMotorSimple.Direction.REVERSE);
+            c.angleOffsetRad.set(Math.toRadians(podZeroDeg[ss]));
+            c.podOffset.set(offset);
+            c.analogMinVoltage.set(podMinV[ss]);
+            c.analogMaxVoltage.set(podMaxV[ss]);
+            c.encoderReversed.set(false);
+            c.motorCachingThreshold.set(0.05);
+            c.servoCachingThreshold.set(turnServoCaching);
+        }));
         pod.setStaticFriction(turnKSPerPod[ss], Math.toRadians(turnKSBandDegPerPod[ss]));
         // Pulsed final approach with the stall-escalation ladder (see CoaxialPod). Inside 6 deg
         // the servo is silent except for discrete stationary pulses; base pulse 0.035/20 ms is
@@ -410,37 +495,33 @@ public class SwerveDrivetrainConstants {
     }
 
     private static CoaxialPod leftFront(HardwareMap hardwareMap) {
-        return buildPod(hardwareMap, 2, "sm2", "ss2", "se3", new Pose(dtLength, dtWidth));
+        return buildPod(hardwareMap, 2, "sm2", "ss2", "se3", Vector2D.cartesian(dtLength, dtWidth));
     }
 
     private static CoaxialPod rightFront(HardwareMap hardwareMap) {
-        return buildPod(hardwareMap, 1, "sm1", "ss1", "se0", new Pose(dtLength, -dtWidth));
+        return buildPod(hardwareMap, 1, "sm1", "ss1", "se0", Vector2D.cartesian(dtLength, -dtWidth));
     }
 
     private static CoaxialPod leftBack(HardwareMap hardwareMap) {
-        return buildPod(hardwareMap, 3, "sm3", "ss3", "se2", new Pose(-dtLength, dtWidth));
+        return buildPod(hardwareMap, 3, "sm3", "ss3", "se2", Vector2D.cartesian(-dtLength, dtWidth));
     }
 
     private static CoaxialPod rightBack(HardwareMap hardwareMap) {
-        return buildPod(hardwareMap, 0, "sm0", "ss0", "se1", new Pose(-dtLength, -dtWidth));
+        return buildPod(hardwareMap, 0, "sm0", "ss0", "se1", Vector2D.cartesian(-dtLength, -dtWidth));
     }
 
-    public static PathConstraints pathConstraints =
-            new PathConstraints(
-                    0.9,
-                    2,
-                    2,
-                    0.03,
-                    50,
-                    1,
-                    10,
-                    1
-            );
+    /** The competition drivetrain on its own - also what the tuners drive. */
+    public static Swerve createSwerve(HardwareMap hardwareMap) {
+        return new Swerve(hardwareMap, swerveConfig, leftFront(hardwareMap),
+                rightFront(hardwareMap), leftBack(hardwareMap), rightBack(hardwareMap));
+    }
+
+    public static PinpointLocalizer createLocalizer(HardwareMap hardwareMap) {
+        return new PinpointLocalizer(hardwareMap, pinpointConfig);
+    }
 
     public static Follower createFollower(HardwareMap hardwareMap) {
-        return new FollowerBuilder(followerConstants, hardwareMap).pathConstraints(pathConstraints)
-                .swerveDrivetrain(swerveConstants, leftFront(hardwareMap), rightFront(hardwareMap),
-                        leftBack(hardwareMap), rightBack(hardwareMap))
-                .pinpointLocalizer(localizerConstants).build();
+        return new Follower(createLocalizer(hardwareMap), createSwerve(hardwareMap),
+                new Foresight(foresightConfig));
     }
 }

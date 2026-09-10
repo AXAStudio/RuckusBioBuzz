@@ -3,11 +3,13 @@ package org.firstinspires.ftc.teamcode.diagnostics.swerve;
 import com.acmerobotics.dashboard.FtcDashboard;
 import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
+import com.pedropathing.drivetrain.DrivePowers;
 import com.pedropathing.drivetrain.Drivetrain;
 import com.pedropathing.follower.Follower;
-import com.pedropathing.ftc.drivetrains.Swerve;
+import com.pedropathing.revhub.drivetrains.Swerve;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
+import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
@@ -32,7 +34,7 @@ import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
  * flips at random, and that clamp fires at random. The result is a drivetrain that stutters and
  * never quite reaches its target angle.
  *
- * <p>This OpMode calls {@link Swerve#arcadeDrive} straight from the sticks instead, which is the
+ * <p>This OpMode calls {@link Swerve#applyDrive} straight from the sticks instead, which is the
  * same path the bring-up dashboard's kinematics test uses - the one that already behaves correctly.
  * Pods and constants are identical: the drivetrain is taken from a real Follower built by
  * {@link Constants}, so nothing about the calibration changes.
@@ -67,7 +69,7 @@ public class SwerveDirectTeleOp extends OpMode {
     @Override
     public void init() {
         Follower follower = Constants.createFollower(hardwareMap);
-        Drivetrain drivetrain = follower.getDrivetrain();
+        Drivetrain drivetrain = follower.drivetrain;
 
         if (!(drivetrain instanceof Swerve)) {
             throw new IllegalStateException("Expected a swerve drivetrain, but config.jsonc "
@@ -81,7 +83,7 @@ public class SwerveDirectTeleOp extends OpMode {
 
     @Override
     public void start() {
-        swerve.startTeleopDrive(true);
+        swerve.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         loopTimer.reset();
     }
 
@@ -108,21 +110,21 @@ public class SwerveDirectTeleOp extends OpMode {
             turn = deadband(-gamepad1.right_stick_x) * speed;
         }
 
-        swerve.arcadeDrive(forward, strafe, turn);
+        swerve.applyDrive(new DrivePowers(forward, strafe, turn));
 
         telemetry.addData("input", USE_DASHBOARD_INPUT ? "dashboard" : "gamepad");
         telemetry.addData("forward", forward);
         telemetry.addData("strafe", strafe);
         telemetry.addData("turn", turn);
         telemetry.addData("loopHz", loopHz);
-        telemetry.addData("pods", swerve.debugString());
+        telemetry.addData("pods", swerve.debug().toString());
         telemetry.update();
     }
 
     @Override
     public void stop() {
         if (swerve != null) {
-            swerve.arcadeDrive(0, 0, 0);
+            swerve.applyDrive(new DrivePowers(0, 0, 0));
         }
     }
 

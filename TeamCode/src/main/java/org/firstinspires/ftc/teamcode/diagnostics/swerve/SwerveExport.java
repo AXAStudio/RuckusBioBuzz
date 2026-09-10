@@ -59,20 +59,29 @@ public final class SwerveExport {
 
         return String.format(Locale.US,
                 "private static CoaxialPod %s(HardwareMap hardwareMap) {%n"
-                        + "    CoaxialPod pod = new CoaxialPod(hardwareMap, \"%s\", \"%s\", \"%s\",%n"
-                        + "            new PIDFCoefficients(%s),%n"
+                        + "    CoaxialPod pod = new CoaxialPod(hardwareMap, new CoaxialPodConfig(c -> {%n"
+                        + "        c.name.set(\"%s\");%n"
+                        + "        c.motorName.set(\"%s\");%n"
+                        + "        c.servoName.set(\"%s\");%n"
+                        + "        c.servoEncoderName.set(\"%s\");%n"
+                        + "        c.turnController.set(new PIDFController(new PIDFCoefficients(%s)));%n"
                         // Both directions use DcMotorSimple.Direction: CRServo.Direction is the
                         // same inherited enum, and this matches the imports the target file has.
-                        + "            DcMotorSimple.Direction.%s,%n"
-                        + "            DcMotorSimple.Direction.%s,%n"
-                        + "            Math.toRadians(%.1f), new Pose(%s, %s),%n"
-                        + "            %.3f, %.3f, %s);%n"
-                        + "    pod.setMotorCachingThreshold(0.05);%n"
-                        + "    pod.setServoCachingThreshold(%.3f);%n"
+                        + "        c.driveDirection.set(DcMotorSimple.Direction.%s);%n"
+                        + "        c.servoDirection.set(DcMotorSimple.Direction.%s);%n"
+                        + "        c.angleOffsetRad.set(Math.toRadians(%.1f));%n"
+                        + "        c.podOffset.set(Vector2D.cartesian(%s, %s));%n"
+                        + "        c.analogMinVoltage.set(%.3f);%n"
+                        + "        c.analogMaxVoltage.set(%.3f);%n"
+                        + "        c.encoderReversed.set(%s);%n"
+                        + "        c.motorCachingThreshold.set(0.05);%n"
+                        + "        c.servoCachingThreshold.set(%.3f);%n"
+                        + "    }));%n"
                         + "%s"
                         + "    return pod;%n"
                         + "}%n",
                 methodName,
+                p.servoName,
                 p.motorName, p.servoName, p.encoderName,
                 gains,
                 p.driveDirection.name(),

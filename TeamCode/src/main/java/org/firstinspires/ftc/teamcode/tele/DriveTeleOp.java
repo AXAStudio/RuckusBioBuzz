@@ -2,8 +2,11 @@ package org.firstinspires.ftc.teamcode.tele;
 
 import com.acmerobotics.dashboard.FtcDashboard;
 import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
+import com.pedropathing.drivetrain.DrivePowers;
 import com.pedropathing.follower.Follower;
-import com.pedropathing.geometry.Pose;
+import com.pedropathing.math.Pose;
+import com.pedropathing.math.Vector2D;
+import com.pedropathing.utils.Control;
 import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
@@ -18,6 +21,14 @@ public class DriveTeleOp extends OpMode {
     private static final double DRIVE_DEADBAND = 0.05;
     private static final double NORMAL_SPEED = 1.0;
     private static final double SLOW_SPEED = 0.35;
+
+    /**
+     * Largest translation component allowed against the direction of travel. Pedro 2.x applied
+     * this to every teleop command inside its follower (CustomDrivetrain.clampReversePower, made
+     * direction-preserving by a Ruckus patch). Pedro 3's Follower.manual() applies nothing, so it
+     * is applied here, with the same cap and the same vector form.
+     */
+    private static final double MAX_BRAKING_POWER = 0.2;
 
     private Follower follower;
 
@@ -66,14 +77,18 @@ public class DriveTeleOp extends OpMode {
 
         // Preserve the odometry frame across follower construction.
         //
-        // Pedro's PinpointLocalizer constructor calls setStartPose(new Pose()), which writes
-        // odo.setPosition(0, 0, 0) to the HARDWARE - so merely starting this OpMode re-origins
-        // the Pinpoint wherever the robot happens to be standing. On 2026-08-16 that silently
+        // Pedro 2.x's PinpointLocalizer constructor called setStartPose(new Pose()), which wrote
+        // odo.setPosition(0, 0, 0) to the HARDWARE - so merely starting this OpMode re-origined
+        // the Pinpoint wherever the robot happened to be standing. On 2026-08-16 that silently
         // invalidated the bring-up tool's saved safe-area box: the fence was still armed, still
         // looked valid, and pointed at a patch of floor 20 inches away from the real one.
         // Reading the pose first and handing it back afterwards keeps the frame continuous, so
         // a practice box stays a fence. Autos still set their own starting pose explicitly and
         // are unaffected.
+        //
+        // Pedro 3's PinpointLocalizer does not write the pose, and SwerveDrivetrainConstants
+        // sets resetMode NONE so it does not recalibrate the IMU either. Kept regardless: it
+        // costs one Pinpoint read at init and pins the frame whatever the localizer does next.
         com.qualcomm.hardware.gobilda.GoBildaPinpointDriver odo = null;
         Pose priorPose = null;
         try {
@@ -92,9 +107,9 @@ public class DriveTeleOp extends OpMode {
 
         follower = Constants.createFollower(hardwareMap);
 
-        if (priorPose != null && !(Math.abs(priorPose.getX()) < 1e-6
-                && Math.abs(priorPose.getY()) < 1e-6)) {
-            follower.setStartingPose(priorPose);
+        if (priorPose != null && !(Math.abs(priorPose.x()) < 1e-6
+                && Math.abs(priorPose.y()) < 1e-6)) {
+            follower.setPose(priorPose);
         }
         probe.init(hardwareMap);
         telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
@@ -102,9 +117,10 @@ public class DriveTeleOp extends OpMode {
 
     @Override
     public void start() {
-        follower.startTeleopDrive(true);
+        // Brake mode is SwerveConfig.manualBrakeMode, applied on every manual() drive.
+        follower.manual(DrivePowers.zero());
         follower.update();
-        headingHold.latch(follower.getPose().getHeading());
+        headingHold.latch(follower.pose().heading());
     }
 
     @Override
@@ -147,7 +163,7 @@ public class DriveTeleOp extends OpMode {
         // simply accepted. Right bumper falls back to the old open-loop behaviour, which is both
         // the escape hatch and the A/B.
         boolean holdHeading = !gamepad1.right_bumper;
-        double heading = follower.getPose().getHeading();
+        double heading = follower.pose().heading();
         double turn = holdHeading
                 ? headingHold.update(stick, heading, Math.hypot(forward, strafe) > 0,
                         dt > 0 ? dt : 0.02)
@@ -158,13 +174,18 @@ public class DriveTeleOp extends OpMode {
             headingHold.latch(heading);
         }
 
-        follower.setTeleOpDrive(forward, strafe, turn, true);
+        // Robot-centric, as before. The clamp reads the body-frame velocity from the previous
+        // update(): 2.x clamped inside update(), after the pose refresh, so this is one loop
+        // (~10 ms) older than it was.
+        Vector2D command = Control.clampBrakingPower(Vector2D.cartesian(forward, strafe),
+                follower.twist().toVector2D(), MAX_BRAKING_POWER);
+        follower.manual(new DrivePowers(command.x(), command.y(), turn));
         follower.update();
 
-        Pose probePose = follower.getPose();
-        probe.update(dt, loopHz, Math.toDegrees(probePose.getHeading()),
+        Pose probePose = follower.pose();
+        probe.update(dt, loopHz, Math.toDegrees(probePose.heading()),
                 Math.toDegrees(headingHold.targetRad()),
-                probePose.getX(), probePose.getY(), forward, strafe, turn);
+                probePose.x(), probePose.y(), forward, strafe, turn);
 
         // Telemetry is throttled and no longer includes the drivetrain dump. debugString() calls
         // getRawAngleRad() twice per pod on top of the two reads move() already does, then builds
@@ -173,7 +194,7 @@ public class DriveTeleOp extends OpMode {
         // http://192.168.43.1:8080/swerve, which is built for it and does not sit in this loop.
         if (telemetryTimer.seconds() >= TELEMETRY_INTERVAL_S) {
             telemetryTimer.reset();
-            Pose pose = follower.getPose();
+            Pose pose = follower.pose();
             // loopHz is a smoothed 1/dt for the driver's benefit. The honest statistic - and the
             // only one that may be quoted - is in probe.summary().
             telemetry.addData("loopHz", loopHz);
@@ -185,14 +206,14 @@ public class DriveTeleOp extends OpMode {
             telemetry.addData("turn", turn);
             telemetry.addData("heading hold", holdHeading
                     ? headingHold.phase() + " err " + String.format(java.util.Locale.US, "%.2f deg",
-                            headingHold.errorDeg(pose.getHeading()))
+                            headingHold.errorDeg(pose.heading()))
                     : "OFF (right bumper)");
             if (!headingHold.enabled()) {
                 telemetry.addData("heading hold DISABLED", headingHold.disabledReason());
             }
-            telemetry.addData("x", pose.getX());
-            telemetry.addData("y", pose.getY());
-            telemetry.addData("heading (deg)", Math.toDegrees(pose.getHeading()));
+            telemetry.addData("x", pose.x());
+            telemetry.addData("y", pose.y());
+            telemetry.addData("heading (deg)", Math.toDegrees(pose.heading()));
             telemetry.update();
         }
     }
@@ -203,8 +224,7 @@ public class DriveTeleOp extends OpMode {
             return;
         }
 
-        follower.startTeleopDrive(true);
-        follower.setTeleOpDrive(0.0, 0.0, 0.0, true);
+        follower.manual(DrivePowers.zero());
         follower.update();
     }
 
