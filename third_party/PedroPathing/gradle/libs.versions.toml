@@ -1,7 +1,9 @@
 [versions]
-ftc = "11.2.0"
+# RUCKUS PATCH: upstream 11.2.0. Compile against the SDK the app actually ships (build.dependencies.gradle).
+ftc = "11.1.0"
 dokka = "2.2.0"
-agp = "8.7.3"
+# RUCKUS PATCH: upstream 8.7.3. Match the root build's AGP.
+agp = "8.7.0"
 kotlin = "2.3.21"
 deployer = "0.18.0"
 spotless = "8.4.0"
@@ -10,6 +12,8 @@ spotless = "8.4.0"
 ftc-robot-core = { group = "org.firstinspires.ftc", name = "RobotCore", version.ref = "ftc" }
 ftc-hardware = { group = "org.firstinspires.ftc", name = "Hardware", version.ref = "ftc" }
 dokka-java-plugin = { group = "org.jetbrains.dokka", name = "kotlin-as-java-plugin", version.ref = "dokka" }
+# RUCKUS PATCH: dropped upstream in v3; the local :telemetry module still uses it (v2.1.2 coordinate).
+annotations = { group = "org.jetbrains", name = "annotations", version = "23.0.0" }
 
 [bundles]
 ftc = ["ftc-robot-core", "ftc-hardware"]

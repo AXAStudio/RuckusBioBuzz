@@ -17,3 +17,5 @@ dependencyResolutionManagement {
 
 rootProject.name = "PedroPathing"
 include(":core", ":revhub")
+// RUCKUS PATCH: local module, not part of upstream PedroPathing - see RUCKUS_PATCHES.md.
+include(":telemetry")

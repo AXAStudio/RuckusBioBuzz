@@ -1,13 +1,15 @@
 plugins {
     id("com.android.library")
-    id("org.jetbrains.dokka")
     id("io.deepmedia.tools.deployer")
-    kotlin("android")
+    // RUCKUS PATCH: Dokka removed (see core/build.gradle.kts), and kotlin("android") with it -
+    // this module has no Kotlin sources. See RUCKUS_PATCHES.md.
 }
 
 android {
     namespace = "com.pedropathing.revhub"
-    compileSdk = 35
+    // RUCKUS PATCH: upstream 35. TeamCode compiles at 34 and SDK platform 35 is not installed on
+    // the build machine; nothing in this module needs an API above 24.
+    compileSdk = 34
 
     defaultConfig {
         minSdk = 24
@@ -28,14 +30,6 @@ android {
 dependencies {
     compileOnly(libs.bundles.ftc)
     api(project(":core"))
-    dokkaPlugin(libs.dokka.java.plugin)
-}
-
-
-val dokkaJar = tasks.register<Jar>("dokkaJar") {
-    dependsOn(tasks.named("dokkaGenerate"))
-    from(dokka.basePublicationsDirectory.dir("html"))
-    archiveClassifier = "html-docs"
 }
 
 deployer {
@@ -55,7 +49,7 @@ deployer {
 
     content {
         androidComponents("release") {
-            docs(dokkaJar)
+            // RUCKUS PATCH: docs(dokkaJar) removed along with the Dokka plugin.
         }
     }
 

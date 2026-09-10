@@ -1,9 +1,9 @@
 plugins {
     alias(libs.plugins.android.library) apply false
-    alias(libs.plugins.dokka) apply false
     alias(libs.plugins.deployer) apply false
-    alias(libs.plugins.kotlin.android) apply false
-    alias(libs.plugins.spotless) apply false
+    // RUCKUS PATCH: dokka, kotlin-android and spotless removed - see RUCKUS_PATCHES.md. None is
+    // applied by anything this composite build compiles, and resolving them still pulls plugin
+    // versions that have not been checked against the root project's Gradle.
 }
 
 subprojects {

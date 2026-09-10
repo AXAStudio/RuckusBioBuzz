@@ -1,12 +1,13 @@
 plugins {
     id("java-library")
     id("io.deepmedia.tools.deployer")
-    id("org.jetbrains.dokka")
-    id("com.diffplug.spotless")
+    // RUCKUS PATCH: Dokka removed - see RUCKUS_PATCHES.md. Its consumable configurations were
+    // being selected instead of runtimeElements when this java-library is consumed from the
+    // Android app across the composite build, so core's classes never reached the APK.
+    // Spotless removed with it: a formatter has no job in a vendored copy.
 }
 
 dependencies {
-    dokkaPlugin(libs.dokka.java.plugin)
     testImplementation("org.junit.jupiter:junit-jupiter:5.9.3")
     testImplementation("com.google.truth:truth:1.4.5")
     testRuntimeOnly("org.junit.platform:junit-platform-launcher:1.9.3")
@@ -20,14 +21,6 @@ java {
 tasks.test {
     useJUnitPlatform()
 }
-
-val dokkaJar =
-    tasks.register<Jar>("dokkaJar") {
-        description = "Generates a Dokka Jar"
-        dependsOn(tasks.named("dokkaGenerate"))
-        from(dokka.basePublicationsDirectory.dir("html"))
-        archiveClassifier = "html-docs"
-    }
 
 deployer {
     projectInfo {
@@ -48,7 +41,7 @@ deployer {
         component {
             fromJava()
             javaSources()
-            docs(dokkaJar)
+            // RUCKUS PATCH: docs(dokkaJar) removed along with the Dokka plugin.
         }
     }
 
@@ -76,28 +69,4 @@ deployer {
     }
 
     localSpec()
-}
-
-spotless {
-    java {
-        target("src/**/*.java")
-
-        palantirJavaFormat()
-        removeUnusedImports()
-        trimTrailingWhitespace()
-        endWithNewline()
-
-        licenseHeaderFile(rootProject.file("notice.txt"))
-    }
-
-    kotlinGradle {
-        ktlint("1.2.1")
-        target("*.gradle.kts")
-    }
-
-    format("misc") {
-        target("*.md", "*.yaml", "*.yml", "*.json", ".gitignore")
-        trimTrailingWhitespace()
-        endWithNewline()
-    }
 }
