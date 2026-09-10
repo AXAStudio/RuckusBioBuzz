@@ -19,6 +19,9 @@ import java.util.Map;
  * Swerve Drivetrain implementation.
  * Angles are in radians and positive rotation is to the left (CCW, top-down).
  *
+ * <p>RUCKUS PATCH: the mixer below is the 2.1.2 fork's, re-applied on the v3 structure - see
+ * RUCKUS_PATCHES.md. Search for {@code RUCKUS PATCH}.
+ *
  * @author Kabir Goyal
  * @author Baron Henderson
  */
@@ -35,6 +38,84 @@ public class Swerve implements Drivetrain {
 
     private final VoltageSensor voltageSensor;
 
+    /** RUCKUS PATCH: see the zeroRotation comment in applyDrive. */
+    private static final double ROTATION_EPSILON = 0.015;
+
+    /**
+     * RUCKUS PATCH: fade the translation and rotation terms to zero across their epsilon bands
+     * instead of switching them off at the wall.
+     *
+     * <p>Measured 2026-08-16 on mydrive-001: of 601 azimuth-setpoint jumps over 15 degrees while
+     * driving, 42% were rotation-epsilon crossings and 3% were translation-epsilon crossings -
+     * and the translation ones were the biggest in the log, mean 74-95 degrees and up to 179.
+     * The cause is structural rather than a tuning error: the pod demand is
+     * {@code atan2(translation + rotation)}, so deleting either term in one step rotates the
+     * demand by however far apart the two directions were. On a nearly square chassis the
+     * rotation-only directions are +-43.5 / +-136.5 degrees, which is why the symptom reads as
+     * "snapping to 45 degrees".
+     *
+     * <p>A smoothstep taper makes the demand direction continuous through the wall: the term
+     * shrinks to nothing as the input approaches zero, so the demand migrates toward the other
+     * term's direction instead of jumping to it. Value and slope both match at the band edge.
+     */
+    private static volatile boolean epsilonTaper = true;
+
+    /**
+     * RUCKUS PATCH: largest change in a pod's commanded azimuth per call, degrees per second.
+     * 0 disables.
+     *
+     * <p>The taper fixes the demand where the input crosses a wall slowly. It cannot help when
+     * the input jumps - a stick released in one loop still swings the demand ~90 degrees. This
+     * bounds the rate directly, and the bound is free: the measured pod slew is 214 deg/s
+     * (184-259), so a demand moving faster than that is asking for travel the hardware cannot
+     * deliver and only guarantees a saturated, lagging pod. A 90 degree change now takes 420 ms
+     * of demand travel against the 421 ms of gross travel the pod measured for the same step.
+     *
+     * <p>Simulated over mydrive-001 (51.3 s of real driving, the recorded commands replayed
+     * through both mixers): physical consecutive-loop demand change p90 19.8 -> 13.2 deg, jumps
+     * over 15 deg 2.9/s -> 0.9/s, demand reversals 4.25 -> 3.47/s. 300 deg/s was tried first and
+     * is worse at this loop rate - it spreads one big jump into several 19 deg steps and the
+     * count of violations goes UP.
+     *
+     * <p>Note what the limiter cannot do: it is a RATE, so a slow loop still turns it into a big
+     * step. 53% of the jumps that survive it in simulation happen on loops longer than 70 ms
+     * (= 15 deg at 214 deg/s). Criterion 1 is therefore a loop-rate criterion as much as a mixer
+     * one; at 50 Hz true with a 25 ms p99 the same limit permits 5.4 deg per loop.
+     *
+     * <p>Applied on the shortest-angle difference so it never sends a pod the long way round, and
+     * skipped entirely past a quarter turn, where the pod flips and reverses the drive rather
+     * than rotating - rate-limiting a flip would force a real 180 degree sweep with the drive
+     * pointing the wrong way throughout.
+     */
+    private static volatile double demandSlewDegPerSec = 214.0;
+
+    /** Per-pod anchor for the demand slew limiter, radians; NaN until first commanded. */
+    private final double[] lastCommandedTheta;
+    private long lastArcadeNano = 0;
+
+    /** RUCKUS PATCH: when the drive inputs last carried a real command. See applyDrive. */
+    private long lastActiveInputNano = 0;
+
+    /**
+     * RUCKUS PATCH: how long zero input must persist before X_LOCK engages. Stick release at
+     * speed used to snap all four pods sideways against a still-rolling chassis - ground
+     * reaction torque then buffets the pod azimuths and the whole robot judders. Measured on
+     * 2026-08-13 with a scripted forward/pause/backward cycle: wheels reversed direction 6-7
+     * times per second against a commanded 0.8/s, invariant to every gain tried, and cutting the
+     * instant snap halved it. Within this window zero input holds pod headings (servos released,
+     * the IGNORE_ANGLE_CHANGES behaviour) so the robot rolls out straight; the X still engages
+     * once the chassis has had time to stop.
+     */
+    private static final double X_LOCK_ENGAGE_DELAY_S = 0.35;
+
+    /**
+     * RUCKUS PATCH: last zero-power behaviour written to the pods; null forces the next write.
+     * Upstream v3 re-applies it on every drive() call - once per pod per loop. The 2.1.2 fork set
+     * it only on mode changes, and whether a repeated write costs a Lynx transaction was never
+     * measured here, so this keeps the old write pattern rather than finding out on the robot.
+     */
+    private DcMotor.ZeroPowerBehavior appliedZeroPowerBehavior = null;
+
     /**
      * @param pods SwervePods, coaxial or differential
      */
@@ -42,8 +123,59 @@ public class Swerve implements Drivetrain {
         this.config = config;
         this.voltageSensor = hardwareMap.voltageSensor.iterator().next();
         this.pods = Arrays.asList(pods);
+        this.lastCommandedTheta = new double[pods.length];
+        Arrays.fill(this.lastCommandedTheta, Double.NaN);
 
         setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
+    }
+
+    /** Runtime switches, so each fix can be A/B'd inside one session. */
+    public static void setEpsilonTaper(boolean on) {
+        epsilonTaper = on;
+    }
+
+    public static void setDemandSlewDegPerSec(double degPerSec) {
+        demandSlewDegPerSec = Math.max(0, degPerSec);
+    }
+
+    public static boolean getEpsilonTaper() {
+        return epsilonTaper;
+    }
+
+    public static double getDemandSlewDegPerSec() {
+        return demandSlewDegPerSec;
+    }
+
+    /**
+     * Smoothstep from 0 at zero input to 1 at the band edge. Slope is zero at both ends, so the
+     * taper adds no discontinuity of its own where it meets the untapered region.
+     */
+    private static double taper(double magnitude, double band) {
+        if (band <= 0 || magnitude >= band) {
+            return 1.0;
+        }
+        double u = magnitude / band;
+        return u * u * (3.0 - 2.0 * u);
+    }
+
+    /**
+     * RUCKUS PATCH: the direction of a pod's rotation-only vector before the quarter-turn, i.e.
+     * its X-lock direction. Mixer frame: x = robot right, y = robot forward; offsets are
+     * x = forward, y = left.
+     *
+     * <p>Upstream v3 uses {@code atan2(-x, -y)} with the turn input negated. For x-forward/y-left
+     * offsets that mirrors the rotation field about the robot's lateral axis - checked
+     * numerically on this chassis, CCW turn at 0.5: v3 demands LF 133.5 / RF 226.5 / LB 46.5 /
+     * RB 313.5 deg, the true CCW tangents (and the 2.1.2 mixer) are 226.5 / 133.5 / 313.5 / 46.5.
+     * That is not a rigid rotation; the pods would fight. This keeps 2.1.2's geometry.
+     */
+    private static double rotationBaseAngle(SwervePod pod) {
+        return Math.atan2(pod.getOffset().x(), -pod.getOffset().y());
+    }
+
+    /** RUCKUS PATCH: 2.1.2's Vector kept theta in [0, 2pi); keep feeding the pods that range. */
+    private static double thetaOf(Vector2D v) {
+        return Angle.normalize(v.theta());
     }
 
     /**
@@ -65,6 +197,8 @@ public class Swerve implements Drivetrain {
             pod.move(pod.getAngle(), 0, true);
             pod.setToFloat();
         }
+        // RUCKUS PATCH: the pods were just floated behind the cache's back.
+        appliedZeroPowerBehavior = null;
     }
 
     @Override
@@ -110,25 +244,88 @@ public class Swerve implements Drivetrain {
     public void applyDrive(DrivePowers powers) {
         double forward = powers.forward();
         double strafe = -powers.strafe();
-        double rotation = -powers.turn();
+        // RUCKUS PATCH: CCW-positive, as DrivePowers.turn is everywhere in core (Foresight,
+        // ManualDrive). Upstream negates it here to pair with its mirrored rotation geometry -
+        // see rotationBaseAngle.
+        double rotation = powers.turn();
 
         lastForward = forward;
         lastStrafe = strafe;
         lastRotation = rotation;
 
-        boolean zeroTrans = Math.hypot(strafe, forward) < config.epsilon.get();
-        boolean zeroRotation = Math.abs(rotation) < config.epsilon.get();
+        double epsilon = config.epsilon.get();
 
-        Vector2D[] podVectors = computePodPowers(powers);
+        // stores forward and strafe values as the translation vector with max magnitude of 1
+        Vector2D rawTrans = Vector2D.polar(Range.clip(Math.hypot(strafe, forward), 0, 1), Math.atan2(forward, strafe));
+
+        boolean zeroTrans = rawTrans.magnitude() < epsilon;
+        // RUCKUS PATCH: rotation gets its own, much lower epsilon. The shared 0.05 was a wall
+        // that swallowed every fine heading-hold correction, forcing minimum-magnitude
+        // workarounds upstream whose smallest allowed kick still deflects pod demands by
+        // atan(0.05/translation) - 17+ degrees at crawl speeds, the visible periodic pod
+        // wobble the driver kept reporting. 0.015 lets a damped PID correct continuously with
+        // deflections too small to see. Translation keeps the original epsilon: the zero-input
+        // path (X-lock, release semantics) is tuned around it.
+        double rotEpsilon = Math.min(epsilon, ROTATION_EPSILON);
+        boolean zeroRotation = Math.abs(rotation) < rotEpsilon;
+
+        // RUCKUS PATCH: X_LOCK only after zero input has persisted, so a stick release at speed
+        // does not snap the pods sideways under a rolling chassis. Until then zero input behaves
+        // like IGNORE_ANGLE_CHANGES: headings held, servos quiet, robot rolls out straight.
+        if (!(zeroTrans && zeroRotation)) {
+            lastActiveInputNano = System.nanoTime();
+        }
+        boolean xLockRipe = zeroTrans && zeroRotation
+                && (System.nanoTime() - lastActiveInputNano) / 1.0e9 >= X_LOCK_ENGAGE_DELAY_S;
+        boolean xLock = config.zeroPowerBehavior.get() == SwerveConfig.ZeroPowerBehavior.X_LOCK;
+
+        // RUCKUS PATCH: the epsilon walls decide RELEASE semantics (X-lock, servos quiet) as
+        // booleans, exactly as before - but the vectors handed to the mixer are tapered rather
+        // than deleted, so the demand direction is continuous through each wall. See epsilonTaper.
+        double transScale = epsilonTaper ? taper(rawTrans.magnitude(), epsilon) : 0.0;
+        double rotScale = epsilonTaper ? taper(Math.abs(rotation), rotEpsilon) : 0.0;
+
+        // Untapered, these collapse to the original hard switch: scale 0 below the wall, 1 above.
+        double rotationScalar = zeroRotation ? rotation * rotScale : rotation;
+        Vector2D translationVector = zeroTrans ? rawTrans.times(transScale) : rawTrans;
+
+        Vector2D[] podVectors = new Vector2D[pods.size()];
+        // RUCKUS PATCH: pod directions are carried separately. Vector2D is cartesian, so a
+        // zero-magnitude vector has no direction - which is exactly what the X-lock vector is.
+        // (Upstream v3's X-lock hands every pod theta 0 for that reason.)
+        double[] podThetas = new double[pods.size()];
+
+        for (int i = 0; i < pods.size(); i++) {
+            SwervePod pod = pods.get(i);
+            double base = rotationBaseAngle(pod);
+
+            // this gets the perpendicular vector for the wheel
+            Vector2D rotationVector = Vector2D.polar(rotationScalar, base + Math.PI / 2);
+
+            podVectors[i] = translationVector.plus(rotationVector);
+            podThetas[i] = thetaOf(podVectors[i]);
+            if (xLock && xLockRipe) {
+                // Zero magnitude, pod's own radius for the angle: the X pattern, and no drive
+                // power whatever the taper left in the vectors above.
+                podVectors[i] = Vector2D.zero();
+                podThetas[i] = Angle.normalize(base);
+            }
+        }
 
         // finding if any vector has magnitude > maxPowerScaling
+        //
+        // RUCKUS PATCH: read the voltage sensor once per call, not once per pod. (The 2.1.2
+        // stock mixer also discarded the scaled vector, making compensation a silent no-op;
+        // v3 fixed that part upstream.)
         double maxMagnitude = 1;
-        for (int i = 0; i < podVectors.length; i++) {
-            if (config.voltageCompensation.get()) {
-                double voltageNormalized = getVoltageNormalized();
+        if (config.voltageCompensation.get()) {
+            double voltageNormalized = getVoltageNormalized();
+            for (int i = 0; i < podVectors.length; i++) {
                 podVectors[i] = podVectors[i].times(voltageNormalized);
             }
-            maxMagnitude = Math.max(maxMagnitude, podVectors[i].magnitude());
+        }
+        for (Vector2D podVector : podVectors) {
+            maxMagnitude = Math.max(maxMagnitude, podVector.magnitude());
         }
 
         powerScaling = 1 / maxMagnitude;
@@ -140,7 +337,7 @@ public class Swerve implements Drivetrain {
             double currentRad = pods.get(i).getAngle();
 
             // ask the pod to translate the wheel-space theta into the encoder frame
-            double targetRad = pods.get(i).adjustThetaForEncoder(podVectors[i].theta());
+            double targetRad = pods.get(i).adjustThetaForEncoder(podThetas[i]);
 
             // compute shortest signed error in radians using MathFunctions
             double mag = Angle.smallestDifference(currentRad, targetRad);
@@ -153,42 +350,87 @@ public class Swerve implements Drivetrain {
         avgScaling /= pods.size();
         lastAvgScaling = avgScaling;
 
+        long nowNano = System.nanoTime();
+        double slewDt = lastArcadeNano == 0 ? 0 : (nowNano - lastArcadeNano) / 1.0e9;
+        lastArcadeNano = nowNano;
+        // A stalled caller (mode switch, OpMode pause) must not bank up allowance.
+        double maxStep = (demandSlewDegPerSec > 0 && slewDt > 0 && slewDt < 0.5)
+                ? Math.toRadians(demandSlewDegPerSec) * slewDt
+                : Double.POSITIVE_INFINITY;
+
         for (int podNum = 0; podNum < pods.size(); podNum++) {
             // Normalizing if necessary while preserving relative sizes
             Vector2D finalVector = podVectors[podNum].times(1 / maxMagnitude);
 
-            pods.get(podNum).move(finalVector.theta(), finalVector.magnitude() * avgScaling,
-                    zeroTrans && zeroRotation && config.zeroPowerBehavior.get() == SwerveConfig.ZeroPowerBehavior.IGNORE_ANGLE_CHANGES);
+            // RUCKUS PATCH: inside the X_LOCK engage delay the pod vectors are still the
+            // degenerate zero vectors, so the pods must be released rather than sent chasing
+            // a meaningless theta - same treatment IGNORE_ANGLE_CHANGES always gets.
+            boolean release = zeroTrans && zeroRotation
+                    && (config.zeroPowerBehavior.get() == SwerveConfig.ZeroPowerBehavior.IGNORE_ANGLE_CHANGES
+                            || !xLockRipe);
+
+            double theta = podThetas[podNum];
+            if (release) {
+                // Servos are off and the pods hold where they are, so the anchor stays valid and
+                // is KEPT - dropping it made the first command after every release unlimited,
+                // which is exactly the snap-out-of-park the limiter exists to smooth. Simulated
+                // over mydrive-001: keeping it cut jumps of 85 deg or more from 4-6 per pod to
+                // 1-2.
+                lastCommandedTheta[podNum] = Double.isNaN(lastCommandedTheta[podNum])
+                        ? theta : lastCommandedTheta[podNum];
+            } else if (!Double.isNaN(lastCommandedTheta[podNum])
+                    && maxStep != Double.POSITIVE_INFINITY) {
+                double delta = Angle.normalizeSigned(theta - lastCommandedTheta[podNum]);
+                // Past a quarter turn the pod does not rotate at all - it flips and reverses the
+                // drive, which costs no travel and is the behaviour the flip hysteresis was tuned
+                // for. Rate-limiting there would force a real 180 degree sweep with the drive
+                // pointing the wrong way for the whole of it. So limit ordinary rotations only,
+                // and re-anchor on the ones the pod will resolve by flipping.
+                if (Math.abs(delta) <= Math.PI / 2.0) {
+                    if (delta > maxStep) {
+                        theta = Angle.normalize(lastCommandedTheta[podNum] + maxStep);
+                    } else if (delta < -maxStep) {
+                        theta = Angle.normalize(lastCommandedTheta[podNum] - maxStep);
+                    }
+                }
+                lastCommandedTheta[podNum] = theta;
+            } else {
+                lastCommandedTheta[podNum] = theta;
+            }
+
+            pods.get(podNum).move(theta, finalVector.magnitude() * avgScaling, release);
         }
     }
 
+    /**
+     * Pod vectors for {@code powers}, stateless - used by {@link #maxScaling}. RUCKUS PATCH: same
+     * geometry, rotation epsilon and taper as {@link #applyDrive}, so the scaling Foresight plans
+     * with matches what the pods are given. X-lock is omitted: it only ever produces zero
+     * vectors, and this is only read for magnitudes.
+     */
     public Vector2D[] computePodPowers(DrivePowers powers) {
         double forward = powers.forward();
         double strafe = -powers.strafe();
-        double rotation = -powers.turn();
+        double rotation = powers.turn();
+
+        double epsilon = config.epsilon.get();
+        double rotEpsilon = Math.min(epsilon, ROTATION_EPSILON);
 
         Vector2D[] podVectors = new Vector2D[pods.size()];
         Vector2D rawTrans = Vector2D.polar(Range.clip(Math.hypot(strafe, forward), 0, 1), Math.atan2(forward, strafe));
 
-        boolean zeroTrans = rawTrans.magnitude() < config.epsilon.get();
-        boolean zeroRotation = Math.abs(rotation) < config.epsilon.get();
+        boolean zeroTrans = rawTrans.magnitude() < epsilon;
+        boolean zeroRotation = Math.abs(rotation) < rotEpsilon;
 
-        double rotationScalar = (zeroRotation) ? 0 : rotation;
+        double transScale = epsilonTaper ? taper(rawTrans.magnitude(), epsilon) : 0.0;
+        double rotScale = epsilonTaper ? taper(Math.abs(rotation), rotEpsilon) : 0.0;
+        double rotationScalar = zeroRotation ? rotation * rotScale : rotation;
+        Vector2D translationVector = zeroTrans ? rawTrans.times(transScale) : rawTrans;
 
         for (int i = 0; i < pods.size(); i++) {
-            SwervePod pod = pods.get(i);
-
-            Vector2D translationVector = zeroTrans ? Vector2D.zero() : rawTrans;
-
-            Vector2D rotationVector = Vector2D.polar(rotationScalar, Math.atan2(-pod.getOffset().x(), -pod.getOffset().y()))
-                    .rotate(Math.PI / 2);
-
+            Vector2D rotationVector =
+                    Vector2D.polar(rotationScalar, rotationBaseAngle(pods.get(i)) + Math.PI / 2);
             podVectors[i] = translationVector.plus(rotationVector);
-            if (config.zeroPowerBehavior.get() == SwerveConfig.ZeroPowerBehavior.X_LOCK
-                    && zeroTrans && zeroRotation) {
-                rotationVector = rotationVector.rotate(-Math.PI / 2);
-                podVectors[i] = rotationVector;
-            }
         }
 
         return podVectors;
@@ -222,6 +464,11 @@ public class Swerve implements Drivetrain {
     }
 
     public void setZeroPowerBehavior(DcMotor.ZeroPowerBehavior behavior) {
+        // RUCKUS PATCH: write only on change - see appliedZeroPowerBehavior.
+        if (behavior == appliedZeroPowerBehavior) {
+            return;
+        }
+        appliedZeroPowerBehavior = behavior;
         for (SwervePod pod : pods) {
             if (behavior == DcMotor.ZeroPowerBehavior.BRAKE)
                 pod.setToBreak();
@@ -241,4 +488,3 @@ public class Swerve implements Drivetrain {
                 - ((nominalVoltage * nominalVoltage / voltage) * staticFrictionCoefficient));
     }
 }
-
