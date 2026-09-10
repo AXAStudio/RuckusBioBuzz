@@ -26,7 +26,11 @@ public interface Curve {
 
     default double pathCompletion(double t) {
         if (length() == 0) return 0.0;
-        return remainingDistance(t) / length();
+        // RUCKUS PATCH: upstream returns remainingDistance(t) / length() - the fraction LEFT, not
+        // done. BezierCurve overrides this correctly; Line and CompoundCurve inherit it, so on
+        // them Interpolator.linear/longLinear ran the heading end-to-start, PiecewiseInterpolator
+        // switched segments in reverse and Foresight.completion() counted down.
+        return 1 - remainingDistance(t) / length();
     }
 
     default double parameter(double pathCompletion) {
