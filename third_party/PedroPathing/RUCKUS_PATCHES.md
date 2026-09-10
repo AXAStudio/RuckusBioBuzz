@@ -17,7 +17,44 @@ git remote add pedro-upstream https://github.com/Pedro-Pathing/PedroPathing.git
 git remote set-url --push pedro-upstream DISABLED
 ```
 
-The vendored Gradle metadata currently reports PedroPathing version `2.1.2`.
+The vendored Gradle metadata currently reports PedroPathing version **`3.0.0`** — upstream tag
+`v3.0.0` (`bb27610`, 2026-09-09), vendored verbatim in `1af2762` on `pedro-3.0.0-migration`, with
+the patches below re-applied on top. Everything from "Complete inventory vs. v2.1.2" down is the
+history of the 2.1.2 fork these were ported from.
+
+## Local patches on v3.0.0
+
+Search the tree for `RUCKUS PATCH`. Each entry names the upstream 3.0.0 behaviour it changes.
+
+| Where | Patch | Upstream 3.0.0 behaviour it changes |
+|---|---|---|
+| `build.gradle.kts`, `core/`, `revhub/build.gradle.kts` | Dokka, Spotless and `kotlin("android")` removed | Dokka broke variant selection across the composite build (2026-08-09 entry below) |
+| `revhub/build.gradle.kts` | `compileSdk` 35 → 34 | platform 35 is not installed; TeamCode compiles at 34 |
+| `gradle/libs.versions.toml` | FTC 11.2.0 → 11.1.0, AGP 8.7.3 → 8.7.0, `annotations` 23.0.0 restored | compile against what the app ships; `:telemetry` needs `annotations` |
+| `settings.gradle.kts`, `telemetry/**` | local `:telemetry` module kept | not part of upstream. Its only TeamCode user was the 2.x `Tuning.java`, now gone: removable |
+| `core/.../control/PIDFController.java` (+ `PIDFCoefficients`, `PIDFCoefficientSupplier`) | the 2.1.2 classes, **retained** with their integral patches, now `implements Controller` | upstream deleted them. v3's `PIDController` has no integral clamp, band or reset threshold, and skips D when dt ≤ 1 ms. Every pod turn gain was measured on this arithmetic |
+| `revhub/.../CoaxialPod.java` | every 2.1.2 patch (kS tanh, pulsed approach + stall ladder, gain scheduling, flip hysteresis, output slew, derivative-on-measurement, median filter off, instrumentation); `getTurnPIDF()`; `setMotor/ServoCachingThreshold` write through to the config | stock v3 pod: sign-relay kF only, no hysteresis, no schedule |
+| `revhub/.../Swerve.java` | 2.1.2 mixer: rotation ε 0.015, smoothstep taper, demand slew 214 °/s, X-lock engage delay 0.35 s, single voltage read | stock v3 mixer |
+| ″ | **rotation geometry kept at 2.1.2's** `atan2(x, −y)` with CCW-positive turn | **upstream bug:** v3's `atan2(−x, −y)` with negated turn mirrors the rotation field for x-forward/y-left offsets (CCW 0.5: v3 LF 133.5°, true tangent 226.5°) — not a rigid rotation |
+| ″ | pod directions carried beside the `Vector2D`s | **upstream bug:** `Vector2D` is cartesian, so the zero-magnitude X-lock vector hands every pod θ = 0 |
+| ″ | θ normalised to [0, 2π) before `move()` | 2.1.2's polar `Vector` did; keeps the recorder's `tgt` column comparable |
+| ″ | zero-power behaviour written only on change | v3 re-writes it on every `drive()` call |
+| `core/.../utils/Control.java`, `algorithm/ForesightPowerAllocator.java` | `clampBrakingPower(Vector2D, Vector2D, max)` — direction-preserving | **upstream regression:** v3 clamps braking per axis again, the bug the 2.1.2 CustomDrivetrain patch fixed (rotates the command 30–45°) |
+| `core/.../paths/curves/Curve.java` | `pathCompletion` = `1 − remaining/length` | **upstream bug:** default returned the fraction *remaining*; `Line`/`CompoundCurve` inherit it, so `linear`/`longLinear` headings ran backwards, `PiecewiseInterpolator` switched in reverse, `Foresight.completion()` counted down |
+
+**Equivalence evidence for the pod + mixer port** (2026-09-10, host-side, not on the robot): the
+2.1.2 fork at `a6edf00` and this tree were driven side by side through identical inputs against
+identical simulated plants (the robot's real zeros, voltage ranges, per-pod gains and pulse
+settings), each in its own classloader, with `System.nanoTime()` replaced by a shared stepped
+clock. 1200 steps — X-lock, snap-out, diagonal + turn, spin, both epsilon walls, strafe flips,
+flip hysteresis, 400 steps of random driving with releases, pulsed crawl, park — at 8, 10 and
+25 ms: pod demand agrees to 2e-13°, servo power to 6e-15, write counts identical. The one real
+difference is the demand direction at exactly zero input: 2.1.2's polar `Vector` derived it from
+IEEE signed zeros (front pods 180°, back pods 0°), v3 reports 0°. Pods are released either way
+and the loop error is identical; only the remembered flip state differs. The vector braking clamp
+matched a transcription of the 2.1.2 function on 10⁶ random cases to 8.9e-16.
+
+## History: the 2.1.2 fork
 
 **Base verified 2026-09-10:** the tree vendored in `9761b95` was fingerprinted against every
 upstream commit since 2025-06 (line endings normalised — the raw checkout differs from upstream
@@ -216,8 +253,8 @@ git fetch pedro-upstream --tags
 Review upstream changes before applying them:
 
 ```bash
-git log --oneline v2.1.2..pedro-upstream/main
-git diff --stat v2.1.2..pedro-upstream/main
+git log --oneline v3.0.0..pedro-upstream/main
+git diff --stat v3.0.0..pedro-upstream/main
 ```
 
 Because Pedro is vendored under `third_party/PedroPathing`, do not merge `pedro-upstream/main` directly into the robot repo. Apply upstream changes into the vendored prefix from the recorded base tag, then compile TeamCode before committing.
@@ -225,8 +262,12 @@ Because Pedro is vendored under `third_party/PedroPathing`, do not merge `pedro-
 Recommended update shape, replacing `main` with a newer tag if you want a tagged release instead:
 
 ```bash
-git diff --binary v2.1.2..pedro-upstream/main -- . \
+git diff --binary v3.0.0..pedro-upstream/main -- . \
   | git apply --3way --directory=third_party/PedroPathing
 ```
+
+That only works for incremental releases. 2.1.2 → 3.0.0 was a rewrite (165 files, modules
+renamed): it was migrated by vendoring the new tag verbatim in its own commit, then re-applying
+each patch as its own commit. Do the same for the next major version.
 
 If upstream changes conflict with local patches, resolve the files in `third_party/PedroPathing`, update this note, then run the normal TeamCode Gradle compile. After a successful update, replace the base tag in this file with the new upstream tag or commit SHA.
