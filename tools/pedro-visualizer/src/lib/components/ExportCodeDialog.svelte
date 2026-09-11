@@ -19,7 +19,7 @@
     generateSequentialCommandCode,
     generateTeamCodeAutoCode,
   } from "../../utils/codeExporter";
-  import { validateJavaDelimiters } from "../../utils/javaValidation";
+  import { findPedro2Api, validateJavaDelimiters } from "../../utils/javaValidation";
   import { buildRoute, groupLineIds, groupMembers } from "../../utils/sequence";
   import {
     getAngularDifference,
@@ -229,6 +229,10 @@
       messages.push(javaSyntaxIssue);
     }
 
+    // TeamCode compiles against Pedro 3 only; a Pedro 2 call here is a
+    // compile failure (or an exporter regression) caught before the save.
+    messages.push(...findPedro2Api(exportedCode));
+
     if (!lines.length) {
       messages.push({ level: "error", message: "Add at least one path before exporting." });
     }
@@ -244,8 +248,8 @@
     const routeStartPoints = route.startPoints;
 
     // A path whose heading goal does not pick up where the previous one left
-    // off makes the robot turn while it drives — inside a PathChain it cannot
-    // stop to do it, so a large jump is worth flagging before it reaches a match.
+    // off makes the robot turn while it drives — inside a chain it cannot stop
+    // to do it, so a large jump is worth flagging before it reaches a match.
     let previousEndHeading: number | null = null;
     route.steps.forEach((step) => {
       if (step.kind !== "path") {

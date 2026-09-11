@@ -342,8 +342,8 @@ export interface Shape {
 export type TimelineEventType = "travel" | "wait";
 
 /**
- * The PathChain a travel segment belongs to. Consecutive paths are followed as
- * one chain, which PedroPathing drives without stopping in between, so the
+ * The chain a travel segment belongs to. Consecutive paths are followed as one
+ * `Paths.path(...)`, which Pedro drives without stopping in between, so the
  * motion profile spans the whole chain rather than each path.
  */
 export interface ProfilePoint {

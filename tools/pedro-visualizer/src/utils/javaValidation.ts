@@ -152,6 +152,49 @@ export function validateJavaDelimiters(source: string): JavaValidationIssue | nu
   return null;
 }
 
+/**
+ * Pedro 2 API that no longer exists in the vendored Pedro 3.0.0, with what
+ * replaced it. TeamCode compiles against Pedro 3 only, so any of these in
+ * generated code is a compile failure waiting to happen - or, worse, a
+ * regression back to an exporter that was ported off them.
+ */
+const PEDRO2_API: Array<{ pattern: RegExp; replacement: string }> = [
+  { pattern: /\bcom\.pedropathing\.geometry\b/, replacement: "com.pedropathing.geometry is gone; Pose is com.pedropathing.math.Pose" },
+  { pattern: /\bcom\.pedropathing\.ftc\b/, replacement: "com.pedropathing.ftc is gone; the FTC module is com.pedropathing.revhub" },
+  { pattern: /\bcom\.pedropathing\.util\b/, replacement: "com.pedropathing.util is gone; it is com.pedropathing.utils" },
+  { pattern: /\bPathChain\b/, replacement: "PathChain is gone; a chain is one Path from Paths.path(...)" },
+  { pattern: /\.pathBuilder\s*\(/, replacement: "follower.pathBuilder() is gone; build paths with com.pedropathing.api.Paths" },
+  { pattern: /\bBezier(?:Line|Curve)\s*\(/, replacement: "new BezierLine/BezierCurve is gone; use Paths.line / Paths.curve" },
+  { pattern: /\.set(?:Linear|Constant|Tangent)?HeadingInterpolation\s*\(/, replacement: "set*HeadingInterpolation is gone; use Path.constant / heading(Interpolator) / tangent" },
+  { pattern: /\.setReversed\s*\(/, replacement: "setReversed is gone; use Path.reverseTangent()" },
+  // The lookahead sits before the whitespace: after it, `\s*` could backtrack to
+  // zero characters and let a newline pass as "not a digit".
+  { pattern: /\.add(?:Parametric|Temporal|Pose)Callback\s*\((?!\s*[0-9])/, replacement: "PathBuilder callbacks are gone; the generated AutoPath takes a segment index first" },
+  { pattern: /\.followPath\s*\(/, replacement: "followPath is gone; use follower.follow(path) with follower.holdEnd" },
+  { pattern: /\.setStartingPose\s*\(/, replacement: "setStartingPose is gone; use follower.setPose" },
+  { pattern: /\.(?:startTeleopDrive|setTeleOpDrive)\s*\(/, replacement: "teleop drive calls are gone; use follower.manual(DrivePowers)" },
+  { pattern: /\.getPose\s*\(\s*\)/, replacement: "getPose() is gone; use follower.pose()" },
+  { pattern: /\.get(?:X|Y|Heading)\s*\(\s*\)/, replacement: "Pose.getX/getY/getHeading are gone; use x() / y() / heading()" },
+];
+
+/** Source with comments and string/char literals blanked out, line breaks kept. */
+function codeOnly(source: string): string {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, (match) => match.replace(/[^\n]/g, " "))
+    .replace(/\/\/[^\n]*/g, "")
+    .replace(/"(?:\\.|[^"\\\n])*"/g, '""')
+    .replace(/'(?:\\.|[^'\\\n])*'/g, "''");
+}
+
+/** Every Pedro 2 call left in generated code, as errors. Comments and strings are ignored. */
+export function findPedro2Api(source: string): JavaValidationIssue[] {
+  const code = codeOnly(source);
+  return PEDRO2_API.filter(({ pattern }) => pattern.test(code)).map(({ replacement }) => ({
+    level: "error" as const,
+    message: `Generated Java uses Pedro 2 API: ${replacement}.`,
+  }));
+}
+
 export function validateTeamCodeAutoSource(
   source: string,
   className: string,
@@ -173,6 +216,8 @@ export function validateTeamCodeAutoSource(
   if (delimiterIssue) {
     issues.push(delimiterIssue);
   }
+
+  issues.push(...findPedro2Api(source));
 
   return issues;
 }

@@ -540,13 +540,16 @@ export const CHAIN_BREAK_LABELS: Record<ChainBreakReason, string> = {
 };
 
 /**
- * A run of consecutive paths driven as a single PedroPathing PathChain.
+ * A run of consecutive paths driven as one Pedro path chain.
  *
- * A chain decelerates only on its last path (`DecelerationType.LAST_PATH`), so
- * merging consecutive paths is what stops the robot from braking to zero and
- * settling on every waypoint. Everything reads the grouping from here: the time
- * estimate profiles each chain as one move, the exporter emits one
- * `pathBuilder()` per chain, and the editor marks where the robot really stops.
+ * A chain is exported as a single `Paths.path(...)`. Pedro 3's Foresight
+ * follower brakes only for the end of the whole thing: when it would start
+ * braking on a path that is not the last, it skips on to the next one instead
+ * (`ForesightConfig.pathSkip`, on by default). So merging consecutive paths is
+ * what stops the robot from braking to zero and settling on every waypoint.
+ * Everything reads the grouping from here: the time estimate profiles each chain
+ * as one move, the exporter emits one `Paths.path(...)` per chain, and the
+ * editor marks where the robot really stops.
  */
 export type ChainRun = {
   index: number;

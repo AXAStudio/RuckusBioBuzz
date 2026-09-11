@@ -204,8 +204,17 @@ type NumberExpressionRenderer = (
   expressionType: NumberExpressionType,
 ) => string;
 
+/**
+ * One event marker as a callback on the generated `AutoPath`.
+ *
+ * Pedro 3 dropped PathBuilder's callbacks, so the generated auto carries its own
+ * small runtime (`AutoPath`) that keeps Pedro 2's trigger rules. `segmentIndex`
+ * is the path's position inside its chain — Pedro 2 attached a callback to the
+ * path it was added after, and a chain is now one `Paths.path(...)`.
+ */
 function buildTeamCodeCallback(
   marker: NormalizedEventMarker,
+  segmentIndex: number,
   numberExpression: NumberExpressionRenderer,
   booleanExpression: (expression: string | undefined) => string | null = () => null,
 ): string {
@@ -217,28 +226,58 @@ function buildTeamCodeCallback(
     : `() -> ${start}`;
 
   if (marker.triggerType === "temporal") {
-    return `.addTemporalCallback(${numberExpression(marker.triggerMsExpression, `${marker.triggerMs}L`, "long")}, ${action})`;
+    return `.addTemporalCallback(${segmentIndex}, ${numberExpression(marker.triggerMsExpression, `${marker.triggerMs}L`, "long")}, ${action})`;
   }
 
   if (marker.triggerType === "pose") {
-    return `.addPoseCallback(new Pose(${numberExpression(marker.poseXExpression, fixed(marker.poseX), "double")}, ${numberExpression(marker.poseYExpression, fixed(marker.poseY), "double")}), ${action}, ${numberExpression(marker.positionExpression, fixed(marker.position), "position")})`;
+    return `.addPoseCallback(${segmentIndex}, new Pose(${numberExpression(marker.poseXExpression, fixed(marker.poseX), "double")}, ${numberExpression(marker.poseYExpression, fixed(marker.poseY), "double")}), ${action}, ${numberExpression(marker.positionExpression, fixed(marker.position), "position")})`;
   }
 
-  return `.addParametricCallback(${numberExpression(marker.positionExpression, fixed(marker.position), "position")}, ${action})`;
+  return `.addParametricCallback(${segmentIndex}, ${numberExpression(marker.positionExpression, fixed(marker.position), "position")}, ${action})`;
 }
+
+/**
+ * Heading along a path on the curve parameter t, shaped by t^curve.
+ *
+ * This is what the visualizer draws (`goalHeadingAt` is fed the curve
+ * parameter) and what Pedro 2's `setLinearHeadingInterpolation` did at curve 1.
+ * Pedro 3's `Path.linear()` interpolates on distance fraction instead, which
+ * differs on nearly every Bezier, so the generated code carries this helper
+ * rather than let the robot disagree with the preview.
+ */
+const HEADING_HELPER_JAVA = `/**
+     * Heading from start to end on the curve parameter t, shaped by t^curve - exactly what the
+     * visualizer draws, and Pedro 2's setLinearHeadingInterpolation at curve 1. Pedro 3's
+     * Path.linear() interpolates on distance fraction instead, which differs on most Beziers.
+     */
+    private static Interpolator headingInterpolator(
+        double startHeading,
+        double endHeading,
+        double curve
+    ) {
+        double clampedCurve = Math.max(0.25, Math.min(4.0, curve));
+        double deltaHeading = normalizeRadians(endHeading - startHeading);
+        return (pathCurve, t) ->
+            normalizeRadians(
+                startHeading + deltaHeading * Math.pow(Math.max(0.0, Math.min(1.0, t)), clampedCurve)
+            );
+    }
+
+    private static double normalizeRadians(double angle) {
+        while (angle <= -Math.PI) {
+            angle += 2.0 * Math.PI;
+        }
+        while (angle > Math.PI) {
+            angle -= 2.0 * Math.PI;
+        }
+        return angle;
+    }`;
 
 function headingCurve(line: Line): number {
   if (line.endPoint.heading !== "linear") return 1;
   const curve = Number(line.endPoint.headingCurve ?? 1);
   if (!Number.isFinite(curve)) return 1;
   return Math.max(0.25, Math.min(4, curve));
-}
-
-function usesCurvedHeading(line: Line): boolean {
-  return (
-    line.endPoint.heading === "linear" &&
-    Math.abs(headingCurve(line) - 1) > 0.001
-  );
 }
 
 function pathStepHeadingDegrees(
@@ -316,23 +355,23 @@ function buildPoseVariablePathStepCode(
   return `private static final PathStep ${name} = new PathStep(${xExpression}, ${yExpression}, ${headingExpression});`;
 }
 
+/**
+ * One path as a Pedro 3 `Path` expression, for the upstream-style exports.
+ *
+ * `Paths.line` / `Paths.curve` build it; the heading is set on the result.
+ * Linear headings go through the generated `headingInterpolator` helper so they
+ * follow the curve parameter like the preview does (see HEADING_HELPER_JAVA).
+ */
 function buildPathSegmentCode(
   line: Line,
   startExpression: string,
   identifiers: JavaIdentifierMap,
 ): string {
-  const headingTypeToFunctionName = {
-    constant: "setConstantHeadingInterpolation",
-    linear: "setLinearHeadingInterpolation",
-    tangential: "setTangentHeadingInterpolation",
-  };
-
   const controlPoints = line.controlPoints
     .map((point) => `new Pose(${point.x.toFixed(3)}, ${point.y.toFixed(3)})`)
     .join(",\n            ");
 
-  const curveType =
-    line.controlPoints.length === 0 ? "BezierLine" : "BezierCurve";
+  const factory = line.controlPoints.length === 0 ? "Paths.line" : "Paths.curve";
 
   const endXExpression = buildJavaExpression(
     line.endPoint.xExpression,
@@ -349,35 +388,23 @@ function buildPathSegmentCode(
     ? `${startExpression},\n            ${controlPoints},\n            new Pose(${endXExpression}, ${endYExpression})`
     : `${startExpression},\n            new Pose(${endXExpression}, ${endYExpression})`;
 
-  const headingConfig =
+  const degrees = (expression: string | undefined, fallback: number | undefined) =>
+    `Math.toRadians(${buildJavaExpression(expression, fixed(fallback ?? 0), identifiers)})`;
+
+  // Reverse only exists on a tangential heading - the editor offers it nowhere
+  // else, and the preview ignores a stale flag left on a linear or constant one.
+  const headingCall =
     line.endPoint.heading === "constant"
-      ? `Math.toRadians(${buildJavaExpression(
-          line.endPoint.degreesExpression,
-          fixed(line.endPoint.degrees ?? 0),
-          identifiers,
-        )})`
+      ? `.constant(${degrees(line.endPoint.degreesExpression, line.endPoint.degrees)})`
       : line.endPoint.heading === "linear"
-        ? `Math.toRadians(${buildJavaExpression(
-            line.endPoint.startDegExpression,
-            fixed(line.endPoint.startDeg ?? 0),
-            identifiers,
-          )}), Math.toRadians(${buildJavaExpression(
-            line.endPoint.endDegExpression,
-            fixed(line.endPoint.endDeg ?? 0),
-            identifiers,
-          )})`
-        : "";
+        ? `.heading(headingInterpolator(${degrees(line.endPoint.startDegExpression, line.endPoint.startDeg)}, ${degrees(line.endPoint.endDegExpression, line.endPoint.endDeg)}, ${buildJavaExpression(line.endPoint.headingCurveExpression, fixed(headingCurve(line)), identifiers)}))`
+        : line.endPoint.reverse
+          ? ".reverseTangent()"
+          : ".tangent()";
 
-  const reverseConfig = line.endPoint.reverse
-    ? "\n          .setReversed()"
-    : "";
-
-  return `.addPath(
-            new ${curveType}(
-              ${allPoints}
-            )
-          )
-          .${headingTypeToFunctionName[line.endPoint.heading]}(${headingConfig})${reverseConfig}`;
+  return `${factory}(
+            ${allPoints}
+          )${headingCall}`;
 }
 
 function buildPoseExpression(
@@ -397,11 +424,16 @@ function buildPoseExpression(
   return `new Pose(${xExpression}, ${yExpression})`;
 }
 
+/**
+ * One path of a TeamCode auto as a Pedro 3 `Path` expression.
+ *
+ * Callbacks are not attached here: in Pedro 3 they live on the generated
+ * `AutoPath` that wraps the whole chain, keyed by this path's index in it.
+ */
 function buildTeamCodePathSegmentCode(
   line: Line,
   startExpression: string,
   endExpression: string,
-  pathIndex = 0,
   numberExpression: NumberExpressionRenderer,
   booleanExpression: (expression: string | undefined) => string | null = () => null,
 ): string {
@@ -415,8 +447,7 @@ function buildTeamCodePathSegmentCode(
     )
     .join(",\n              ");
 
-  const curveType =
-    line.controlPoints.length === 0 ? "BezierLine" : "BezierCurve";
+  const factory = line.controlPoints.length === 0 ? "Paths.line" : "Paths.curve";
   const allPoints = controlPoints
     ? `${startExpression},\n              ${controlPoints},\n              ${endExpression}`
     : `${startExpression},\n              ${endExpression}`;
@@ -440,31 +471,25 @@ function buildTeamCodePathSegmentCode(
       "double",
     );
 
+  // A linear heading always goes through the shaped helper: at curve 1 it is
+  // Pedro 2's linear interpolation on the curve parameter, which is what the
+  // preview draws. Reverse only exists on a tangential heading (the editor
+  // offers it nowhere else), and an expression driving it stays live in Java.
+  const reverseCondition = booleanExpression(line.endPoint.reverseExpression);
   const headingCall =
     line.endPoint.heading === "constant"
-      ? `.setConstantHeadingInterpolation(Math.toRadians(${degrees()}))`
-      : usesCurvedHeading(line)
-        ? `.setHeadingInterpolation(closestPoint -> interpolateHeading(Math.toRadians(${startDeg()}), Math.toRadians(${endDeg()}), closestPoint.getTValue(), ${numberExpression(line.endPoint.headingCurveExpression, fixed(headingCurve(line)), "double")}))`
-        : line.endPoint.heading === "linear"
-          ? `.setLinearHeadingInterpolation(Math.toRadians(${startDeg()}), Math.toRadians(${endDeg()}))`
-          : `.setTangentHeadingInterpolation()`;
+      ? `.constant(Math.toRadians(${degrees()}))`
+      : line.endPoint.heading === "linear"
+        ? `.heading(headingInterpolator(Math.toRadians(${startDeg()}), Math.toRadians(${endDeg()}), ${numberExpression(line.endPoint.headingCurveExpression, fixed(headingCurve(line)), "double")}))`
+        : reverseCondition
+          ? `.heading(${reverseCondition} ? Interpolator.tangent.reverse() : Interpolator.tangent)`
+          : line.endPoint.reverse
+            ? ".reverseTangent()"
+            : ".tangent()";
 
-  const reverseConfig = line.endPoint.reverse
-    ? "\n          .setReversed()"
-    : "";
-  const callbackConfig = normalizeEventMarkers(line, pathIndex)
-    .map(
-      (marker) =>
-        `\n          ${buildTeamCodeCallback(marker, numberExpression, booleanExpression)}`,
-    )
-    .join("");
-
-  return `.addPath(
-            new ${curveType}(
+  return `${factory}(
               ${allPoints}
-            )
-          )
-          ${headingCall}${reverseConfig}${callbackConfig}`;
+            )${headingCall}`;
 }
 
 function javaStringLiteral(value: string): string {
@@ -708,9 +733,11 @@ export async function generateTeamCodeAutoCode(
   };
 
   /**
-   * Consecutive paths become one PathChain.
+   * Consecutive paths become one `Paths.path(...)`, wrapped in an `AutoPath`
+   * that carries their event markers.
    *
-   * A chain decelerates only on its last path, so merging is what keeps the
+   * Foresight brakes only for the end of a chain (it skips to the next path
+   * rather than braking for an interior one), so merging is what keeps the
    * robot from braking to a stop and settling on every waypoint. The grouping
    * rules live in `buildChainRuns`, shared with the time estimate, so the auto
    * stops exactly where the editor says it will.
@@ -766,15 +793,32 @@ export async function generateTeamCodeAutoCode(
           member.line,
           startExpression,
           endExpression,
-          member.lineIndex,
           numberExpression,
           booleanExpression,
         );
       });
 
-      chainAssignmentBlocks.push(`${field} = follower.pathBuilder()
-          ${segments.join("\n          ")}
-          .build();`);
+      // A one-path chain is just that path; Paths.path(...) over one child
+      // would add a CompoundPath for nothing.
+      const pathExpression =
+        segments.length === 1
+          ? segments[0]
+          : `Paths.path(
+              ${segments.join(",\n              ")}
+            )`;
+
+      // Each marker is keyed by its path's index in this chain, as Pedro 2
+      // attached a callback to the path it was added after.
+      const callbacks = run.steps.flatMap((member, segmentIndex) =>
+        normalizeEventMarkers(member.line, member.lineIndex).map(
+          (marker) =>
+            `\n          ${buildTeamCodeCallback(marker, segmentIndex, numberExpression, booleanExpression)}`,
+        ),
+      );
+
+      chainAssignmentBlocks.push(`${field} = new AutoPath(
+            ${pathExpression}
+          )${callbacks.join("")};`);
 
       return { field, run };
     });
@@ -842,7 +886,7 @@ export async function generateTeamCodeAutoCode(
     }
 
     // Repeat loops and `if` blocks both wrap a group of paths, so they share the
-    // same PathChain[] fields and the same followRepeatStep runtime helper —
+    // same AutoPath[] fields and the same followRepeatStep runtime helper —
     // an `if` block is simply a group run once, behind a guard.
     // A group runs its members in order, and a wait or an event between two
     // paths is the reason for putting it inside rather than beside. Each member
@@ -901,13 +945,13 @@ export async function generateTeamCodeAutoCode(
   flushTopLevelPaths();
 
   const chainFieldDeclarations = chainFields
-    .map((field) => `private PathChain ${field};`)
+    .map((field) => `private AutoPath ${field};`)
     .join("\n    ");
   const chainAssignments = chainAssignmentBlocks.join("\n\n      ");
 
   const repeatFieldDeclarations = groupChainFields
     .map(
-      (_, slot) => `private PathChain[] repeat${slot + 1}Paths;
+      (_, slot) => `private AutoPath[] repeat${slot + 1}Paths;
     private double[] repeat${slot + 1}PathSpeeds;
     private long[] repeat${slot + 1}HoldMs;
     private String[] repeat${slot + 1}HoldEvents;`,
@@ -915,7 +959,7 @@ export async function generateTeamCodeAutoCode(
     .join("\n    ");
   const repeatAssignments = groupChainFields
     .map(
-      (fields, slot) => `repeat${slot + 1}Paths = new PathChain[] { ${fields.join(", ")} };
+      (fields, slot) => `repeat${slot + 1}Paths = new AutoPath[] { ${fields.join(", ")} };
       repeat${slot + 1}PathSpeeds = new double[] { ${groupChainSpeeds[slot].join(", ")} };
       repeat${slot + 1}HoldMs = new long[] { ${groupHoldMs[slot].join(", ")} };
       repeat${slot + 1}HoldEvents = new String[] { ${groupHoldEvents[slot].join(", ")} };`,
@@ -1080,15 +1124,22 @@ export async function generateTeamCodeAutoCode(
 
   const file = `package org.firstinspires.ftc.teamcode.auto;
 
+import com.pedropathing.algorithm.Foresight;
+import com.pedropathing.api.Paths;
+import com.pedropathing.drivetrain.DrivePowers;
 import com.pedropathing.follower.Follower;
-import com.pedropathing.geometry.BezierCurve;
-import com.pedropathing.geometry.BezierLine;
-import com.pedropathing.geometry.Pose;
-import com.pedropathing.paths.PathChain;
+import com.pedropathing.math.Pose;
+import com.pedropathing.paths.Path;
+import com.pedropathing.paths.PathSegment;
+import com.pedropathing.paths.interpolator.Interpolator;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
+import org.firstinspires.ftc.teamcode.pedroPathing.SwerveDrivetrainConstants;
 
 @Autonomous(name = "${autoClassName}", group = "Auto")
 public class ${autoClassName} extends OpMode {
@@ -1097,6 +1148,7 @@ public class ${autoClassName} extends OpMode {
     private Follower follower;
     ${chainFieldDeclarations}
     ${repeatFieldDeclarations}
+    private AutoPath activePath;
     private int sequenceIndex;
     private long stepStartTime;
     private boolean stepStarted;
@@ -1111,8 +1163,12 @@ public class ${autoClassName} extends OpMode {
 
     @Override
     public void init() {
+        // Pedro 3 follows paths with Foresight, whose braking model and gains must be measured
+        // on the robot first. Refuse to build a path-following OpMode on placeholders.
+        SwerveDrivetrainConstants.requireForesightMeasured();
+
         follower = Constants.createFollower(hardwareMap);
-        follower.setStartingPose(${pointStepExpression(startPoint, "START_STEP")});
+        follower.setPose(${pointStepExpression(startPoint, "START_STEP")});
 
         buildPaths();
         updateTelemetry("Initialized");
@@ -1120,7 +1176,9 @@ public class ${autoClassName} extends OpMode {
 
     @Override
     public void init_loop() {
-        follower.update();
+        // Pedro 3's update() with no path stops the drivetrain, writing every servo each loop.
+        // Refresh the localizer alone so init stays actuator-silent.
+        follower.localizer.update();
         updateTelemetry("Ready");
     }
 
@@ -1129,15 +1187,20 @@ public class ${autoClassName} extends OpMode {
         sequenceIndex = 0;
         stepStarted = false;
         pathFinished = false;
+        activePath = null;
         resetRepeatLoops();
         resetParallelEvents();
 
-        follower.setStartingPose(${pointStepExpression(startPoint, "START_STEP")});
+        follower.setPose(${pointStepExpression(startPoint, "START_STEP")});
     }
 
     @Override
     public void loop() {
         follower.update();
+        // Path callbacks run right after the follower update, where Pedro 2 ran them.
+        if (activePath != null) {
+            activePath.update(follower);
+        }
         updateParallelEvents();
 
         runSequence();
@@ -1153,8 +1216,7 @@ public class ${autoClassName} extends OpMode {
             return;
         }
 
-        follower.startTeleopDrive(true);
-        follower.setTeleOpDrive(0.0, 0.0, 0.0, true);
+        follower.manual(DrivePowers.zero());
         follower.update();
     }
 
@@ -1173,39 +1235,18 @@ public class ${autoClassName} extends OpMode {
       ${sequenceCases}
             default:
                 pathFinished = true;
+                activePath = null;
                 finishAllParallelEvents();
-                follower.startTeleopDrive(true);
-                follower.setTeleOpDrive(0.0, 0.0, 0.0, true);
+                follower.manual(DrivePowers.zero());
                 break;
         }
     }
 
-    private static double interpolateHeading(
-        double startHeading,
-        double endHeading,
-        double tValue,
-        double curve
-    ) {
-        double clampedT = Math.max(0.0, Math.min(1.0, tValue));
-        double clampedCurve = Math.max(0.25, Math.min(4.0, curve));
-        double shapedT = Math.pow(clampedT, clampedCurve);
-        double deltaHeading = normalizeRadians(endHeading - startHeading);
-        return normalizeRadians(startHeading + deltaHeading * shapedT);
-    }
+    ${HEADING_HELPER_JAVA}
 
-    private static double normalizeRadians(double angle) {
-        while (angle <= -Math.PI) {
-            angle += 2.0 * Math.PI;
-        }
-        while (angle > Math.PI) {
-            angle -= 2.0 * Math.PI;
-        }
-        return angle;
-    }
-
-    private void followPathStep(PathChain path, double pathSpeed) {
+    private void followPathStep(AutoPath path, double pathSpeed) {
         if (!stepStarted) {
-            follower.followPath(path, clampPathSpeed(pathSpeed), true);
+            startPath(path, pathSpeed);
             stepStarted = true;
         }
 
@@ -1214,8 +1255,28 @@ public class ${autoClassName} extends OpMode {
         }
     }
 
+    /** Pedro 2's followPath(path, maxPower, holdEnd = true), callbacks re-armed as it did. */
+    private void startPath(AutoPath path, double pathSpeed) {
+        path.arm();
+        activePath = path;
+        follower.holdEnd.set(true);
+        follower.follow(withPathSpeed(path.path, clampPathSpeed(pathSpeed)));
+    }
+
+    /**
+     * Pedro 2 capped drive POWER per path; Pedro 3 has no power cap. The nearest thing is
+     * Foresight's maxPathSpeed - a fraction of max achievable VELOCITY - applied only while
+     * this path is followed. At 1.0 nothing is applied.
+     */
+    private Path withPathSpeed(Path path, double pathSpeed) {
+        if (pathSpeed >= 1.0 || !(follower.algorithm() instanceof Foresight)) {
+            return path;
+        }
+        return path.with(((Foresight) follower.algorithm()).config.maxPathSpeed.at(pathSpeed));
+    }
+
     private void followRepeatStep(
-        PathChain[] repeatPaths,
+        AutoPath[] repeatPaths,
         double[] repeatPathSpeeds,
         long[] repeatHoldMs,
         String[] repeatHoldEvents,
@@ -1234,7 +1295,7 @@ public class ${autoClassName} extends OpMode {
         }
 
         int pathIndex = Math.max(0, Math.min(repeatPaths.length - 1, repeatLoopPathIndexes[repeatSlot]));
-        PathChain path = repeatPaths[pathIndex];
+        AutoPath path = repeatPaths[pathIndex];
         double pathSpeed =
             repeatPathSpeeds != null && pathIndex < repeatPathSpeeds.length
                 ? repeatPathSpeeds[pathIndex]
@@ -1282,7 +1343,7 @@ public class ${autoClassName} extends OpMode {
         }
 
         if (!stepStarted) {
-            follower.followPath(path, clampPathSpeed(pathSpeed), true);
+            startPath(path, pathSpeed);
             stepStarted = true;
         }
 
@@ -1442,14 +1503,127 @@ public class ${autoClassName} extends OpMode {
     }
 
     private void updateTelemetry(String state) {
-        Pose pose = follower.getPose();
+        Pose pose = follower.pose();
 
         telemetry.addData("State", state);
         telemetry.addData("Sequence", sequenceIndex);
-        telemetry.addData("X", "%.2f", pose.getX());
-        telemetry.addData("Y", "%.2f", pose.getY());
-        telemetry.addData("Heading", "%.2f", Math.toDegrees(pose.getHeading()));
+        telemetry.addData("X", "%.2f", pose.x());
+        telemetry.addData("Y", "%.2f", pose.y());
+        telemetry.addData("Heading", "%.2f", Math.toDegrees(pose.heading()));
         telemetry.update();
+    }
+
+    /**
+     * A Pedro 3 path plus the per-path callbacks Pedro 2's PathBuilder had and Pedro 3 dropped.
+     *
+     * <p>Segment indexes count the paths of a chain (Paths.path(...)) from 0, as Pedro 2
+     * attached a callback to the path it was added after. Each trigger keeps Pedro 2's rule:
+     * <ul>
+     *   <li>parametric - once the segment's DISTANCE completion reaches the value (Pedro 2's
+     *       getPathCompletion()), at the parametric end, or once the follower has left it;
+     *   <li>temporal - that many milliseconds after the segment began; dropped if the segment
+     *       ends first, as Pedro 2 dropped it with its path;
+     *   <li>pose - once the follower's curve parameter passes the point on the segment closest
+     *       to the pose, or once the follower has left it.
+     * </ul>
+     */
+    private static final class AutoPath {
+        private static final int PARAMETRIC = 0;
+        private static final int TEMPORAL = 1;
+        private static final int POSE = 2;
+
+        final Path path;
+        private final List<PathSegment> segments;
+        private final List<Trigger> triggers = new ArrayList<>();
+        private int segmentIndex;
+        private long segmentStartMs;
+
+        AutoPath(Path path) {
+            this.path = path;
+            this.segments = path.getSegments();
+        }
+
+        AutoPath addParametricCallback(int segment, double completion, Runnable action) {
+            triggers.add(new Trigger(PARAMETRIC, segment, completion, action));
+            return this;
+        }
+
+        AutoPath addTemporalCallback(int segment, long delayMs, Runnable action) {
+            triggers.add(new Trigger(TEMPORAL, segment, delayMs, action));
+            return this;
+        }
+
+        AutoPath addPoseCallback(int segment, Pose pose, Runnable action, double initialGuess) {
+            double t = segments.get(segment).curve.closestParameter(pose.toVector2D(), initialGuess);
+            triggers.add(new Trigger(POSE, segment, t, action));
+            return this;
+        }
+
+        /** Call as the path is handed to the follower; Pedro 2 re-armed callbacks on every followPath. */
+        void arm() {
+            segmentIndex = 0;
+            segmentStartMs = System.currentTimeMillis();
+            for (Trigger trigger : triggers) {
+                trigger.fired = false;
+            }
+        }
+
+        /** Call once per loop, after follower.update(). */
+        void update(Follower follower) {
+            long now = System.currentTimeMillis();
+            // Once the follower stops following this path, every segment counts as left.
+            int index = follower.following() ? follower.pathIndex() : segments.size();
+            if (index != segmentIndex) {
+                segmentIndex = index;
+                segmentStartMs = now;
+            }
+
+            PathSegment current = index < segments.size() ? follower.currentSegment() : null;
+            double parameter = current != null
+                ? Math.max(0.0, Math.min(1.0, follower.parametricCompletion()))
+                : 1.0;
+            double completion = current != null ? current.curve.pathCompletion(parameter) : 1.0;
+            boolean atEnd = follower.atParametricEnd();
+
+            for (Trigger trigger : triggers) {
+                if (trigger.fired) {
+                    continue;
+                }
+                boolean left = trigger.segment < segmentIndex;
+                boolean here = trigger.segment == segmentIndex;
+                boolean ready;
+                if (trigger.kind == TEMPORAL) {
+                    if (left) {
+                        trigger.fired = true;
+                        continue;
+                    }
+                    ready = here && now - segmentStartMs >= trigger.value;
+                } else if (trigger.kind == POSE) {
+                    ready = left || (here && parameter >= trigger.value);
+                } else {
+                    ready = left || (here && (atEnd || completion >= trigger.value));
+                }
+                if (ready) {
+                    trigger.fired = true;
+                    trigger.action.run();
+                }
+            }
+        }
+
+        private static final class Trigger {
+            final int kind;
+            final int segment;
+            final double value;
+            final Runnable action;
+            boolean fired;
+
+            Trigger(int kind, int segment, double value, Runnable action) {
+                this.kind = kind;
+                this.segment = segment;
+                this.value = value;
+                this.action = action;
+            }
+        }
     }
 }`;
 
@@ -1531,7 +1705,7 @@ export async function generateJavaCode(
         chain.name,
         `pathChain${idx + 1}`,
       );
-      return `public PathChain ${variableName};`;
+      return `public Path ${variableName};`;
     })
     .join("\n    ");
 
@@ -1567,9 +1741,12 @@ export async function generateJavaCode(
         })
         .filter((segment): segment is string => Boolean(segment));
 
-      return `${variableName} = follower.pathBuilder()
-          ${segmentSnippets.join("\n          ")}
-          .build();`;
+      // A chain is one Paths.path(...); a single path needs no wrapper.
+      return segmentSnippets.length === 1
+        ? `${variableName} = ${segmentSnippets[0]};`
+        : `${variableName} = Paths.path(
+          ${segmentSnippets.join(",\n          ")}
+        );`;
     })
     .join("\n\n      ");
 
@@ -1578,12 +1755,17 @@ export async function generateJavaCode(
     return pathAssignments;
   }
 
-  const pathsClass = `public static class Paths {
+  // Named AutoPaths, not Paths: a class called Paths would shadow Pedro 3's
+  // com.pedropathing.api.Paths, which every assignment below calls. Pedro 3
+  // paths are built without a Follower, so the constructor takes none.
+  const pathsClass = `public static class AutoPaths {
     ${fieldDeclarations}
 
-    public Paths(Follower follower) {
+    public AutoPaths() {
       ${pathAssignments}
     }
+
+    ${HEADING_HELPER_JAVA}
   }`;
 
   let file = "";
@@ -1597,11 +1779,11 @@ import com.bylazar.configurables.annotations.Configurable;
 import com.bylazar.telemetry.TelemetryManager;
 import com.bylazar.telemetry.PanelsTelemetry;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
-import com.pedropathing.geometry.BezierCurve;
-import com.pedropathing.geometry.BezierLine;
+import com.pedropathing.api.Paths;
 import com.pedropathing.follower.Follower;
-import com.pedropathing.paths.PathChain;
-import com.pedropathing.geometry.Pose;
+import com.pedropathing.math.Pose;
+import com.pedropathing.paths.Path;
+import com.pedropathing.paths.interpolator.Interpolator;
 
 @Autonomous(name = "Pedro Pathing Autonomous", group = "Autonomous")
 @Configurable // Panels
@@ -1609,16 +1791,16 @@ public class PedroAutonomous extends OpMode {
   private TelemetryManager panelsTelemetry; // Panels Telemetry instance
   public Follower follower; // Pedro Pathing follower instance
   private int pathState; // Current autonomous path state (state machine)
-  private Paths paths; // Paths defined in the Paths class
+  private AutoPaths paths; // Paths defined in the AutoPaths class
 
   @Override
   public void init() {
     panelsTelemetry = PanelsTelemetry.INSTANCE.getTelemetry();
 
     follower = Constants.createFollower(hardwareMap);
-    follower.setStartingPose(new Pose(72, 8, Math.toRadians(90)));
+    follower.setPose(new Pose(72, 8, Math.toRadians(90)));
 
-    paths = new Paths(follower); // Build paths
+    paths = new AutoPaths(); // Build paths
 
     panelsTelemetry.debug("Status", "Initialized");
     panelsTelemetry.update(telemetry);
@@ -1631,9 +1813,9 @@ public class PedroAutonomous extends OpMode {
 
     // Log values to Panels and Driver Station
     panelsTelemetry.debug("Path State", pathState);
-    panelsTelemetry.debug("X", follower.getPose().getX());
-    panelsTelemetry.debug("Y", follower.getPose().getY());
-    panelsTelemetry.debug("Heading", follower.getPose().getHeading());
+    panelsTelemetry.debug("X", follower.pose().x());
+    panelsTelemetry.debug("Y", follower.pose().y());
+    panelsTelemetry.debug("Heading", follower.pose().heading());
     panelsTelemetry.update(telemetry);
   }
 
@@ -1792,9 +1974,9 @@ export async function generateSequentialCommandCode(
     pathNameByLineIdx.set(lineIdx, candidate);
   });
 
-  // Generate path chain declarations
+  // Generate path declarations
   const pathChainDeclarations = lines
-    .map((_, idx) => `  private PathChain ${pathNameByLineIdx.get(idx)};`)
+    .map((_, idx) => `  private Path ${pathNameByLineIdx.get(idx)};`)
     .join("\n");
 
   // Generate ProgressTracker field
@@ -1870,7 +2052,7 @@ export async function generateSequentialCommandCode(
 
       // Second: ParallelRaceGroup for following path with event handling
       commands.push(`        new ParallelRaceGroup(
-            new FollowPathCommand(follower, ${pathName}),
+            follow(${pathName}),
             new SequentialCommandGroup(`);
 
       // Add WaitUntilCommand for each event
@@ -1893,7 +2075,7 @@ export async function generateSequentialCommandCode(
               progressTracker.setCurrentChain(${pathName});
               progressTracker.setCurrentPathName("${pathDisplayName}");
             }),
-        new FollowPathCommand(follower, ${pathName})`);
+        follow(${pathName})`);
     }
   });
 
@@ -1905,7 +2087,7 @@ export async function generateSequentialCommandCode(
       const pathName = pathNameByLineIdx.get(idx)!;
 
       const isCurve = line.controlPoints.length > 0;
-      const curveType = isCurve ? "BezierCurve" : "BezierLine";
+      const factory = isCurve ? "Paths.curve" : "Paths.line";
 
       // Build control points string
       let controlPointsStr = "";
@@ -1918,45 +2100,39 @@ export async function generateSequentialCommandCode(
         controlPointsStr = controlPoints.join(", ") + ", ";
       }
 
-      // Determine heading interpolation
+      // Determine heading interpolation. Linear goes through the generated
+      // helper so it follows the curve parameter, as the preview draws it;
+      // reverse only exists on a tangential heading.
       let headingConfig = "";
       if (line.endPoint.heading === "constant") {
-        headingConfig = `setConstantHeadingInterpolation(${endPoseName}.getHeading())`;
+        headingConfig = `.constant(${endPoseName}.heading())`;
       } else if (line.endPoint.heading === "linear") {
-        headingConfig = `setLinearHeadingInterpolation(${startPoseName}.getHeading(), ${endPoseName}.getHeading())`;
+        headingConfig = `.heading(headingInterpolator(${startPoseName}.heading(), ${endPoseName}.heading(), ${fixed(headingCurve(line))}))`;
       } else {
-        headingConfig = `setTangentHeadingInterpolation()`;
+        headingConfig = line.endPoint.reverse ? ".reverseTangent()" : ".tangent()";
       }
 
-      // Build reverse config
-      const reverseConfig = line.endPoint.reverse
-        ? "\n            .setReversed()"
-        : "";
-
       return `${pathName} =
-        follower
-            .pathBuilder()
-            .addPath(new ${curveType}(${startPoseName}, ${controlPointsStr}${endPoseName}))
-            .${headingConfig}${reverseConfig}
-            .build();`;
+        ${factory}(${startPoseName}, ${controlPointsStr}${endPoseName})${headingConfig};`;
     })
     .join("\n\n    ");
 
   const sequentialCommandCode = `
 package org.firstinspires.ftc.teamcode.Commands.AutoCommands;
 
+import com.pedropathing.api.Paths;
 import com.pedropathing.follower.Follower;
-import com.pedropathing.geometry.BezierCurve;
-import com.pedropathing.geometry.BezierLine;
-import com.pedropathing.geometry.Pose;
-import com.pedropathing.paths.PathChain;
+import com.pedropathing.math.Pose;
+import com.pedropathing.paths.Path;
+import com.pedropathing.paths.interpolator.Interpolator;
 import com.qualcomm.robotcore.hardware.HardwareMap;
+import com.seattlesolvers.solverslib.command.Command;
+import com.seattlesolvers.solverslib.command.FunctionalCommand;
 import com.seattlesolvers.solverslib.command.SequentialCommandGroup;
 import com.seattlesolvers.solverslib.command.ParallelRaceGroup;
 import com.seattlesolvers.solverslib.command.WaitUntilCommand;
 import com.seattlesolvers.solverslib.command.WaitCommand;
 import com.seattlesolvers.solverslib.command.InstantCommand;
-import com.seattlesolvers.solverslib.pedroCommand.FollowPathCommand;
 import org.firstinspires.ftc.robotcore.external.Telemetry;
 import org.firstinspires.ftc.teamcode.Utils.Pathing.ProgressTracker;
 import java.io.IOException;
@@ -1971,7 +2147,7 @@ public class ${className} extends SequentialCommandGroup {
   // Poses
 ${allPoseDeclarations.join("\n")}
 
-  // Path chains
+  // Paths
 ${pathChainDeclarations}
 
   public ${className}(final Drivetrain drive, HardwareMap hw, Telemetry telemetry) throws IOException {
@@ -1983,7 +2159,7 @@ ${pathChainDeclarations}
     // Load poses
 ${allPoseInitializations.join("\n")}
 
-    follower.setStartingPose(startPoint);
+    follower.setPose(startPoint);
 
     buildPaths();
 
@@ -1994,6 +2170,21 @@ ${commands.join(",\n")});
   public void buildPaths() {
     ${pathBuilders}
   }
+
+  /**
+   * Follows one Pedro 3 path until the follower settles at its end. SolversLib's
+   * FollowPathCommand takes Pedro 2's PathChain, so this is the same command on Pedro 3's
+   * Follower.follow / isBusy. The follower still has to be updated every loop, as before.
+   */
+  private Command follow(Path path) {
+    return new FunctionalCommand(
+        () -> follower.follow(path),
+        () -> {},
+        interrupted -> {},
+        () -> !follower.isBusy());
+  }
+
+  ${HEADING_HELPER_JAVA}
 }
 `;
 

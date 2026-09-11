@@ -11,14 +11,14 @@ Local customization:
 - Generated autos use this repo's `PathStep` helper for the start and endpoint poses.
 - The sequence editor supports `Path`, `Wait`, and `Event` items. `Add Event` creates a timed `Shoot` event by default.
 - The control panel supports named pose variables that can be assigned to the start pose or path endpoints.
-- The starting point has an editable `Heading` in degrees (literal or expression) — the pose the robot is placed at, which `setStartingPose` receives. Turning from it to whatever the first path needs is timed like any other rotation, so a start heading that does not match the first path shows its real cost. A tangential start point has no heading of its own and follows the first path until a value is entered.
+- The starting point has an editable `Heading` in degrees (literal or expression) — the pose the robot is placed at, which `follower.setPose` receives. Turning from it to whatever the first path needs is timed like any other rotation, so a start heading that does not match the first path shows its real cost. A tangential start point has no heading of its own and follows the first path until a value is entered.
 - The control panel supports path variables that store a reusable copy of a selected path chain and can insert that stored path back into the route.
 - Endpoints assigned to pose variables still allow editable heading mode, linear start heading, and heading curve while the pose controls the final position/heading.
 - Individual paths can be duplicated, selected groups of paths can be wrapped in repeat loops, and path chains can be looped as a group.
 - Repeat loops and `if` blocks hold paths, waits and events in one ordered list, so a pause or a mechanism trigger can sit between two paths inside a loop and run on every pass. Drag any of them in by its handle.
 - Number variables store reusable numeric constants for repeat counts, waits/events, path speed, and event marker values. TeamCode export emits them as Java constants.
-- Each path has a `Path Speed` scale from `0.05` to `1.0`; TeamCode export passes it to PedroPathing as the per-path max power.
-- Each path can define parallel event markers. TeamCode export turns them into PedroPathing parametric, temporal, or pose callbacks so mechanisms can start while the path is still running, with optional timed finish handling.
+- Each path has a `Path Speed` scale from `0.05` to `1.0`. Pedro 3 has no per-path power cap, so TeamCode export applies it as Foresight's `maxPathSpeed` for that path (`path.with(maxPathSpeed.at(speed))`) — a fraction of the robot's max achievable **velocity**, which is also how the time estimate has always used it. At `1.0` nothing is applied.
+- Each path can define parallel event markers. Pedro 3 dropped PathBuilder's parametric, temporal and pose callbacks, so the generated auto carries a small `AutoPath` runtime that keeps Pedro 2's trigger rules per path of a chain: parametric fires once the path's distance completion reaches the marker (or the follower leaves that path), temporal fires that many ms after the path began and is dropped if the path ends first, pose fires once the curve parameter passes the point nearest the pose. Optional timed finish handling is unchanged.
 - The control panel has a telemetry readout that follows playback, showing the current path state, pose, path progress, path speed, active parallel events, and the next queued event marker.
 - Visualization settings can show event pins on the field, per-segment path length/time labels, a 30-second autonomous countdown overlay, an optional blue-to-red velocity gradient based on the trapezoidal motion profile, and estimated swerve module angles on robot previews.
 - Undo/redo history keeps recent recovery snapshots in localStorage across reloads.
@@ -27,15 +27,18 @@ Local customization:
 - The control panel includes `Mirror X` and `Mirror Y` actions for switching alliances by flipping path coordinates and headings on either field axis.
 - Paths are checked against the obstacles and the field walls using the robot's own footprint at the heading it holds. Path rows show `Hits <thing>` or the clearance in inches, the field draws the robot where it is in trouble, and the export warns before the auto reaches a match. The chip is a button that moves a control point, an endpoint or the starting point until the robot clears.
 - Number fields drag: hover a literal for an `ew-resize` cursor and drag sideways to adjust it, with Shift for coarse and Alt for fine. Fields driven by a variable do not drag — scrub the variable itself in the Variables tab.
-- `Settings → Motion Parameters` can read the robot's tuned PedroPathing constants straight out of TeamCode, showing each value, what it changes it from, and which Java call it came from — plus what PedroPathing does not measure, so the remaining guesses stay visible.
+- `Settings → Motion Parameters` can read the robot's Pedro 3 `ForesightConfig` straight out of TeamCode, showing each value, what it changes it from, and which `c.<field>.set(...)` it came from — plus what Pedro does not measure and which values TeamCode still carries as placeholders, so the remaining guesses stay visible.
 - The TeamCode exporter validates generated autos, can download a `.java` file, and can save directly to `TeamCode/src/main/java/org/firstinspires/ftc/teamcode/auto/` while running from Vite. Direct saves run `:TeamCode:compileDebugJavaWithJavac` and restore the previous file if the generated Java does not compile.
 
 Path chaining:
 
-- Consecutive paths are followed as a single PedroPathing `PathChain`. A chain
-  built through `pathBuilder()` defaults to `DecelerationType.LAST_PATH`, so it
-  brakes only on its final path — the robot drives straight through every
-  waypoint inside the chain instead of decelerating and settling on each one.
+- Consecutive paths are followed as one Pedro path, `Paths.path(p1, p2, ...)`.
+  Pedro 3's Foresight brakes only for the end of it: when it would start
+  braking on a path that is not the last, it skips to the next one instead
+  (`ForesightConfig.pathSkip`, on by default) — so the robot drives straight
+  through every waypoint inside the chain instead of decelerating and settling
+  on each one. (Pedro 2 got the same result from `PathChain`'s
+  `DecelerationType.LAST_PATH`.)
 - The time estimate profiles a chain as one accelerate/cruise/decelerate move,
   so interior paths are timed at cruise speed. Four collinear paths take 4.3s
   chained versus 8.0s stopping at each.
@@ -51,9 +54,9 @@ Path chaining:
 
 Turn model:
 
-- The robot never stops to turn. Not even at the head of a chain: `followPath`
-  starts driving and correcting heading in the same command, so a stationary
-  rotation was always fiction.
+- The robot never stops to turn. Not even at the head of a chain:
+  `follower.follow` starts driving and correcting heading in the same command,
+  so a stationary rotation was always fiction.
 - Turning still costs time, because driving and turning draw on one motor-power
   budget — the drivetrain mixes the pathing and heading vectors and normalizes
   them into wheel power. It is charged as a cap on speed, applied where the
@@ -320,32 +323,40 @@ Dragging numbers:
 Tuned constants from TeamCode (`src/utils/teamcodeConstants.ts`):
 
 - `Settings → Motion Parameters → Load from TeamCode` reads the robot's own
-  PedroPathing constants instead of asking anyone to guess them. Tuning already
-  measures several of these on the real robot, and they were sitting two
-  directories away while the visualizer ran on hand-typed defaults.
-- On the first auto this ran against, `maxVelocity` was set to 40 in/s against a
-  tuned 73.9, and `maxDeceleration` to 30 in/s² against a measured 197.1 — off by
-  1.85x and 6.6x. The auto's estimate went 30.99s to 25.07s, which changed the
-  answer to the only question that matters about it: it did not fit in 30
-  seconds, and it does.
+  Pedro 3 `ForesightConfig` instead of asking anyone to guess it. Foresight is
+  configured with physical quantities — `maxAchievableForwardVelocity`,
+  `naturalForwardDeceleration`, an optional `maxAccelerationConstraint` — and
+  they sit two directories away from the visualizer.
+- Values are read from `c.<field>.set(<argument>)` in the config lambda. An
+  argument that names a `static final double` in the same file is resolved
+  through it, which is how the constants files keep one number in one place.
+- **Placeholders are never imported.** Until the Foresight Tuner has been run,
+  TeamCode carries placeholder constants (named `PLACEHOLDER_*`) and
+  `FORESIGHT_MEASURED = false`. The dialog shows the flag and lists each
+  placeholder, with its value, under "still hand-tuned" — replacing one guess
+  with another dressed as a measurement would be worse than leaving it.
+- History: under Pedro 2 the first auto this ran against had `maxVelocity` at
+  40 in/s against a configured 73.9 and `maxDeceleration` at 30 in/s² against
+  197.1, and the estimate went 30.99s to 25.07s. Both of those Pedro 2 figures
+  turned out to be unmeasured (73.9 dates from the constants skeleton, before
+  the pods existed) or wrong (the robot's measured coast-down is 40 in/s², not
+  197.1), which is exactly why placeholders are now reported, not applied.
 - `config.jsonc` picks the drivetrain, and the matching constants file is read.
-  A swerve states one top speed; a mecanum is tuned forward and sideways
-  separately, and paths are driven forward, so `xVelocity` is the cap and the
-  sideways figure is shown as context only.
+  The forward speed is the cap; the sideways speed and coast-down are shown as
+  context only, since paths are profiled at one speed.
 - Comments are stripped before anything is read. These files park alternates
   behind `//`, and picking one up would silently import a number the robot is
   not using.
 - Nothing is applied until it is shown: the dialog lists each value, what it
   changes it from, and the Java call it came from.
-- What PedroPathing does *not* measure is listed just as explicitly, so the
-  guessed numbers stay visibly guessed. There is no acceleration limit in the
-  model at all (it is PIDF plus a power cap), no stated turn rate, nothing
-  matching this tool's turn coupling, and `centripetalScaling` is a correction
-  gain rather than a sliding limit, so it does not convert to cornering grip.
-- `forwardZeroPowerAcceleration` is flagged as a ceiling rather than applied
-  silently. It is how hard the robot slows with *no power applied*, which is the
-  most it can brake, not what the follower holds while still tracking a line —
-  taken as-is the estimate leans optimistic.
+- What Pedro does *not* measure is listed just as explicitly: no turn-rate
+  limit (the heading brake coefficients describe how far a spin carries on, not
+  how fast it can go), nothing matching this tool's turn coupling, no cornering
+  limit, and no acceleration limit unless `maxAccelerationConstraint` is set.
+- `naturalForwardDeceleration` is flagged as a **floor**. It is how fast the
+  robot slows with no power applied; Foresight brakes actively on top of that,
+  so the robot stops at least this hard and the estimate leans pessimistic.
+  (Under Pedro 2 the same quantity was shown here as a ceiling — it never was.)
 - The endpoint only exists under the dev server, since that is the only place
   the repo is on disk to read from, and the dialog says so if it is missing.
 
@@ -394,9 +405,9 @@ Waits and events inside a loop or an `if`:
   order: `path, wait, path` becomes
   `path wait path  path wait path  path wait path`. A loop that cannot run
   spends none of them.
-- In the generated Java a hold takes a slot in the loop's `PathChain[]` with a
-  null chain, and a parallel `long[]` carries its duration; `followRepeatStep`
-  reads a null chain as "hold here" rather than something to drive. An event
+- In the generated Java a hold takes a slot in the loop's `AutoPath[]` with a
+  null path, and a parallel `long[]` carries its duration; `followRepeatStep`
+  reads a null path as "hold here" rather than something to drive. An event
   member fires the same generated method a top-level one would. Verified by
   compiling the output against the real SDK.
 - Only paths are reconciled against `lines`. A wait carries its own data, so
