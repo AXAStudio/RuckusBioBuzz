@@ -968,9 +968,10 @@
             >
               <!--
                 These numbers decide every time estimate the tool shows, and
-                several of them the team has already measured: that is what
-                PedroPathing's tuning produces, and it is sitting in TeamCode.
-                Reading it beats copying figures between two files by hand.
+                several of them the team has already measured: Pedro 3's
+                Foresight is configured with physical quantities (top speed,
+                coast-down), and they are sitting in TeamCode. Reading them
+                beats copying figures between two files by hand.
               -->
               <div
                 class="rounded-lg border border-sky-200 dark:border-sky-900 bg-sky-50/60 dark:bg-sky-950/30 p-3"
@@ -983,7 +984,7 @@
                       Load from TeamCode
                     </div>
                     <div class="text-xs text-neutral-500 dark:text-neutral-400">
-                      Read the robot's tuned PedroPathing constants instead of
+                      Read the robot's Pedro 3 Foresight constants instead of
                       guessing them
                     </div>
                   </div>
@@ -1010,6 +1011,21 @@
                     <p class="text-[11px] text-neutral-500 dark:text-neutral-400">
                       {constantsReport.drivetrain} — {constantsReport.sourceFile}
                     </p>
+
+                    <!--
+                      The file's own verdict on its path-following constants.
+                      Placeholders are listed under "still hand-tuned", never
+                      offered as values, but the flag says why so many are there.
+                    -->
+                    {#if constantsReport.foresightMeasured === false}
+                      <p
+                        class="rounded border border-amber-300 dark:border-amber-800 bg-amber-50 dark:bg-amber-950/30 p-2 text-[11px] text-amber-800 dark:text-amber-300"
+                      >
+                        FORESIGHT_MEASURED = false: TeamCode's Foresight constants
+                        are still placeholders. Only the values marked measured
+                        are offered below; run the Foresight Tuner for the rest.
+                      </p>
+                    {/if}
 
                     <!-- What it found, and what it would change it from. -->
                     {#each constantChanges as change (change.setting)}
@@ -1046,11 +1062,11 @@
                         </div>
                         {#if change.note}
                           <p
-                            class="mt-1 text-[11px] {change.ceiling
+                            class="mt-1 text-[11px] {change.ceiling || change.floor
                               ? 'text-amber-700 dark:text-amber-400'
                               : 'text-neutral-500 dark:text-neutral-400'}"
                           >
-                            {change.ceiling ? "Ceiling: " : ""}{change.note}
+                            {change.ceiling ? "Ceiling: " : change.floor ? "Floor: " : ""}{change.note}
                           </p>
                         {/if}
                       </div>
@@ -1067,8 +1083,8 @@
                         <summary
                           class="cursor-pointer text-xs font-medium text-neutral-700 dark:text-neutral-200"
                         >
-                          {constantsReport.missing.length} still hand-tuned — PedroPathing
-                          does not measure these
+                          {constantsReport.missing.length} still hand-tuned — Pedro
+                          does not measure these, or TeamCode has a placeholder
                         </summary>
                         <ul class="mt-2 space-y-1">
                           {#each constantsReport.missing as gap (gap.setting)}
