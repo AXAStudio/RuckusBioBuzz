@@ -24,7 +24,10 @@ const teamCodeAutoDir = path.resolve(
   "teamcode",
   "auto",
 );
-const androidStudioJbr = "/Applications/Android Studio.app/Contents/jbr/Contents/Home";
+const isWindows = process.platform === "win32";
+const androidStudioJbr = isWindows
+  ? "C:\\Program Files\\Android\\Android Studio\\jbr"
+  : "/Applications/Android Studio.app/Contents/jbr/Contents/Home";
 
 function trimCompileOutput(output: string): string {
   const trimmed = output.trim();
@@ -37,22 +40,34 @@ async function compileTeamCodeAuto(): Promise<{
   output: string;
   exitCode?: number | string;
 }> {
-  const gradleWrapper = path.resolve(repoRoot, "gradlew");
-  const env = fs.existsSync(androidStudioJbr)
-    ? { ...process.env, JAVA_HOME: androidStudioJbr }
-    : process.env;
+  const gradleWrapper = path.resolve(repoRoot, isWindows ? "gradlew.bat" : "gradlew");
+  const gradleArgs = [":TeamCode:compileDebugJavaWithJavac", "--rerun-tasks"];
+  // Only supply a JDK when the environment has none: a JAVA_HOME the user set is
+  // the one their own builds use.
+  const env =
+    !process.env.JAVA_HOME && fs.existsSync(androidStudioJbr)
+      ? { ...process.env, JAVA_HOME: androidStudioJbr }
+      : process.env;
+
+  // A .bat cannot be execFile'd without a shell, and the repo path has spaces,
+  // so on Windows cmd.exe gets one line with the wrapper path quoted verbatim.
+  const [command, args, platformOptions] = isWindows
+    ? [
+        "cmd.exe",
+        ["/d", "/s", "/c", `""${gradleWrapper}" ${gradleArgs.join(" ")}"`],
+        { windowsVerbatimArguments: true },
+      ]
+    : [gradleWrapper, gradleArgs, {}];
 
   try {
-    const result = await execFileAsync(
-      gradleWrapper,
-      [":TeamCode:compileDebugJavaWithJavac", "--rerun-tasks"],
-      {
-        cwd: repoRoot,
-        env,
-        timeout: 120000,
-        maxBuffer: 8 * 1024 * 1024,
-      },
-    );
+    const result = await execFileAsync(command, args, {
+      cwd: repoRoot,
+      env,
+      // --rerun-tasks recompiles the vendored Pedro build too.
+      timeout: 300000,
+      maxBuffer: 8 * 1024 * 1024,
+      ...platformOptions,
+    });
 
     return {
       ok: true,
