@@ -283,7 +283,7 @@
         level: "warning",
         message:
           span.severity === "hit"
-            ? `${pathName} drives the robot into ${target} — ${Math.abs(span.worstClearance).toFixed(1)}in of overlap, ${span.startDistance.toFixed(1)}in into the path.`
+            ? `${pathName} drives the robot into ${target} — first contact ${(span.contactDistance ?? span.startDistance).toFixed(1)}in into the path, ${Math.abs(span.worstClearance).toFixed(1)}in of overlap at its worst.`
             : `${pathName} passes within ${span.worstClearance.toFixed(1)}in of ${target}.`,
       });
     });

@@ -57,6 +57,16 @@ export interface ClearanceSpan {
   worstPose: { x: number; y: number; heading: number };
   /** The footprint at that pose, in field inches. */
   worstFootprint: BasePoint[];
+  /**
+   * Where the robot first touches, on a span that makes contact. The worst
+   * sample is the deepest one, which on anything the robot drives into sits
+   * well past the point it first hits - and the place a driver needs to see is
+   * where the trouble starts, not where it ends up. Undefined on a span that
+   * only comes inside the margin without touching.
+   */
+  contactDistance?: number;
+  contactPose?: { x: number; y: number; heading: number };
+  contactFootprint?: BasePoint[];
 }
 
 export interface ClearanceLineReport {
@@ -276,6 +286,72 @@ export function polygonBoundaryDistance(a: BasePoint[], b: BasePoint[]): number 
   return best;
 }
 
+/**
+ * Where two segments cross, as a fraction along `a1 -> a2`, or null. Parallel
+ * and collinear pairs are left out: they add no crossing the caller can use to
+ * split an edge into inside and outside stretches.
+ */
+function segmentCrossingParam(
+  a1: BasePoint,
+  a2: BasePoint,
+  b1: BasePoint,
+  b2: BasePoint,
+): number | null {
+  const ax = a2.x - a1.x;
+  const ay = a2.y - a1.y;
+  const bx = b2.x - b1.x;
+  const by = b2.y - b1.y;
+  const denominator = ax * by - ay * bx;
+  if (Math.abs(denominator) < 1e-12) return null;
+
+  const dx = b1.x - a1.x;
+  const dy = b1.y - a1.y;
+  const t = (dx * by - dy * bx) / denominator;
+  const u = (dx * ay - dy * ax) / denominator;
+  if (t < 0 || t > 1 || u < 0 || u > 1) return null;
+  return t;
+}
+
+/**
+ * How far `a` reaches inside `b` where their edges cross without either shape
+ * having a vertex in the other - a robot straddling a rail is the everyday
+ * case, and vertex containment reports nothing at all for it.
+ *
+ * Each edge of `a` is cut at its crossings with `b`; the stretches that lie
+ * inside `b` are measured at their midpoint, which is the deepest point of a
+ * straight run through a convex neighbourhood and a fair sample otherwise.
+ */
+function crossingDepth(a: BasePoint[], b: BasePoint[]): number {
+  let depth = 0;
+
+  for (let i = 0; i < a.length; i++) {
+    const a1 = a[i];
+    const a2 = a[(i + 1) % a.length];
+    const cuts: number[] = [0, 1];
+
+    for (let j = 0; j < b.length; j++) {
+      const t = segmentCrossingParam(a1, a2, b[j], b[(j + 1) % b.length]);
+      if (t !== null) cuts.push(t);
+    }
+    if (cuts.length === 2) continue;
+
+    cuts.sort((left, right) => left - right);
+    for (let k = 0; k + 1 < cuts.length; k++) {
+      if (cuts[k + 1] - cuts[k] < 1e-9) continue;
+      const middle = (cuts[k] + cuts[k + 1]) / 2;
+      const point: [number, number] = [
+        a1.x + (a2.x - a1.x) * middle,
+        a1.y + (a2.y - a1.y) * middle,
+      ];
+      if (pointInPolygon(point, b)) {
+        depth = Math.max(depth, minDistanceToPolygon(point, b));
+      }
+    }
+  }
+
+  return depth;
+}
+
 export function polygonsOverlap(a: BasePoint[], b: BasePoint[]): boolean {
   for (let i = 0; i < a.length; i++) {
     const a1 = a[i];
@@ -314,6 +390,11 @@ export function polygonClearance(a: BasePoint[], b: BasePoint[]): number {
       depth = Math.max(depth, minDistanceToPolygon([point.x, point.y], a));
     }
   }
+  // Crossing edges with no vertex inside anything - the robot straddling a
+  // rail, or a long thin obstacle laid across it - used to fall through both
+  // loops above and report 1e-6 in of overlap, which reads as "just touching"
+  // for a robot driving clean through the middle of something.
+  depth = Math.max(depth, crossingDepth(a, b), crossingDepth(b, a));
 
   return -Math.max(depth, MIN_OVERLAP_DEPTH);
 }
@@ -583,6 +664,12 @@ function groupSpans(
     for (const sample of open) {
       if (sample.clearance < worst.clearance) worst = sample;
     }
+    const contact = open.find((sample) => sample.clearance < 0);
+    // A span that touches is named after what it touches FIRST, which is what
+    // the drawn outline sits on. Deeper into the span the nearest thing can
+    // easily be something else - a wall behind the obstacle, say - and naming
+    // that would point the driver at the wrong object.
+    const named = contact ?? worst;
 
     spans.push({
       lineId,
@@ -590,12 +677,17 @@ function groupSpans(
       startDistance: open[0].distance,
       endDistance: open[open.length - 1].distance,
       worstClearance: worst.clearance,
-      kind: worst.kind,
-      obstacleId: worst.obstacleId,
-      obstacleName: worst.obstacleName,
+      kind: named.kind,
+      obstacleId: named.obstacleId,
+      obstacleName: named.obstacleName,
       severity: worst.clearance < 0 ? "hit" : "tight",
       worstPose: { x: worst.x, y: worst.y, heading: worst.heading },
       worstFootprint: worst.footprint,
+      contactDistance: contact?.distance,
+      contactPose: contact
+        ? { x: contact.x, y: contact.y, heading: contact.heading }
+        : undefined,
+      contactFootprint: contact?.footprint,
     });
 
     open = [];

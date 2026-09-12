@@ -2970,13 +2970,19 @@
    * The robot drawn where it comes too close to something, so the problem is
    * visible as a shape on the field rather than only as a number in a list.
    * Red for contact, amber for inside the margin.
+   *
+   * A span that makes contact is drawn where the robot FIRST touches, not at
+   * its deepest sample: on anything the robot drives into, the deepest point is
+   * well past the first, and marking it there made the collision look like it
+   * happened much later along the path than it does. A span that only comes
+   * inside the margin is drawn at its worst, which is the tightest point.
    */
   $: clearanceElements = (() => {
     const elements: Path[] = [];
     if ($activePaths.length > 0 || settings.showClearance === false) return elements;
 
     clearanceReport.spans.forEach((span, index) => {
-      const outline = span.worstFootprint;
+      const outline = span.contactFootprint ?? span.worstFootprint;
       if (!outline?.length) return;
 
       const vertices = outline.map((corner, cornerIndex) =>
