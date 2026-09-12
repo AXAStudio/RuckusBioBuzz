@@ -1,9 +1,10 @@
-const VERSION = "v2";
+const VERSION = "v3";
 const CACHE_NAME = `pedro-visualizer-${VERSION}`;
 
 const APP_STATIC_RESOURCES = [
   "/",
   "/favicon.ico",
+  "/fields/biobuzz.webp",
   "/fields/centerstage.webp",
   "/fields/intothedeep.webp",
   "/fields/decode.webp",
