@@ -23,6 +23,21 @@
 
   export let isOpen = false;
   export let settings: Settings;
+  /**
+   * Called after the user picks a different field map, so the caller can move
+   * the field obstacles with it. Only user picks reach it - loading a project
+   * sets `settings` straight and must keep the obstacles that came with it.
+   */
+  export let onFieldMapChange: ((fieldMap: string) => void) | null = null;
+
+  function handleFieldMapSelect(event: Event) {
+    const next = (event.currentTarget as HTMLSelectElement).value;
+    if (next === settings.fieldMap) {
+      return;
+    }
+    settings.fieldMap = next;
+    onFieldMapChange?.(next);
+  }
 
   type NumericSettingKey = {
     [K in keyof Settings]-?: Exclude<Settings[K], undefined> extends number
@@ -1441,7 +1456,8 @@
                 </label>
                 <select
                   id="field-map-select"
-                  bind:value={settings.fieldMap}
+                  value={settings.fieldMap}
+                  on:change={handleFieldMapSelect}
                   class="w-full px-3 py-2 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 >
                   {#each AVAILABLE_FIELD_MAPS as field}

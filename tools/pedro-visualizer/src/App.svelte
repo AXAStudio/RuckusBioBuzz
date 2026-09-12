@@ -93,6 +93,7 @@
     getDefaultStartPoint,
     getDefaultLines,
     getDefaultShapes,
+    isUntouchedObstaclePreset,
   } from "./config";
   import { loadSettings, saveSettings } from "./utils/settingsPersistence";
   import * as browserFileStore from "./utils/browserFileStore";
@@ -408,7 +409,7 @@
     lineIds: sourceLines.map((ln) => ln.id!).filter(Boolean),
   });
   let pathChains: PathChain[] = [createDefaultPathChain(lines)];
-  let shapes: Shape[] = getDefaultShapes();
+  let shapes: Shape[] = getDefaultShapes(settings.fieldMap);
   let optimizingLineIds: Record<string, boolean> = {};
   let optimizingAll = false;
 
@@ -3113,6 +3114,12 @@
     // Load saved settings
     const savedSettings = await loadSettings();
     settings = normalizeLegacyFieldMap({ ...savedSettings });
+
+    // The obstacles were built from DEFAULT_SETTINGS before the saved field map
+    // arrived. If they are still a preset as shipped, move them to this field's.
+    if (isUntouchedObstaclePreset(shapes)) {
+      shapes = getDefaultShapes(settings.fieldMap);
+    }
 
     // Update robot dimensions from loaded settings
     robotWidth = settings.rWidth;

@@ -26,6 +26,8 @@
     getDefaultStartPoint,
     getDefaultLines,
     getDefaultShapes,
+    isUntouchedObstaclePreset,
+    AVAILABLE_FIELD_MAPS,
   } from "../config";
   import FileManager from "./FileManager.svelte";
   import SettingsDialog from "./components/SettingsDialog.svelte";
@@ -203,7 +205,39 @@
         lineIds: lines.map((ln) => ln.id!),
       },
     ];
-    shapes = getDefaultShapes();
+    shapes = getDefaultShapes(settings.fieldMap);
+  }
+
+  /**
+   * Switching the field map switches the obstacles with it. Obstacles the user
+   * has edited are their own work, so those are only replaced on confirmation -
+   * and keeping them is a valid answer, since a path checked against last
+   * season's field is still a path.
+   */
+  function handleFieldMapChange(next: string) {
+    const preset = getDefaultShapes(next);
+    const label =
+      AVAILABLE_FIELD_MAPS.find((field) => field.value === next)?.label || next;
+
+    if (!isUntouchedObstaclePreset(shapes)) {
+      const message = preset.length
+        ? `Replace the current obstacles with the ${label} preset?
+
+` +
+          "The obstacles you edited will be removed. Cancel keeps them."
+        : `${label} has no obstacle preset.
+
+` +
+          "Remove the current obstacles? Cancel keeps them.";
+      if (!confirm(message)) {
+        return;
+      }
+    } else if (preset.length === 0 && shapes.length === 0) {
+      return;
+    }
+
+    shapes = preset;
+    recordChange();
   }
 
   function handleResetPathWithConfirmation() {
@@ -328,7 +362,11 @@
   {clearanceReport}
 />
 
-<SettingsDialog bind:isOpen={settingsOpen} bind:settings />
+<SettingsDialog
+  bind:isOpen={settingsOpen}
+  bind:settings
+  onFieldMapChange={handleFieldMapChange}
+/>
 
 <div
   class="absolute top-0 left-0 w-full bg-neutral-50 dark:bg-neutral-900 shadow-md flex flex-row justify-between items-center px-6 py-4 border-b-[0.75px] border-[#fe55a2]"
