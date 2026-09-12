@@ -140,34 +140,36 @@ const FIELD_OBSTACLE_PRESETS: Record<string, () => Shape[]> = {
   // scripts/gen_biobuzz_field.py draws biobuzz.webp from, in visualizer
   // coordinates (x = 0 the red wall, y = 0 the audience wall).
   //
-  // The HIVE Structure's CELLS are NOT obstacles: the bottom of a HIVE is
-  // 25.5 in. above the TILES (Fig 9-10) and an FTC ROBOT is at most 18 in.
-  // tall, so a ROBOT drives under them. What is in the way is the Frame -
-  // two triangles, each standing on a base rail against the TILES and leaning
-  // in to its pivot at the centre (Fig 9-8: 49.46 in. between the rails,
-  // 38.95 in. of rail, pivots 25.5 in. apart per Fig 9-10). Each preset shape
-  // is that triangle's floor projection, which is exactly right for an 18 in.
-  // ROBOT and conservative for a shorter one - the legs climb to 43.95 in. at
-  // the apex, so a low ROBOT clears more of the triangle than this says.
+  // Almost none of the HIVE Structure is in a ROBOT's way. The bottom of a
+  // HIVE is 25.5 in. above the TILES (Fig 9-10) and an FTC ROBOT is at most
+  // 18 in. tall, so a ROBOT drives under the CELLS, under the crossbar at
+  // 43.95 in., and under the Frame legs, which climb from the rails to that
+  // apex. What is left on the floor is the two base rails: ~2.0 in. wide,
+  // 38.95 in. long (Fig 9-8 frame depth), 49.46 in. apart outside face to
+  // outside face (Fig 9-8 frame width, measured on Fig 9-2's top view as
+  // outside-to-outside with ~2.0 in. rails). Those two rectangles are the
+  // whole centre-FIELD obstacle.
   "biobuzz.webp": () => [
     {
-      id: "biobuzz-hive-frame-red",
-      name: "HIVE Frame - Red Side",
+      id: "biobuzz-hive-rail-red",
+      name: "HIVE Frame Rail - Red Side",
       vertices: [
-        { x: 45.02, y: 51.28 },
-        { x: 45.02, y: 90.22 },
-        { x: 58.0, y: 70.75 },
+        { x: 46.02, y: 51.28 },
+        { x: 48.02, y: 51.28 },
+        { x: 48.02, y: 90.22 },
+        { x: 46.02, y: 90.22 },
       ],
       color: "#dc2626",
       fillColor: "#ff6b6b",
     },
     {
-      id: "biobuzz-hive-frame-blue",
-      name: "HIVE Frame - Blue Side",
+      id: "biobuzz-hive-rail-blue",
+      name: "HIVE Frame Rail - Blue Side",
       vertices: [
-        { x: 96.48, y: 51.28 },
-        { x: 96.48, y: 90.22 },
-        { x: 83.5, y: 70.75 },
+        { x: 93.48, y: 51.28 },
+        { x: 95.48, y: 51.28 },
+        { x: 95.48, y: 90.22 },
+        { x: 93.48, y: 90.22 },
       ],
       color: "#2563eb",
       fillColor: "#60a5fa",

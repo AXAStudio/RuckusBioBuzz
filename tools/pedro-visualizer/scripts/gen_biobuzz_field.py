@@ -249,7 +249,11 @@ cell_dy = CELL_H * math.cos(TILT) + CELL_D * math.sin(TILT)   # ~18.1 in
 pair_dy = 26.86                                               # Fig 9-2
 pair_lean = 2.41                                              # Fig 9-2
 
-rail_x = (C - FRAME_W / 2, C + FRAME_W / 2)
+# Fig 9-2 measures the rails ~2.0 in. wide with 49.46 in. between their OUTER
+# faces, so the frame width is outside-to-outside and each rail runs inward
+# from it. rail_x is the rail centreline.
+RAIL_W = 2.0
+rail_x = (C - FRAME_W / 2 + RAIL_W / 2, C + FRAME_W / 2 - RAIL_W / 2)
 pivot_x = (C - HIVE_SEP / 2, C + HIVE_SEP / 2)
 rail_y0, rail_y1 = C - FRAME_D / 2, C + FRAME_D / 2
 
@@ -259,8 +263,8 @@ for rx, px_ in zip(rail_x, pivot_x):
     line([(rx, rail_y0), (px_, C)], LGREY, 1.1)
     line([(rx, rail_y1), (px_, C)], LGREY, 1.1)
 for rx, px_ in zip(rail_x, pivot_x):
-    rect(rx - 1.0, rail_y0, rx + 1.0, rail_y1, fill=GREY, outline=BLACK,
-         w=W_THIN)
+    rect(rx - RAIL_W / 2, rail_y0, rx + RAIL_W / 2, rail_y1, fill=GREY,
+         outline=BLACK, w=W_THIN)
 
 # Crossbar joining the two apexes, carrying both pivots (43.95 in. up).
 rect(pivot_x[0], C - 1.5, pivot_x[1], C + 1.5, fill=WHITE, outline=BLACK,
