@@ -54,7 +54,10 @@
     resolveSequenceExpressions,
     resolveSequenceItemExpressions,
     resolveVariableValues,
+    clearanceTargetName,
+    describeClearanceSpan,
     FIX_HANDLE_LABELS,
+    midlineRuleFromSettings,
     suggestClearanceFix,
     suggestPoseVariableFix,
     suggestStartPointFix,
@@ -282,6 +285,40 @@
   $: clearanceByLineId = clearanceReport.byLine;
 
   /**
+   * Clearance reported against a Wait rather than a path: the pose the robot
+   * holds while it stands there.
+   */
+  /**
+   * Chip props for a Wait row. Empty when the robot standing there is fine.
+   */
+  function waitClearanceProps(id: string) {
+    const span = waitClearanceById.get(id);
+    if (!span) return { clearanceLabel: "", clearanceHit: false, clearanceTitle: "" };
+    const held =
+      span.stationary?.seconds !== undefined
+        ? ` for ${span.stationary.seconds.toFixed(1)}s`
+        : "";
+    return {
+      clearanceLabel: describeClearanceSpan(span),
+      clearanceHit: span.severity === "hit",
+      clearanceTitle:
+        span.severity === "hit"
+          ? `The robot stands${held} ${
+              span.kind === "midline"
+                ? `${Math.abs(span.worstClearance).toFixed(2)}in over the midline`
+                : `${Math.abs(span.worstClearance).toFixed(2)}in inside ${clearanceTargetName(span)}`
+            }.`
+          : `The robot stands${held} within ${span.worstClearance.toFixed(2)}in of ${clearanceTargetName(span)}.`,
+    };
+  }
+
+  $: waitClearanceById = new Map(
+    clearanceReport.spans
+      .filter((span) => span.stationary)
+      .map((span) => [span.stationary!.id, span]),
+  );
+
+  /**
    * Where the robot is staged, when that is itself too close to something. No
    * path can fix this one, so it is surfaced on the starting point instead.
    */
@@ -322,7 +359,7 @@
     try {
       const fix = suggestClearanceFix(
         clearanceInput(),
-        { fieldSize: FIELD_SIZE, margin: settings.safetyMargin },
+        clearanceOptions,
         lineId,
       );
 
@@ -348,10 +385,7 @@
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     try {
-      const fix = suggestStartPointFix(clearanceInput(), {
-        fieldSize: FIELD_SIZE,
-        margin: settings.safetyMargin,
-      });
+      const fix = suggestStartPointFix(clearanceInput(), clearanceOptions);
 
       if (!fix) {
         clearanceFixNotes = {
@@ -387,7 +421,7 @@
     try {
       const fix = suggestPoseVariableFix(
         clearanceInput(),
-        { fieldSize: FIELD_SIZE, margin: settings.safetyMargin },
+        clearanceOptions,
         poseVariableId,
       );
 
@@ -457,7 +491,7 @@
     clearanceFixNotes = { ...clearanceFixNotes, [ALL_FIX_ID]: "Working…" };
     await tick();
 
-    const options = { fieldSize: FIELD_SIZE, margin: settings.safetyMargin };
+    const options = clearanceOptions;
     const before = checkClearance(clearanceInput(), options);
     const applied: ClearanceFix[] = [];
     const exhausted = new Set<string>();
@@ -576,6 +610,16 @@
     }
     return `${moves} — ${before.hitCount} collisions down to ${after.hitCount}`;
   }
+
+  /**
+   * The same question the report asks, so a fix the search calls clear really is
+   * clear - including the AUTO midline rule when it is on.
+   */
+  $: clearanceOptions = {
+    fieldSize: FIELD_SIZE,
+    margin: settings.safetyMargin,
+    midline: midlineRuleFromSettings(settings),
+  };
 
   function clearanceInput() {
     return {
@@ -2661,6 +2705,7 @@
                       role="listitem"
                     >
                       <WaitRow
+                        {...waitClearanceProps(memberKey(member))}
                         label={member.kind === "event" ? "Event" : "Wait"}
                         name={member.name}
                         durationMs={member.durationMs}
@@ -2863,6 +2908,7 @@
                       role="listitem"
                     >
                       <WaitRow
+                        {...waitClearanceProps(memberKey(member))}
                         label={member.kind === "event" ? "Event" : "Wait"}
                         name={member.name}
                         durationMs={member.durationMs}
@@ -2962,6 +3008,7 @@
             </div>
           {:else}
             <WaitRow
+              {...waitClearanceProps(item.id)}
               label={item.kind === "event" ? "Event" : "Wait"}
               name={getWait(item).name}
               durationMs={getWait(item).durationMs}

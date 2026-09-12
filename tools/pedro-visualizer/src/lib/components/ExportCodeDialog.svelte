@@ -277,13 +277,40 @@
       const line = lines[span.lineIndex];
       const pathName = line?.name?.trim() || `Path ${span.lineIndex + 1}`;
       const target =
-        span.kind === "wall" ? "the field wall" : span.obstacleName?.trim() || "an obstacle";
+        span.kind === "midline"
+          ? "the midline"
+          : span.kind === "wall"
+            ? "the field wall"
+            : span.obstacleName?.trim() || "an obstacle";
 
+      // A Wait is the robot standing still, so it has no distance into a path
+      // and no path to blame — it is reported as itself.
+      if (span.stationary) {
+        const who = span.stationary.name?.trim() || "A wait";
+        const held =
+          span.stationary.seconds !== undefined
+            ? ` for ${span.stationary.seconds.toFixed(1)}s`
+            : "";
+        messages.push({
+          level: "warning",
+          message:
+            span.severity === "hit"
+              ? span.kind === "midline"
+                ? `${who} holds the robot over the midline${held} — AUTO columns A-C are the red side, D-F the blue (G402).`
+                : `${who} holds the robot in ${target}${held} — ${Math.abs(span.worstClearance).toFixed(1)}in of overlap.`
+              : `${who} holds the robot within ${span.worstClearance.toFixed(1)}in of ${target}${held}.`,
+        });
+        return;
+      }
+
+      const contact = (span.contactDistance ?? span.startDistance).toFixed(1);
       messages.push({
         level: "warning",
         message:
           span.severity === "hit"
-            ? `${pathName} drives the robot into ${target} — first contact ${(span.contactDistance ?? span.startDistance).toFixed(1)}in into the path, ${Math.abs(span.worstClearance).toFixed(1)}in of overlap at its worst.`
+            ? span.kind === "midline"
+              ? `${pathName} takes the robot across the midline — first crossing ${contact}in into the path, ${Math.abs(span.worstClearance).toFixed(1)}in over at its furthest. AUTO columns A-C are the red side, D-F the blue (G402).`
+              : `${pathName} drives the robot into ${target} — first contact ${contact}in into the path, ${Math.abs(span.worstClearance).toFixed(1)}in of overlap at its worst.`
             : `${pathName} passes within ${span.worstClearance.toFixed(1)}in of ${target}.`,
       });
     });

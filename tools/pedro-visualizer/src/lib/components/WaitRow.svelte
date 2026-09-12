@@ -23,6 +23,13 @@
   export let canMoveUp: boolean = true;
   export let canMoveDown: boolean = true;
   export let label: "Wait" | "Event" = "Wait";
+  /**
+   * Set when the robot standing here is too close to something - the clearance
+   * check reports a pose held through a Wait against the Wait itself.
+   */
+  export let clearanceLabel: string = "";
+  export let clearanceHit: boolean = false;
+  export let clearanceTitle: string = "";
   /** Drag handle wiring: lets this step be dropped into a loop or if block. */
   export let onPointerDown: (event: PointerEvent) => void = () => {};
   export let dragging = false;
@@ -90,6 +97,15 @@
         : "px-1.5 py-0.5 text-xs rounded bg-amber-200 text-amber-800 dark:bg-amber-900 dark:text-amber-200"}
       >{label}</span
     >
+    {#if clearanceLabel}
+      <span
+        title={clearanceTitle || clearanceLabel}
+        class="px-1.5 py-0.5 text-xs rounded whitespace-nowrap {clearanceHit
+          ? 'bg-red-200 text-red-900 dark:bg-red-900 dark:text-red-100'
+          : 'bg-amber-200 text-amber-900 dark:bg-amber-900 dark:text-amber-100'}"
+        >{clearanceLabel}</span
+      >
+    {/if}
     <input
       class="pl-1.5 rounded-md bg-neutral-50 dark:bg-neutral-950 dark:border-neutral-700 border-[0.5px] focus:outline-none w-40"
       type="text"

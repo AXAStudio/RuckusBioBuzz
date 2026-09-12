@@ -37,7 +37,22 @@ export const MAX_CLEARANCE_SAMPLES = 4000;
 /** Any overlap at all reports as negative, even when no vertex is contained. */
 const MIN_OVERLAP_DEPTH = 1e-6;
 
-export type ClearanceKind = "obstacle" | "wall";
+export type ClearanceKind = "obstacle" | "wall" | "midline";
+
+/**
+ * The AUTO side rule. BIOBUZZ Competition Manual V1, G402: "During AUTO, FIELD
+ * columns A, B, C constitute the red side of the FIELD, and columns D, E, F
+ * constitute the blue side... Navigating into the opposing ALLIANCE'S side of
+ * the FIELD during AUTO is a risky gameplay strategy that may be seen as
+ * STRATEGIC." Columns A-C are the three TILES nearest the red wall, so the line
+ * is the middle TILE seam - half the FIELD - and `side` is the half the ROBOT
+ * is meant to stay in.
+ */
+export interface MidlineRule {
+  side: "red" | "blue";
+  /** Distance of the line from x = 0, inches. Defaults to half the FIELD. */
+  at?: number;
+}
 export type ClearanceSeverity = "hit" | "tight";
 
 /** A stretch of one path where the robot is closer than the margin allows. */
@@ -67,6 +82,11 @@ export interface ClearanceSpan {
   contactDistance?: number;
   contactPose?: { x: number; y: number; heading: number };
   contactFootprint?: BasePoint[];
+  /**
+   * Set when the span is the ROBOT standing still rather than a stretch of a
+   * path - a Wait in the sequence. The distances are both zero: nothing moves.
+   */
+  stationary?: { id: string; name?: string; seconds?: number };
 }
 
 export interface ClearanceLineReport {
@@ -106,10 +126,29 @@ export interface ClearanceReport {
 export interface ClearanceOptions {
   /** Field is a square this many inches on a side. */
   fieldSize: number;
+  /** Keep the ROBOT on one side of the midline; off when absent. */
+  midline?: MidlineRule;
   /** Report anything closer than this, inches. */
   margin?: number;
   step?: number;
   maxSamples?: number;
+}
+
+/**
+ * A pose the ROBOT holds without driving: a Wait in the sequence. The heading
+ * model turns the ROBOT while it drives rather than in place, so a Wait holds
+ * the pose the previous path left it in - but a Wait at a bad pose is the
+ * Wait's problem, not the path's, and a route can wait somewhere no path
+ * sample would land (before the first path, or with no paths at all).
+ */
+export interface StationaryPose {
+  id: string;
+  name?: string;
+  x: number;
+  y: number;
+  heading: number;
+  /** How long the ROBOT sits there, for the report. */
+  seconds?: number;
 }
 
 export interface ClearanceInput {
@@ -129,6 +168,20 @@ export interface ClearanceInput {
    * pay for the rest of the route each time.
    */
   measureLineIds?: Set<string>;
+  /** Poses held between paths; measured on their own, not walked. */
+  stationaryPoses?: StationaryPose[];
+}
+
+/**
+ * The midline rule to check with, from the settings. Every caller that measures
+ * clearance has to agree on it - the report, the chips and the fix search all
+ * have to be answering the same question.
+ */
+export function midlineRuleFromSettings(settings: {
+  autoMidline?: "off" | "red" | "blue";
+}): MidlineRule | undefined {
+  const side = settings?.autoMidline;
+  return side === "red" || side === "blue" ? { side } : undefined;
 }
 
 export const EMPTY_CLEARANCE_REPORT: ClearanceReport = {
@@ -400,6 +453,25 @@ export function polygonClearance(a: BasePoint[], b: BasePoint[]): number {
 }
 
 /**
+ * Distance from the footprint to the midline, negative once any part of the
+ * ROBOT is over it. The whole ROBOT has to stay on its own side, so this is
+ * measured on the corner that reaches furthest across, not on the path.
+ */
+export function midlineClearance(
+  footprint: BasePoint[],
+  rule: MidlineRule,
+  fieldSize: number,
+): number {
+  const at = Number.isFinite(Number(rule.at)) ? Number(rule.at) : fieldSize / 2;
+  let best = Infinity;
+  for (const point of footprint) {
+    const value = rule.side === "red" ? at - point.x : point.x - at;
+    if (value < best) best = value;
+  }
+  return best;
+}
+
+/**
  * Distance from the footprint to the nearest field wall, negative once any part
  * of the robot is over the line. Testing vertices is exact here because the
  * walls are straight and the footprint's edges are too.
@@ -510,6 +582,7 @@ export function checkClearance(
 ): ClearanceReport {
   const fieldSize = Number(options.fieldSize);
   const margin = Math.max(0, Number(options.margin) || 0);
+  const midline = options.midline;
   const requestedStep = Number(options.step) > 0 ? Number(options.step) : DEFAULT_CLEARANCE_STEP;
   const maxSamples =
     Number(options.maxSamples) > 0 ? Number(options.maxSamples) : MAX_CLEARANCE_SAMPLES;
@@ -520,7 +593,8 @@ export function checkClearance(
   }
 
   const routeLines = routeLinesOf(input);
-  if (!routeLines.length) {
+  // A route with no paths still has poses to check: the Waits it holds.
+  if (!routeLines.length && !input.stationaryPoses?.length) {
     return { ...EMPTY_CLEARANCE_REPORT, margin, step: requestedStep };
   }
 
@@ -539,6 +613,15 @@ export function checkClearance(
   const byLine = new Map<string, ClearanceLineReport>();
   let minClearance = Infinity;
   let startPose: ClearanceReport["startPose"] = null;
+  /**
+   * Poses already reported from the route walk. A Wait holds the pose the
+   * previous path ended on, which that path's last sample has usually reported
+   * already - counting it twice would double the hit count and stack two
+   * identical outlines on the same spot.
+   */
+  const flaggedPoses = new Set<string>();
+  const poseKey = (x: number, y: number, heading: number) =>
+    `${x.toFixed(3)}|${y.toFixed(3)}|${heading.toFixed(2)}`;
 
   let previousEnd: BasePoint | null = null;
 
@@ -583,6 +666,14 @@ export function checkClearance(
       let obstacleId: string | undefined;
       let obstacleName: string | undefined;
 
+      if (midline) {
+        const value = midlineClearance(placed, midline, fieldSize);
+        if (value < clearance) {
+          clearance = value;
+          kind = "midline";
+        }
+      }
+
       for (const shape of obstacles) {
         const value = polygonClearance(placed, shape.vertices);
         if (value < clearance) {
@@ -594,6 +685,9 @@ export function checkClearance(
       }
 
       if (clearance < minClearance) minClearance = clearance;
+      if (clearance < margin || clearance < 0) {
+        flaggedPoses.add(poseKey(position.x, position.y, heading));
+      }
 
       // The very first sample of the route is the robot as staged.
       if (!startPose && distance === 0 && !continues) {
@@ -628,6 +722,64 @@ export function checkClearance(
       hit: lineSpans.some((span) => span.severity === "hit"),
       tight: lineSpans.some((span) => span.severity === "tight"),
       spans: lineSpans,
+    });
+  }
+
+  // Poses the ROBOT holds without driving. Measured the same way as a sample on
+  // a path, but reported against the Wait rather than against a path: the pose
+  // belongs to the Wait, and a Wait can sit where no path sample lands.
+  for (const pose of input.stationaryPoses || []) {
+    const placed = transformFootprint(
+      footprint,
+      pose.x,
+      pose.y,
+      pose.heading,
+    );
+
+    let clearance = wallClearance(placed, fieldSize);
+    let kind: ClearanceKind = "wall";
+    let obstacleId: string | undefined;
+    let obstacleName: string | undefined;
+
+    if (midline) {
+      const value = midlineClearance(placed, midline, fieldSize);
+      if (value < clearance) {
+        clearance = value;
+        kind = "midline";
+      }
+    }
+
+    for (const shape of obstacles) {
+      const value = polygonClearance(placed, shape.vertices);
+      if (value < clearance) {
+        clearance = value;
+        kind = "obstacle";
+        obstacleId = shape.id;
+        obstacleName = shape.name;
+      }
+    }
+
+    if (clearance < minClearance) minClearance = clearance;
+    if (clearance >= margin && clearance >= 0) continue;
+    if (flaggedPoses.has(poseKey(pose.x, pose.y, pose.heading))) continue;
+
+    const pos = { x: pose.x, y: pose.y, heading: pose.heading };
+    spans.push({
+      lineId: `wait:${pose.id}`,
+      lineIndex: -1,
+      startDistance: 0,
+      endDistance: 0,
+      worstClearance: clearance,
+      kind,
+      obstacleId,
+      obstacleName,
+      severity: clearance < 0 ? "hit" : "tight",
+      worstPose: pos,
+      worstFootprint: placed,
+      contactDistance: clearance < 0 ? 0 : undefined,
+      contactPose: clearance < 0 ? pos : undefined,
+      contactFootprint: clearance < 0 ? placed : undefined,
+      stationary: { id: pose.id, name: pose.name, seconds: pose.seconds },
     });
   }
 
@@ -1359,15 +1511,31 @@ function refineAlongDirection(
   return { dx: unitX * high, dy: unitY * high, value: bestValue };
 }
 
+/** What a span is up against, for chips and warnings. */
+export function clearanceTargetName(span: ClearanceSpan): string {
+  if (span.kind === "midline") return "the midline";
+  if (span.kind === "wall") return "field wall";
+  return span.obstacleName?.trim() || "obstacle";
+}
+
 /** One-line description of a span, for chips and warnings. */
 export function describeClearanceSpan(span: ClearanceSpan): string {
-  const target =
-    span.kind === "wall"
-      ? "field wall"
-      : span.obstacleName?.trim() || "obstacle";
+  const target = clearanceTargetName(span);
+  const crosses = span.kind === "midline";
+
+  if (span.stationary) {
+    const who = span.stationary.name?.trim() || "Wait";
+    if (span.severity === "hit") {
+      return crosses ? `${who} sits over the midline` : `${who} sits in ${target}`;
+    }
+    return `${who}: ${span.worstClearance.toFixed(1)}in from ${target}`;
+  }
 
   if (span.severity === "hit") {
-    return `Hits ${target} at ${span.startDistance.toFixed(1)}in`;
+    const where = (span.contactDistance ?? span.startDistance).toFixed(1);
+    return crosses
+      ? `Crosses the midline at ${where}in`
+      : `Hits ${target} at ${where}in`;
   }
   return `${span.worstClearance.toFixed(1)}in from ${target}`;
 }

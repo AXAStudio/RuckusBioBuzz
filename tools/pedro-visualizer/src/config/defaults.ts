@@ -62,6 +62,7 @@ export const DEFAULT_SETTINGS: Settings = {
   maxLateralAcceleration: 30,
   showSwerveModules: true,
   showClearance: true,
+  autoMidline: "off",
 };
 
 /**

@@ -520,6 +520,7 @@ export function calculatePathTime(
         timeline.push({
           type: "wait",
           name: step.item.name,
+          itemId: step.item.id,
           duration: waitSeconds,
           startTime: currentTime,
           endTime: currentTime + waitSeconds,

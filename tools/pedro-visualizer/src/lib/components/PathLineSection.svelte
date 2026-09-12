@@ -9,6 +9,7 @@
   import { snapToGrid, showGrid, gridSize } from "../../stores";
   import {
     canMoveEndpoint,
+    clearanceTargetName,
     type ClearanceLineReport,
   } from "../../utils/clearance";
   import {
@@ -94,23 +95,29 @@
   $: clearanceLabel = !worstClearanceSpan
     ? ""
     : worstClearanceSpan.severity === "hit"
-      ? `Hits ${clearanceTarget}`
+      ? worstClearanceSpan.kind === "midline"
+        ? "Crosses the midline"
+        : `Hits ${clearanceTarget}`
       : `${worstClearanceSpan.worstClearance.toFixed(1)}in clearance`;
 
   $: clearanceTarget = !worstClearanceSpan
     ? ""
-    : worstClearanceSpan.kind === "wall"
-      ? "field wall"
-      : worstClearanceSpan.obstacleName?.trim() || "obstacle";
+    : clearanceTargetName(worstClearanceSpan);
 
   $: clearanceTitle = !worstClearanceSpan
     ? ""
     : worstClearanceSpan.severity === "hit"
-      ? `The robot overlaps the ${clearanceTarget} by ${Math.abs(
-          worstClearanceSpan.worstClearance,
-        ).toFixed(
-          2,
-        )}in, starting ${worstClearanceSpan.startDistance.toFixed(1)}in into this path.`
+      ? worstClearanceSpan.kind === "midline"
+        ? `The robot crosses the midline by ${Math.abs(
+            worstClearanceSpan.worstClearance,
+          ).toFixed(2)}in at its furthest, first crossing ${(
+            worstClearanceSpan.contactDistance ?? worstClearanceSpan.startDistance
+          ).toFixed(1)}in into this path. AUTO columns A-C are the red side and D-F the blue (G402).`
+        : `The robot overlaps the ${clearanceTarget} by ${Math.abs(
+            worstClearanceSpan.worstClearance,
+          ).toFixed(2)}in, first touching ${(
+            worstClearanceSpan.contactDistance ?? worstClearanceSpan.startDistance
+          ).toFixed(1)}in into this path.`
       : `The robot passes within ${worstClearanceSpan.worstClearance.toFixed(
           2,
         )}in of the ${clearanceTarget}, ${worstClearanceSpan.startDistance.toFixed(

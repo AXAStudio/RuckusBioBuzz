@@ -55,7 +55,9 @@
     footprintFromSettings,
     generateGhostPathPoints,
     generateOnionLayers,
+    midlineRuleFromSettings,
   } from "./utils";
+  import type { StationaryPose } from "./utils/clearance";
   import {
     buildExpressionScope,
     easeInOutQuad,
@@ -2068,6 +2070,33 @@
    * allows, checked at the heading the robot is really holding — a path that is
    * clear driving straight can clip a corner once the robot turns on it.
    */
+  /**
+   * Poses the robot holds without driving. The heading model turns the robot
+   * while it drives rather than in place, so a Wait holds whatever pose the
+   * previous path left — but that pose belongs to the Wait, and a Wait can sit
+   * where no path sample lands. A wait inside a repeat loop runs many times at
+   * the same pose, so they are deduplicated by sequence item.
+   */
+  $: stationaryPoses = (() => {
+    const seen = new Set<string>();
+    const poses: StationaryPose[] = [];
+    for (const event of timePrediction?.timeline || []) {
+      if (event.type !== "wait" || !event.atPoint) continue;
+      const id = event.itemId || `${event.name || "wait"}@${event.startTime}`;
+      if (seen.has(id)) continue;
+      seen.add(id);
+      poses.push({
+        id,
+        name: event.name,
+        x: event.atPoint.x,
+        y: event.atPoint.y,
+        heading: Number(event.startHeading) || 0,
+        seconds: event.duration,
+      });
+    }
+    return poses;
+  })();
+
   $: clearanceReport = checkClearance(
     {
       startPoint,
@@ -2076,8 +2105,13 @@
       obstacles: shapes,
       lineStartPoints,
       headingTransitions,
+      stationaryPoses,
     },
-    { fieldSize: FIELD_SIZE, margin: settings.safetyMargin },
+    {
+      fieldSize: FIELD_SIZE,
+      margin: settings.safetyMargin,
+      midline: midlineRuleFromSettings(settings),
+    },
   );
   $: secondHeadingTransitions = headingTransitionsFrom(
     secondTimePrediction,

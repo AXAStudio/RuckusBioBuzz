@@ -329,6 +329,12 @@ export interface Settings {
   };
   /** Draw the spans where the robot is closer to something than the margin. */
   showClearance?: boolean;
+  /**
+   * AUTO side rule (BIOBUZZ G402): which half of the FIELD the ROBOT must stay
+   * in during AUTO, or "off" to not check it. "red" is columns A-C, the half
+   * nearest x = 0.
+   */
+  autoMidline?: "off" | "red" | "blue";
 }
 
 export interface Shape {
@@ -426,6 +432,11 @@ export interface TimelineEvent {
   startHeading?: number;
   targetHeading?: number;
   atPoint?: BasePoint;
+  /**
+   * Set on wait events: the sequence item this wait came from, so the pose the
+   * ROBOT holds through it can be reported against the Wait itself.
+   */
+  itemId?: string;
 }
 
 export interface TimePrediction {

@@ -30,6 +30,12 @@
    */
   export let onFieldMapChange: ((fieldMap: string) => void) | null = null;
 
+  function handleMidlineSelect(event: Event) {
+    const value = (event.currentTarget as HTMLSelectElement).value;
+    settings.autoMidline =
+      value === "red" || value === "blue" ? value : "off";
+  }
+
   function handleFieldMapSelect(event: Event) {
     const next = (event.currentTarget as HTMLSelectElement).value;
     if (next === settings.fieldMap) {
@@ -572,6 +578,32 @@
                     handleNumberInput(inputValue(e), "safetyMargin", 0, 24)}
                   class="w-full px-3 py-2 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
+              </div>
+
+              <div>
+                <label
+                  for="auto-midline"
+                  class="block text-sm font-medium text-neutral-700 dark:text-neutral-300 mb-1"
+                >
+                  AUTO Midline
+                  <div class="text-xs text-neutral-500 dark:text-neutral-400">
+                    Keep the robot on its own half during AUTO. BIOBUZZ G402
+                    makes TILE columns A-C the red side and D-F the blue, and
+                    crossing into the opposing side during AUTO risks a
+                    STRATEGIC call. Checked against the robot's whole footprint,
+                    like the walls and obstacles, and off by default.
+                  </div>
+                </label>
+                <select
+                  id="auto-midline"
+                  value={settings.autoMidline ?? "off"}
+                  on:change={handleMidlineSelect}
+                  class="w-full px-3 py-2 rounded-md border border-neutral-300 dark:border-neutral-600 bg-white dark:bg-neutral-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
+                  <option value="off">Off — no midline check</option>
+                  <option value="red">Stay on the red side (columns A-C)</option>
+                  <option value="blue">Stay on the blue side (columns D-F)</option>
+                </select>
               </div>
 
               <!-- Robot Image Upload -->
