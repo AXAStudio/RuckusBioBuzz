@@ -37,6 +37,20 @@ export const MAX_CLEARANCE_SAMPLES = 4000;
 /** Any overlap at all reports as negative, even when no vertex is contained. */
 const MIN_OVERLAP_DEPTH = 1e-6;
 
+/**
+ * How far past something the robot has to be before it counts as driving INTO
+ * it rather than touching it.
+ *
+ * A ROBOT staged flush against the perimeter wall is the normal case in FTC,
+ * and rotating its footprint to a heading of 180 deg puts a corner at
+ * -1.8e-15in: sin(180 deg) is not zero in floating point. Without a tolerance
+ * that reads as a collision at the starting position, which is both wrong and
+ * the loudest thing a review can say. A thousandth of an inch is far below
+ * anything the FIELD itself is built to - the manual's own tolerance is
+ * +/- 1 in - so nothing real is lost by treating it as contact.
+ */
+export const TOUCH_TOLERANCE = 1e-3;
+
 export type ClearanceKind = "obstacle" | "wall" | "midline";
 
 /**
@@ -685,7 +699,7 @@ export function checkClearance(
       }
 
       if (clearance < minClearance) minClearance = clearance;
-      if (clearance < margin || clearance < 0) {
+      if (clearance < margin || clearance < -TOUCH_TOLERANCE) {
         flaggedPoses.add(poseKey(position.x, position.y, heading));
       }
 
@@ -760,7 +774,7 @@ export function checkClearance(
     }
 
     if (clearance < minClearance) minClearance = clearance;
-    if (clearance >= margin && clearance >= 0) continue;
+    if (clearance >= margin && clearance >= -TOUCH_TOLERANCE) continue;
     if (flaggedPoses.has(poseKey(pose.x, pose.y, pose.heading))) continue;
 
     const pos = { x: pose.x, y: pose.y, heading: pose.heading };
@@ -773,12 +787,12 @@ export function checkClearance(
       kind,
       obstacleId,
       obstacleName,
-      severity: clearance < 0 ? "hit" : "tight",
+      severity: clearance < -TOUCH_TOLERANCE ? "hit" : "tight",
       worstPose: pos,
       worstFootprint: placed,
-      contactDistance: clearance < 0 ? 0 : undefined,
-      contactPose: clearance < 0 ? pos : undefined,
-      contactFootprint: clearance < 0 ? placed : undefined,
+      contactDistance: clearance < -TOUCH_TOLERANCE ? 0 : undefined,
+      contactPose: clearance < -TOUCH_TOLERANCE ? pos : undefined,
+      contactFootprint: clearance < -TOUCH_TOLERANCE ? placed : undefined,
       stationary: { id: pose.id, name: pose.name, seconds: pose.seconds },
     });
   }
@@ -816,7 +830,7 @@ function groupSpans(
     for (const sample of open) {
       if (sample.clearance < worst.clearance) worst = sample;
     }
-    const contact = open.find((sample) => sample.clearance < 0);
+    const contact = open.find((sample) => sample.clearance < -TOUCH_TOLERANCE);
     // A span that touches is named after what it touches FIRST, which is what
     // the drawn outline sits on. Deeper into the span the nearest thing can
     // easily be something else - a wall behind the obstacle, say - and naming
@@ -832,7 +846,7 @@ function groupSpans(
       kind: named.kind,
       obstacleId: named.obstacleId,
       obstacleName: named.obstacleName,
-      severity: worst.clearance < 0 ? "hit" : "tight",
+      severity: worst.clearance < -TOUCH_TOLERANCE ? "hit" : "tight",
       worstPose: { x: worst.x, y: worst.y, heading: worst.heading },
       worstFootprint: worst.footprint,
       contactDistance: contact?.distance,
@@ -848,7 +862,7 @@ function groupSpans(
   for (const sample of samples) {
     // A clean stretch between two problems keeps them apart; a run of tight
     // samples that dips below zero partway is still one span, reported as a hit.
-    if (sample.clearance < margin || sample.clearance < 0) open.push(sample);
+    if (sample.clearance < margin || sample.clearance < -TOUCH_TOLERANCE) open.push(sample);
     else close();
   }
   close();
@@ -1523,12 +1537,17 @@ export function describeClearanceSpan(span: ClearanceSpan): string {
   const target = clearanceTargetName(span);
   const crosses = span.kind === "midline";
 
+  // Exactly touching - a ROBOT staged flush against the wall - is neither a
+  // collision nor a distance worth printing as "-0.0in".
+  const touching = Math.abs(span.worstClearance) < TOUCH_TOLERANCE;
+  const gap = touching ? `Touching ${target}` : `${span.worstClearance.toFixed(1)}in from ${target}`;
+
   if (span.stationary) {
     const who = span.stationary.name?.trim() || "Wait";
     if (span.severity === "hit") {
       return crosses ? `${who} sits over the midline` : `${who} sits in ${target}`;
     }
-    return `${who}: ${span.worstClearance.toFixed(1)}in from ${target}`;
+    return `${who}: ${touching ? `touching ${target}` : gap}`;
   }
 
   if (span.severity === "hit") {
@@ -1537,5 +1556,5 @@ export function describeClearanceSpan(span: ClearanceSpan): string {
       ? `Crosses the midline at ${where}in`
       : `Hits ${target} at ${where}in`;
   }
-  return `${span.worstClearance.toFixed(1)}in from ${target}`;
+  return gap;
 }

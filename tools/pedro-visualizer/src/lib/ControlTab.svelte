@@ -56,6 +56,7 @@
     resolveVariableValues,
     clearanceTargetName,
     describeClearanceSpan,
+    TOUCH_TOLERANCE,
     FIX_HANDLE_LABELS,
     midlineRuleFromSettings,
     suggestClearanceFix,
@@ -326,7 +327,7 @@
     const pose = clearanceReport.startPose;
     if (!pose || pose.clearance >= clearanceReport.margin) return null;
     return {
-      hit: pose.clearance < 0,
+      hit: pose.clearance < -TOUCH_TOLERANCE,
       clearance: pose.clearance,
       target:
         pose.kind === "wall" ? "the field wall" : pose.obstacleName?.trim() || "an obstacle",

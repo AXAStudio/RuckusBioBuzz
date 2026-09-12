@@ -12,6 +12,7 @@ import { FIELD_SIZE } from "../config/defaults";
 import {
   checkClearance,
   clearanceTargetName,
+  TOUCH_TOLERANCE,
   describeClearanceSpan,
   footprintFromSettings,
   midlineRuleFromSettings,
@@ -223,7 +224,7 @@ export function reviewProject(
     });
   }
 
-  if (clearance.startPose && clearance.startPose.clearance < 0) {
+  if (clearance.startPose && clearance.startPose.clearance < -TOUCH_TOLERANCE) {
     const staged =
       clearance.startPose.kind === "midline"
         ? "staged across the midline"
@@ -518,9 +519,13 @@ function clearanceDetail(span: ClearanceSpan, review: PathReview): string {
   const at = span.stationary
     ? ""
     : `, first at ${(span.contactDistance ?? span.startDistance).toFixed(1)}in into it`;
+  const worst =
+    Math.abs(span.worstClearance) < TOUCH_TOLERANCE
+      ? "just touching"
+      : `worst ${Math.abs(span.worstClearance).toFixed(2)}in ${
+          span.worstClearance < 0 ? "of overlap" : "of clearance"
+        }`;
   return `${where}: ${describeClearanceSpan(span)}${at} — robot at (${pose.x.toFixed(
     1,
-  )}, ${pose.y.toFixed(1)}) heading ${pose.heading.toFixed(0)}°, worst ${Math.abs(
-    span.worstClearance,
-  ).toFixed(2)}in ${span.worstClearance < 0 ? "of overlap" : "of clearance"}.`;
+  )}, ${pose.y.toFixed(1)}) heading ${pose.heading.toFixed(0)}°, ${worst}.`;
 }
