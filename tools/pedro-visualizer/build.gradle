@@ -33,33 +33,46 @@ idea {
     }
 }
 
+// `npm ci` DELETES node_modules before it reinstalls, and on Windows it cannot
+// delete rollup's native module while a dev server has it loaded - it dies
+// half way with EPERM -4048 and leaves the tree in pieces. So nothing in the
+// everyday path depends on this task: it is here for a deliberate clean
+// reinstall, with the dev server stopped.
 tasks.register('npmInstall', Exec) {
     group = 'pedro visualizer'
-    description = 'Install Pedro visualizer npm dependencies.'
+    description = 'Clean reinstall of the npm dependencies (npm ci). Stop the dev server first.'
     commandLine npmCommand, 'ci'
+}
+
+// What the build and dev tasks actually depend on: an install only when there
+// is nothing installed. `npm install` is incremental and never empties the
+// tree, so a running dev server costs a warning rather than a broken checkout.
+tasks.register('npmEnsureDeps', Exec) {
+    group = 'pedro visualizer'
+    description = 'Install npm dependencies if node_modules is missing.'
+    commandLine npmCommand, 'install', '--no-audit', '--no-fund'
+    onlyIf { !file('node_modules/.bin').exists() }
 }
 
 tasks.register('npmBuild', Exec) {
     group = 'pedro visualizer'
     description = 'Build the Pedro visualizer web app.'
-    dependsOn 'npmInstall'
+    dependsOn 'npmEnsureDeps'
     commandLine npmCommand, 'run', 'build'
 }
 
 tasks.register('npmDev', Exec) {
     group = 'pedro visualizer'
     description = 'Start the Pedro visualizer dev server at http://127.0.0.1:5173/.'
-    dependsOn 'npmInstall'
+    dependsOn 'npmEnsureDeps'
     commandLine npmCommand, 'run', 'dev', '--', '--host', '127.0.0.1', '--port', '5173'
 }
 
 tasks.register('npmBuildMcp', Exec) {
     group = 'pedro visualizer'
-    // Deliberately not `dependsOn npmInstall`: this only needs esbuild, which
-    // is already in node_modules, and `npm ci` wipes and refetches the whole
-    // tree for a 150ms bundle. On a fresh checkout, run `npm ci` (or
-    // `./gradlew :PedroVisualizer:npmInstall`) once first.
+    // Only needs esbuild, which is already installed.
     description = 'Build the Pedro Path MCP server bundle (mcp/dist/pedro-path-mcp.mjs).'
+    dependsOn 'npmEnsureDeps'
     commandLine npmCommand, 'run', 'build:mcp'
 }
 
@@ -90,7 +103,7 @@ tasks.register('pathMcp') {
 tasks.register('visualizer', Exec) {
     group = 'pedro visualizer'
     description = 'Install dependencies, start the Pedro visualizer, and open it in your browser.'
-    dependsOn 'npmInstall'
+    dependsOn 'npmEnsureDeps'
     commandLine npmCommand, 'run', 'dev', '--', '--host', '127.0.0.1', '--port', '5173', '--open'
 }
 
