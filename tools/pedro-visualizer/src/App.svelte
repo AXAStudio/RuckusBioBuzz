@@ -102,246 +102,33 @@
   import { onMount, tick } from "svelte";
   import { debounce } from "lodash";
   import { createHistory, type AppState } from "./utils/history";
+  import {
+    applyPoseVariablesToPath,
+    applyVariablesToLines,
+    applyVariablesToSequence,
+    bindPointToPoseVariable,
+    clearMissingPoseVariable,
+    createDefaultPathChain,
+    defaultPathChainName,
+    loadProjectData,
+    makeChainId,
+    normalizeEventMarkers,
+    normalizeLines,
+    normalizePathChains,
+    normalizeVariable,
+    normalizeVariables,
+  } from "./utils/projectFile";
   // Browser-only build: file operations use the browser file store and
   // localStorage. Electron-specific APIs have been removed.
 
-  function normalizeEventMarkers(markers: Line["eventMarkers"] = []) {
-    return (markers || []).map((marker, index) => {
-      const position = Number(marker.position ?? 0.5);
-      const durationMs = Number(marker.durationMs ?? 0);
-      const triggerMs = Number(marker.triggerMs ?? 0);
-      const triggerType: EventTriggerType =
-        marker.triggerType === "temporal" || marker.triggerType === "pose"
-          ? marker.triggerType
-          : "parametric";
 
-      return {
-        ...marker,
-        id: marker.id || `event-${Math.random().toString(36).slice(2)}`,
-        name: (marker.name || "").trim() || `Event ${index + 1}`,
-        triggerType,
-        position: Number.isFinite(position)
-          ? Math.max(0, Math.min(1, position))
-          : 0.5,
-        triggerMs: Number.isFinite(triggerMs)
-          ? Math.max(0, Math.round(triggerMs))
-          : 0,
-        ...(Number.isFinite(Number(marker.poseX))
-          ? { poseX: Number(marker.poseX) }
-          : {}),
-        ...(Number.isFinite(Number(marker.poseY))
-          ? { poseY: Number(marker.poseY) }
-          : {}),
-        durationMs: Number.isFinite(durationMs)
-          ? Math.max(0, Math.round(durationMs))
-          : 0,
-      };
-    });
-  }
 
-  function normalizeLines(input: Line[]): Line[] {
-    return (input || []).map((line) => ({
-      ...line,
-      id: line.id || `line-${Math.random().toString(36).slice(2)}`,
-      controlPoints: line.controlPoints || [],
-      color: line.color || getRandomColor(),
-      name: line.name || "",
-      speed: Math.max(0.05, Math.min(1, Number(line.speed ?? 1) || 1)),
-      waitBeforeMs: Math.max(
-        0,
-        Number(line.waitBeforeMs ?? line.waitBefore?.durationMs ?? 0),
-      ),
-      waitAfterMs: Math.max(
-        0,
-        Number(line.waitAfterMs ?? line.waitAfter?.durationMs ?? 0),
-      ),
-      waitBeforeName: line.waitBeforeName ?? line.waitBefore?.name ?? "",
-      waitAfterName: line.waitAfterName ?? line.waitAfter?.name ?? "",
-      eventMarkers: normalizeEventMarkers(line.eventMarkers),
-    }));
-  }
 
-  /** Fills in missing ids/names so every variable is addressable. */
-  function normalizeVariable(variable: Variable, index: number): Variable {
-    const id = variable.id || `var-${Math.random().toString(36).slice(2)}`;
-    const name = (variable.name || "").trim() || `value${index + 1}`;
 
-    if (variable.type === "pose") {
-      return {
-        ...variable,
-        id,
-        name,
-        x: Number.isFinite(Number(variable.x)) ? Number(variable.x) : 0,
-        y: Number.isFinite(Number(variable.y)) ? Number(variable.y) : 0,
-        heading: Number.isFinite(Number(variable.heading))
-          ? Number(variable.heading)
-          : 0,
-      };
-    }
 
-    if (variable.type === "number") {
-      const value = Number(variable.value);
-      return { ...variable, id, name, value: Number.isFinite(value) ? value : 0 };
-    }
 
-    if (variable.type === "boolean") {
-      return { ...variable, id, name, value: Boolean(variable.value) };
-    }
 
-    return { ...variable, id, name };
-  }
 
-  /**
-   * Builds the unified variable list from a save file, accepting both the
-   * current `variables` field and the legacy per-type arrays.
-   */
-  function normalizeVariables(source: {
-    variables?: Variable[];
-    numberVariables?: any[];
-    poseVariables?: any[];
-    pathVariables?: any[];
-  }): Variable[] {
-    const migrated = migrateVariables(source).map(normalizeVariable);
-    const resolved = resolveVariableValues(migrated);
-    const poseVariables = poseVariablesOf(resolved);
-
-    // Path variables hold their own lines, so normalize those too.
-    return resolved.map((variable) => {
-      if (variable.type !== "path") return variable;
-
-      const normalizedLines = applyVariablesToLines(
-        normalizeLines(variable.lines || []),
-        resolved,
-      );
-      const normalizedPath = applyPoseVariablesToPath(
-        resolvePointExpressions(
-          variable.startPoint || getDefaultStartPoint(),
-          resolved,
-        ),
-        normalizedLines,
-        poseVariables,
-      );
-
-      return {
-        ...variable,
-        startPoint: normalizedPath.startPoint,
-        lines: normalizedPath.lines,
-      };
-    });
-  }
-
-  function applyVariablesToLines(
-    sourceLines: Line[],
-    sourceVariables: Variable[],
-  ): Line[] {
-    const scope = buildExpressionScope(sourceVariables);
-    return sourceLines.map((line) =>
-      resolveLineExpressions(migrateLine(line, sourceVariables), sourceVariables, scope),
-    );
-  }
-
-  function applyVariablesToSequence(
-    sourceSequence: SequenceItem[],
-    sourceVariables: Variable[],
-  ): SequenceItem[] {
-    const scope = buildExpressionScope(sourceVariables);
-    // Groups used to hold a bare list of path ids; convert once on the way in so
-    // nothing downstream has to know that.
-    return migrateSequenceGroups(sourceSequence).map((item) =>
-      resolveSequenceItemExpressions(
-        migrateSequenceItem(item, sourceVariables),
-        sourceVariables,
-        scope,
-      ),
-    );
-  }
-
-  function bindPointToPoseVariable(
-    point: Point,
-    variable: PoseVariable,
-    forcePoseHeading = false,
-  ): Point {
-    const targetHeading = Number.isFinite(Number(variable.heading))
-      ? Number(variable.heading)
-      : 0;
-    const basePoint = {
-      x: Number(variable.x) || 0,
-      y: Number(variable.y) || 0,
-      locked: point.locked,
-      poseVariableId: variable.id,
-    };
-
-    // The start point keeps its heading in `startDeg`/`degrees`, never `endDeg`,
-    // so writing the pose heading into the linear branch would leave the real
-    // start heading behind. Give it a definite heading instead.
-    if (forcePoseHeading) {
-      return {
-        ...basePoint,
-        heading: "constant",
-        degrees: targetHeading,
-      };
-    }
-
-    if (point.heading === "linear") {
-      return {
-        ...basePoint,
-        heading: "linear",
-        startDeg: Number.isFinite(Number(point.startDeg))
-          ? Number(point.startDeg)
-          : targetHeading,
-        endDeg: targetHeading,
-        headingCurve: point.headingCurve ?? 1,
-      };
-    }
-
-    if (point.heading === "tangential") {
-      return {
-        ...basePoint,
-        heading: "tangential",
-        reverse: point.reverse ?? false,
-      };
-    }
-
-    return {
-      ...basePoint,
-      heading: "constant",
-      degrees: targetHeading,
-    };
-  }
-
-  function clearMissingPoseVariable(
-    point: Point,
-    variablesById: Map<string, PoseVariable>,
-    isStartPoint = false,
-  ): Point {
-    if (!point.poseVariableId) return point;
-
-    const variable = variablesById.get(point.poseVariableId);
-    if (variable) {
-      return bindPointToPoseVariable(point, variable, isStartPoint);
-    }
-
-    const { poseVariableId, ...nextPoint } = point;
-    return nextPoint as Point;
-  }
-
-  function applyPoseVariablesToPath(
-    sourceStartPoint: Point,
-    sourceLines: Line[],
-    sourcePoseVariables: PoseVariable[],
-  ): { startPoint: Point; lines: Line[] } {
-    const variablesById = new Map(
-      sourcePoseVariables.map((variable) => [variable.id, variable]),
-    );
-
-    return {
-      startPoint: clearMissingPoseVariable(sourceStartPoint, variablesById, true),
-      lines: sourceLines.map((line) => ({
-        ...line,
-        endPoint: clearMissingPoseVariable(line.endPoint, variablesById),
-      })),
-    };
-  }
 
   // Canvas state
   let two: Two;
@@ -401,15 +188,6 @@
     kind: "path",
     lineId: ln.id!,
   }));
-  const makeChainId = () =>
-    `chain-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
-  const defaultPathChainName = "Main Chain";
-  const createDefaultPathChain = (sourceLines: Line[]): PathChain => ({
-    id: makeChainId(),
-    name: defaultPathChainName,
-    color: getRandomColor(),
-    lineIds: sourceLines.map((ln) => ln.id!).filter(Boolean),
-  });
   let pathChains: PathChain[] = [createDefaultPathChain(lines)];
   let shapes: Shape[] = getDefaultShapes(settings.fieldMap);
   let optimizingLineIds: Record<string, boolean> = {};
@@ -1540,26 +1318,6 @@
     }
   }
 
-  function normalizePathChains(
-    sourceChains: PathChain[] | undefined,
-    sourceLines: Line[],
-  ): PathChain[] {
-    const validLineIds = new Set(sourceLines.map((ln) => ln.id!).filter(Boolean));
-    const cleaned = (sourceChains || [])
-      .map((chain) => ({
-        ...chain,
-        id: chain.id || makeChainId(),
-        name: (chain.name || "").trim() || defaultPathChainName,
-        color: chain.color || getRandomColor(),
-        lineIds: (chain.lineIds || []).filter((id) => validLineIds.has(id)),
-      }));
-
-    if (cleaned.length === 0) {
-      return [createDefaultPathChain(sourceLines)];
-    }
-
-    return cleaned;
-  }
 
   $: {
     const normalized = normalizePathChains(pathChains, lines);
@@ -4231,51 +3989,27 @@
   // Electron file-copying logic removed — browser store and upload are used instead.
 
   // Helper function to load data into app state
-	  function loadData(data: any) {
-	    const loadedVariables = normalizeVariables(data);
+  /**
+   * Loads a parsed project into the editor. The normalization lives in
+   * `utils/projectFile` so the MCP reviewer reads a file exactly the way the
+   * editor does; the editor keeps an empty obstacle list as the user left it,
+   * which is the one difference and why the preset fallback is turned off here.
+   */
+  function loadData(data: any) {
+    const project = loadProjectData(data, {
+      baseSettings: settings,
+      useFieldObstaclePreset: false,
+    });
 
-    // Ensure startPoint has all required fields
-    const loadedStartPoint = resolvePointExpressions(data.startPoint || {
-      x: 72,
-      y: 72,
-      heading: "tangential",
-      reverse: false,
-    }, loadedVariables);
+    startPoint = project.startPoint;
+    lines = project.lines;
+    variables = project.variables;
+    sequence = project.sequence;
+    pathChains = project.pathChains;
+    shapes = project.shapes;
 
-    // Normalize lines with all required fields
-	    const normalizedLines = applyVariablesToLines(
-	      normalizeLines(data.lines || []),
-	      loadedVariables,
-	    );
-    const normalizedPath = applyPoseVariablesToPath(
-      loadedStartPoint,
-      normalizedLines,
-      poseVariablesOf(loadedVariables),
-    );
-    startPoint = normalizedPath.startPoint;
-	    lines = normalizedPath.lines;
-	    variables = loadedVariables;
-
-    // Derive sequence from data or create default
-	    sequence = applyVariablesToSequence(
-	      (
-	        data.sequence && data.sequence.length
-	          ? data.sequence
-	          : normalizedLines.map((ln) => ({
-	              kind: "path",
-	              lineId: ln.id!,
-	            }))
-	      ) as SequenceItem[],
-	      loadedVariables,
-	    );
-    pathChains = normalizePathChains(data.pathChains, normalizedPath.lines);
-
-    // Load shapes with defaults
-    shapes = data.shapes || [];
-
-    // Load settings (including robot size) if present
     if (data.settings) {
-      settings = { ...settings, ...data.settings };
+      settings = project.settings;
       robotWidth = settings.rWidth;
       robotHeight = settings.rHeight;
     }

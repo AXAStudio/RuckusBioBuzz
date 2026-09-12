@@ -53,6 +53,40 @@ tasks.register('npmDev', Exec) {
     commandLine npmCommand, 'run', 'dev', '--', '--host', '127.0.0.1', '--port', '5173'
 }
 
+tasks.register('npmBuildMcp', Exec) {
+    group = 'pedro visualizer'
+    // Deliberately not `dependsOn npmInstall`: this only needs esbuild, which
+    // is already in node_modules, and `npm ci` wipes and refetches the whole
+    // tree for a 150ms bundle. On a fresh checkout, run `npm ci` (or
+    // `./gradlew :PedroVisualizer:npmInstall`) once first.
+    description = 'Build the Pedro Path MCP server bundle (mcp/dist/pedro-path-mcp.mjs).'
+    commandLine npmCommand, 'run', 'build:mcp'
+}
+
+tasks.register('pathMcp') {
+    group = 'pedro visualizer'
+    description = 'Build the Pedro Path MCP server and print how to register it with Claude.'
+    dependsOn 'npmBuildMcp'
+    doLast {
+        def bundle = file('mcp/dist/pedro-path-mcp.mjs').absolutePath
+        def jsonPath = groovy.json.JsonOutput.toJson(bundle)
+        println ''
+        println 'Pedro Path MCP built: ' + bundle
+        println ''
+        println 'Claude Code:'
+        println '  claude mcp add pedro-path -- node "' + bundle + '"'
+        println ''
+        println 'Claude Desktop (Settings -> Developer -> Edit Config), inside "mcpServers":'
+        println '  "pedro-path": {'
+        println '    "command": "node",'
+        println '    "args": [' + jsonPath + ']'
+        println '  }'
+        println ''
+        println 'Rebuild after changing anything under src/utils - the bundle is a copy.'
+        println 'See tools/pedro-visualizer/mcp/README.md.'
+    }
+}
+
 tasks.register('visualizer', Exec) {
     group = 'pedro visualizer'
     description = 'Install dependencies, start the Pedro visualizer, and open it in your browser.'
