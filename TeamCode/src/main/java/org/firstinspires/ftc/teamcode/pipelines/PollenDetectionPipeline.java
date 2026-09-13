@@ -101,45 +101,66 @@ import java.util.List;
 public class PollenDetectionPipeline implements VisionProcessor {
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Tuning constants
+    // Tuning
     // ─────────────────────────────────────────────────────────────────────────
 
-    // HSV color space (OpenCV): H ∈ [0,179]  S ∈ [0,255]  V ∈ [0,255]
-    // BIOBUZZ pollen is daffodil yellow. Two overlapping ranges handle the
-    // shift in apparent hue between warm fluorescent (common in gymnasiums)
-    // and cooler LED rigs used at championship venues.
-    private static final Scalar HSV_LO_A = new Scalar(15,  90,  70);
-    private static final Scalar HSV_HI_A = new Scalar(38, 255, 255);
-    private static final Scalar HSV_LO_B = new Scalar(12,  60,  45); // wider net for dim venues
-    private static final Scalar HSV_HI_B = new Scalar(42, 255, 255);
+    /**
+     * Every tunable, as one object. The defaults are the values this pipeline
+     * has always shipped with, so {@code new PollenDetectionPipeline(telemetry)}
+     * behaves exactly as it did before Config existed. Autos exported from the
+     * Pedro visualizer build one from its Settings → Vision tab.
+     */
+    public static class Config {
+        // HSV color space (OpenCV): H ∈ [0,179]  S ∈ [0,255]  V ∈ [0,255]
+        // BIOBUZZ pollen is daffodil yellow. Two overlapping ranges handle the
+        // shift in apparent hue between warm fluorescent (common in gymnasiums)
+        // and cooler LED rigs used at championship venues.
+        public double[] hsvLowA  = {15,  90,  70};
+        public double[] hsvHighA = {38, 255, 255};
+        public double[] hsvLowB  = {12,  60,  45}; // wider net for dim venues
+        public double[] hsvHighB = {42, 255, 255};
 
-    // RLE morphological open: removes noise runs shorter than this many pixels.
-    // A single pollen ball at 3ft spans ~22px wide; noise is typically 1–4px.
-    private static final int OPEN_RADIUS = 3;
+        // RLE morphological open: removes noise runs shorter than this many pixels.
+        // A single pollen ball at 3ft spans ~22px wide; noise is typically 1–4px.
+        public int openRadius = 3;
 
-    // RLE morphological close: fills horizontal gaps between touching balls.
-    // Two adjacent balls at 3ft may have a 5–15px dark gap between them.
-    private static final int CLOSE_H_GAP = 16;
+        // RLE morphological close: fills horizontal gaps between touching balls.
+        // Two adjacent balls at 3ft may have a 5–15px dark gap between them.
+        public int closeHGap = 16;
 
-    // Vertical radius for the close operation: how many rows apart two runs
-    // can be and still be merged into one blob region.
-    private static final int CLOSE_V_RADIUS = 12;
+        // Vertical radius for the close operation: how many rows apart two runs
+        // can be and still be merged into one blob region.
+        public int closeVRadius = 12;
 
-    // Component area filter — pixels²
-    private static final double MIN_AREA = 350.0;
-    private static final double MAX_AREA = 100_000.0;
+        // Component area filter — pixels²
+        public double minArea = 350.0;
+        public double maxArea = 100_000.0;
 
-    // Bounding-box aspect ratio filter (width / height).
-    // One ball ≈ 1:1; three in a row ≈ 3:1. Cap at 5 to reject thin streaks.
-    private static final double MAX_ASPECT = 5.0;
+        // Bounding-box aspect ratio filter (width / height).
+        // One ball ≈ 1:1; three in a row ≈ 3:1. Cap at 5 to reject thin streaks.
+        public double maxAspect = 5.0;
 
-    // Spatial distance within which two blobs are merged into one Clump.
-    private static final int CLUMP_MERGE_GAP = 28;
+        // Spatial distance within which two blobs are merged into one Clump.
+        public int clumpMergeGap = 28;
 
-    // Estimated pixel area of one pollen ball at typical intake distance.
-    // ⚠ CALIBRATE THIS: place one ball at your intake, call getBestClump()
-    //   .areaPx, then paste that number here.
-    private static final double SINGLE_BALL_AREA_PX = 1_600.0;
+        // Estimated pixel area of one pollen ball at typical intake distance.
+        // ⚠ CALIBRATE THIS: place one ball at your intake, call getBestClump()
+        //   .areaPx, then paste that number here.
+        public double singleBallAreaPx = 1_600.0;
+    }
+
+    private final Scalar HSV_LO_A;
+    private final Scalar HSV_HI_A;
+    private final Scalar HSV_LO_B;
+    private final Scalar HSV_HI_B;
+    private final int    OPEN_RADIUS;
+    private final int    CLOSE_H_GAP;
+    private final int    CLOSE_V_RADIUS;
+    private final double MIN_AREA;
+    private final double MAX_AREA;
+    private final double MAX_ASPECT;
+    private final int    CLUMP_MERGE_GAP;
+    private final double SINGLE_BALL_AREA_PX;
 
     // Maximum runs array size. 32k handles even the noisiest frames.
     private static final int MAX_RUNS = 32_000;
@@ -214,12 +235,12 @@ public class PollenDetectionPipeline implements VisionProcessor {
         public final double steeringError;
 
         Clump(double cx, double cy, double area,
-              int bx, int by, int bw, int bh, int frameWidth) {
+              int bx, int by, int bw, int bh, int frameWidth, double singleBallAreaPx) {
             centerX            = cx;
             centerY            = cy;
             areaPx             = area;
             boundX = bx; boundY = by; boundW = bw; boundH = bh;
-            estimatedBallCount = Math.max(1, (int) Math.round(area / SINGLE_BALL_AREA_PX));
+            estimatedBallCount = Math.max(1, (int) Math.round(area / singleBallAreaPx));
             steeringError      = (cx - frameWidth / 2.0) / (frameWidth / 2.0);
         }
 
@@ -235,7 +256,24 @@ public class PollenDetectionPipeline implements VisionProcessor {
     // ─────────────────────────────────────────────────────────────────────────
 
     public PollenDetectionPipeline(Telemetry telemetry) {
+        this(telemetry, new Config());
+    }
+
+    public PollenDetectionPipeline(Telemetry telemetry, Config config) {
         this.telemetry = telemetry;
+        Config c = config != null ? config : new Config();
+        HSV_LO_A            = new Scalar(c.hsvLowA);
+        HSV_HI_A            = new Scalar(c.hsvHighA);
+        HSV_LO_B            = new Scalar(c.hsvLowB);
+        HSV_HI_B            = new Scalar(c.hsvHighB);
+        OPEN_RADIUS         = c.openRadius;
+        CLOSE_H_GAP         = c.closeHGap;
+        CLOSE_V_RADIUS      = c.closeVRadius;
+        MIN_AREA            = c.minArea;
+        MAX_AREA            = c.maxArea;
+        MAX_ASPECT          = c.maxAspect;
+        CLUMP_MERGE_GAP     = c.clumpMergeGap;
+        SINGLE_BALL_AREA_PX = c.singleBallAreaPx;
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -562,7 +600,7 @@ public class PollenDetectionPipeline implements VisionProcessor {
             int bx = (int) x1[i], by = (int) y1[i];
             int bw = (int)(x2[i] - x1[i]) + 1;
             int bh = (int)(y2[i] - y1[i]) + 1;
-            out.add(new Clump(cx, cy, ar[i], bx, by, bw, bh, W));
+            out.add(new Clump(cx, cy, ar[i], bx, by, bw, bh, W, SINGLE_BALL_AREA_PX));
         }
         return out;
     }
@@ -728,13 +766,24 @@ public class PollenDetectionPipeline implements VisionProcessor {
         synchronized (lock) { return steeringError; }
     }
 
+    /** Frame width the pipeline was initialised with, pixels. */
+    public int getFrameWidth() {
+        synchronized (lock) { return fw; }
+    }
+
+    /** Frame height the pipeline was initialised with, pixels. */
+    public int getFrameHeight() {
+        synchronized (lock) { return fh; }
+    }
+
     /** True if at least one pollen clump is visible this frame. */
     public boolean isPollenVisible() {
         synchronized (lock) { return best != null; }
     }
 
     /** Snapshot of all clumps this frame, sorted by estimated ball count. */
-    public List<Clump> getAllClumps() {        synchronized (lock) { return new ArrayList<>(results); }
+    public List<Clump> getAllClumps() {
+        synchronized (lock) { return new ArrayList<>(results); }
     }
 
     // ─────────────────────────────────────────────────────────────────────────
