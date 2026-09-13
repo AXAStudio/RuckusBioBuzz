@@ -7,6 +7,7 @@ import type {
   PoseVariable,
   ScalarVariable,
   SequenceConditionalItem,
+  SequenceGroupMember,
   SequenceItem,
   Variable,
   VariableType,
@@ -441,8 +442,33 @@ export function resolveSequenceItemExpressions(
     };
   }
 
+  // A wait or an event inside a repeat loop or an `if` block carries its own
+  // duration expression too. Leaving members unresolved charged them at their
+  // stale literal in the time estimate and the animation, while the exported
+  // Java evaluates the expression - so the two disagreed.
+  const withResolvedMembers = <T extends { members?: SequenceGroupMember[] }>(group: T): T =>
+    group.members
+      ? {
+          ...group,
+          members: group.members.map((member) =>
+            member.kind === "wait" || member.kind === "event"
+              ? {
+                  ...member,
+                  durationMs: resolveField(
+                    member.durationExpression,
+                    member.durationMs,
+                    variables,
+                    scope,
+                    clampMs,
+                  ),
+                }
+              : member,
+          ),
+        }
+      : group;
+
   if (item.kind === "repeat") {
-    return {
+    return withResolvedMembers({
       ...item,
       count: resolveField(
         item.countExpression,
@@ -451,7 +477,11 @@ export function resolveSequenceItemExpressions(
         scope,
         clampRepeatCount,
       ),
-    };
+    });
+  }
+
+  if (item.kind === "conditional") {
+    return withResolvedMembers(item);
   }
 
   return item;
