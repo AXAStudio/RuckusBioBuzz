@@ -120,6 +120,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showClearance: true,
   autoMidline: "off",
   vision: DEFAULT_VISION_SETTINGS,
+  stateVfx: {},
 };
 
 /**

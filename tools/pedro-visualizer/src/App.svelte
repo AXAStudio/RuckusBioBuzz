@@ -59,6 +59,13 @@
   } from "./utils";
   import type { ManeuverLeg, StationaryPose } from "./utils/clearance";
   import { planPollenSteps, pollenLegsOf } from "./utils/pollenVision";
+  import { buildEventTimingWindows } from "./utils/timeCalculator";
+  import {
+    spriteMotion,
+    stateWindowsOf,
+    vfxAt,
+  } from "./utils/robotStates";
+  import RobotVfx from "./lib/components/RobotVfx.svelte";
   import {
     buildExpressionScope,
     easeInOutQuad,
@@ -1862,6 +1869,18 @@
    * the same numbers the time estimate charged - so the overlay, the row, the
    * collision check and the export all describe one plan.
    */
+  /**
+   * The effect assigned to whatever the robot is doing right now (States tab).
+   * Worked out from the playback position, so scrubbing shows the exact frame.
+   */
+  $: stateWindows = stateWindowsOf(
+    timePrediction?.timeline || [],
+    buildEventTimingWindows(startPoint, lines, timePrediction, settings, sequence, variables),
+  );
+  $: playbackSeconds = ((timePrediction?.totalTime || 0) * percent) / 100;
+  $: activeVfx = vfxAt(stateWindows, playbackSeconds, settings.stateVfx);
+  $: robotSpriteMotion = spriteMotion(activeVfx, x ? x(robotWidth) : 0);
+
   $: pollenPlans = planPollenSteps(
     timePrediction?.timeline || [],
     sequence,
@@ -4806,7 +4825,7 @@
           src={settings.robotImage || "/robot.png"}
           alt="Robot"
           style={`position: absolute; top: ${robotXY.y}px;
-left: ${robotXY.x}px; transform: translate(-50%, -50%) rotate(${robotHeading}deg); z-index: 20; width: ${x(robotWidth)}px; height: ${x(robotHeight)}px;user-select: none; -webkit-user-select: none; -moz-user-select: none;-ms-user-select: none;
+left: ${robotXY.x}px; transform: translate(-50%, -50%) rotate(${robotHeading}deg) ${robotSpriteMotion.transform}; z-index: 20; width: ${x(robotWidth)}px; height: ${x(robotHeight)}px;user-select: none; -webkit-user-select: none; -moz-user-select: none;-ms-user-select: none;
 pointer-events: none;`}
           draggable="false"
           on:error={(e) => {
@@ -4815,6 +4834,15 @@ pointer-events: none;`}
           }}
           on:dragstart={(e) => e.preventDefault()}
           on:selectstart={(e) => e.preventDefault()}
+        />
+        <RobotVfx
+          x={robotXY.x}
+          y={robotXY.y}
+          heading={robotHeading}
+          lengthPx={x(robotWidth)}
+          widthPx={x(robotHeight)}
+          vfx={activeVfx}
+          lift={robotSpriteMotion.lift}
         />
         <!-- Heading arrow for main robot -->
         {#if settings.showHeadingArrow}

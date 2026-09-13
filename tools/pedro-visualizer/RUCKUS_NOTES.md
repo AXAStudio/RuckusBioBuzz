@@ -435,6 +435,14 @@ Route invariants (`src/utils/sequence.ts`):
   `startParallelEvent` finishes it immediately, so the field and telemetry show
   it as a momentary trigger rather than as active until the end of auto.
 
+- State effects (States tab): fire, roll and flip are assigned per state name
+  (an event or wait, a path event marker, a Pollen Pickup phase, or Driving) and
+  stored in `settings.stateVfx`, so they save with the .pp. They are a pure
+  function of time into the state, so scrubbing shows the exact frame, and roll
+  and flip are fitted to whole turns so the robot lands flat. When states
+  overlap the most specific one with an effect plays. They are editor-only
+  visuals: nothing reaches the exporters, and GIF export does not include them.
+
 Run locally:
 
 ```powershell

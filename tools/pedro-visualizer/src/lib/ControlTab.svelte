@@ -69,6 +69,7 @@
   } from "../utils";
   import ObstaclesSection from "./components/ObstaclesSection.svelte";
   import TelemetryPanel from "./components/TelemetryPanel.svelte";
+  import StatesSection from "./components/StatesSection.svelte";
   import StartingPointSection from "./components/StartingPointSection.svelte";
   import PathLineSection from "./components/PathLineSection.svelte";
   import VariablesSection from "./components/VariablesSection.svelte";
@@ -896,12 +897,13 @@
   // Collapsed state for obstacles (default collapsed)
   let collapsedObstacles = shapes.map(() => true);
 
-  type EditorTab = "route" | "variables" | "field" | "telemetry";
+  type EditorTab = "route" | "variables" | "field" | "states" | "telemetry";
 
   const TABS: { id: EditorTab; label: string; hint: string }[] = [
     { id: "route", label: "Route", hint: "Start point, paths, waits, events and if blocks" },
     { id: "variables", label: "Variables", hint: "Reusable numbers, booleans, poses and paths" },
     { id: "field", label: "Field", hint: "Obstacles and mirroring" },
+    { id: "states", label: "States", hint: "Fire, roll and flip effects for each robot state" },
     { id: "telemetry", label: "Telemetry", hint: "Timing and robot state" },
   ];
 
@@ -911,6 +913,7 @@
     route: sequence.length,
     variables: variables.length,
     field: shapes.length,
+    states: Object.values(settings.stateVfx || {}).filter((kind) => kind && kind !== "none").length,
     telemetry: 0,
   } as Record<EditorTab, number>;
 
@@ -3245,6 +3248,18 @@
           </button>
         </div>
       </div>
+    {:else if activeTab === "states"}
+      <StatesSection
+        bind:settings
+        {timePrediction}
+        {startPoint}
+        {lines}
+        {sequence}
+        {variables}
+        {percent}
+        {handleSeek}
+        {recordChange}
+      />
     {:else}
       <TelemetryPanel
         {percent}

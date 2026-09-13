@@ -381,6 +381,11 @@ export interface Settings {
   autoMidline?: "off" | "red" | "blue";
   /** Camera mount and pollen pipeline tuning, for Pollen Pickup steps. */
   vision?: VisionSettings;
+  /**
+   * Visual effect per robot state (States tab), keyed by the state's name:
+   * an event or wait name, a path event marker, "Pollen intake", "Driving"...
+   */
+  stateVfx?: Record<string, "none" | "fire" | "roll" | "flip">;
 }
 
 /**
