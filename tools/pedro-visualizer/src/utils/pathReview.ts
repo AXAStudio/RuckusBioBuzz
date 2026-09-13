@@ -377,6 +377,13 @@ export function reviewProject(
     });
   }
 
+  if (clearance.startPose?.againstWall) {
+    findings.push({
+      level: "note",
+      message: "Starts touching the perimeter wall, as G304 requires, and drives straight off it.",
+    });
+  }
+
   if (usedFieldObstaclePreset) {
     findings.push({
       level: "note",

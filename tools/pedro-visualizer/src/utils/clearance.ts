@@ -139,6 +139,12 @@ export interface ClearanceReport {
     clearance: number;
     kind: ClearanceKind;
     obstacleName?: string;
+    /**
+     * Staged touching the perimeter wall and driving straight away from it.
+     * G304 requires a ROBOT to start touching the wall, so this is the normal
+     * case, not something to fix: it is left out of the spans entirely.
+     */
+    againstWall?: boolean;
   } | null;
 }
 
@@ -738,7 +744,32 @@ export function checkClearance(
       });
     }
 
-    const lineSpans = groupSpans(samples, margin, lineId, lineIndex);
+    let measuredSamples = samples;
+    // The ROBOT as staged touches the wall (G304.C) and drives off it. The first
+    // few samples sit inside the margin only because it has not got clear yet:
+    // touching, never overlapping, and getting further away every sample. That
+    // run is dropped. Anything else near a wall - driving along one, turning a
+    // corner into one - still reports.
+    if (startPose && !continues && samples[0]?.distance === 0 && startPose.kind === "wall" &&
+        Math.abs(startPose.clearance) < TOUCH_TOLERANCE) {
+      let run = 0;
+      while (
+        run < samples.length &&
+        samples[run].kind === "wall" &&
+        samples[run].clearance < margin &&
+        samples[run].clearance >= -TOUCH_TOLERANCE &&
+        (run === 0 || samples[run].clearance >= samples[run - 1].clearance - 1e-9)
+      ) {
+        run++;
+      }
+      const clearOfWall = run < samples.length && samples[run].clearance >= margin;
+      if (run > 0 && clearOfWall) {
+        startPose = { ...startPose, againstWall: true };
+        measuredSamples = samples.slice(run);
+      }
+    }
+
+    const lineSpans = groupSpans(measuredSamples, margin, lineId, lineIndex);
     spans.push(...lineSpans);
 
     const lineMin = samples.reduce(

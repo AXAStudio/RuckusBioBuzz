@@ -338,6 +338,8 @@
   $: startPoseClearance = (() => {
     const pose = clearanceReport.startPose;
     if (!pose || pose.clearance >= clearanceReport.margin) return null;
+    // Starting against the wall is what G304 asks for.
+    if (pose.againstWall) return null;
     return {
       hit: pose.clearance < -TOUCH_TOLERANCE,
       clearance: pose.clearance,
