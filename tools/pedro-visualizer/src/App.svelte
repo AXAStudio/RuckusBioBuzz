@@ -57,7 +57,8 @@
     generateOnionLayers,
     midlineRuleFromSettings,
   } from "./utils";
-  import type { StationaryPose } from "./utils/clearance";
+  import type { ManeuverLeg, StationaryPose } from "./utils/clearance";
+  import { planPollenSteps, pollenLegsOf } from "./utils/pollenVision";
   import {
     buildExpressionScope,
     easeInOutQuad,
@@ -1855,6 +1856,23 @@
     return poses;
   })();
 
+  /**
+   * Every Pollen Pickup the route runs, planned from the pose the robot is in
+   * when it begins. The timeline's first maneuver for a step carries that pose -
+   * the same numbers the time estimate charged - so the overlay, the row, the
+   * collision check and the export all describe one plan.
+   */
+  $: pollenPlans = planPollenSteps(
+    timePrediction?.timeline || [],
+    sequence,
+    mainRoute.steps,
+    startPoint,
+    settings,
+  );
+
+  /** The legs those plans drive, for the collision check. */
+  $: pollenLegs = pollenLegsOf(pollenPlans, sequence) as ManeuverLeg[];
+
   $: clearanceReport = checkClearance(
     {
       startPoint,
@@ -1864,6 +1882,7 @@
       lineStartPoints,
       headingTransitions,
       stationaryPoses,
+      maneuverLegs: pollenLegs,
     },
     {
       fieldSize: FIELD_SIZE,
@@ -2769,6 +2788,114 @@
    * happened much later along the path than it does. A span that only comes
    * inside the margin is drawn at its worst, which is the tightest point.
    */
+  /**
+   * Pollen Pickups on the field: what the camera sees from where each step
+   * starts (solid out to where a single ball still registers, dashed beyond),
+   * the search zone, the expected POLLEN as a draggable marker, and the legs
+   * the robot drives - approach, intake, return.
+   */
+  $: pollenElements = (() => {
+    // Layered so every draggable marker is on top of every step's camera view,
+    // whichever step it belongs to - otherwise a later step's view swallows the
+    // click meant for an earlier step's marker.
+    const views: any[] = [];
+    const zones: any[] = [];
+    const legs: any[] = [];
+    const markers: any[] = [];
+    if ($activePaths.length > 0) return [];
+
+    const polygon = (points: { x: number; y: number }[], id: string) => {
+      const anchors = points.map(
+        (point, index) =>
+          new Two.Anchor(
+            x(point.x),
+            y(point.y),
+            0,
+            0,
+            0,
+            0,
+            index === 0 ? Two.Commands.move : Two.Commands.line,
+          ),
+      );
+      anchors.push(new Two.Anchor(x(points[0].x), y(points[0].y), 0, 0, 0, 0, Two.Commands.close));
+      anchors.forEach((anchor) => (anchor.relative = false));
+      const shape = new Two.Path(anchors);
+      shape.id = id;
+      return shape;
+    };
+
+    sequence.forEach((item, sequenceIndex) => {
+      if (item.kind !== "pollen") return;
+      const plan = pollenPlans.get(item.id);
+      const px = (inches: number) => x(inches) - x(0);
+
+      if (plan) {
+        const full = polygon(plan.footprint, `pollen-view-${sequenceIndex}`);
+        full.fill = "rgba(34, 211, 238, 0.05)";
+        full.stroke = "rgba(34, 211, 238, 0.55)";
+        full.linewidth = px(0.25);
+        full.dashes = [px(1.2), px(1)];
+        views.push(full);
+
+        if (plan.reliableFootprint.length) {
+          const reliable = polygon(plan.reliableFootprint, `pollen-reliable-${sequenceIndex}`);
+          reliable.fill = "rgba(34, 211, 238, 0.14)";
+          reliable.stroke = "rgba(34, 211, 238, 0.9)";
+          reliable.linewidth = px(0.3);
+          views.push(reliable);
+        }
+
+        const legColor: Record<string, string> = {
+          approach: "#facc15",
+          intake: "#f97316",
+          return: "rgba(255, 255, 255, 0.7)",
+        };
+        plan.legs.forEach((leg) => {
+          if (leg.phase === "search") return;
+          if (Math.hypot(leg.to.x - leg.from.x, leg.to.y - leg.from.y) < 0.05) return;
+          const line = new Two.Line(x(leg.from.x), y(leg.from.y), x(leg.to.x), y(leg.to.y));
+          line.id = `pollen-leg-${sequenceIndex}-${leg.phase}`;
+          line.stroke = legColor[leg.phase];
+          line.linewidth = px(leg.phase === "intake" ? 0.9 : 0.55);
+          if (leg.phase === "return") line.dashes = [px(1.5), px(1)];
+          legs.push(line);
+        });
+
+        // Where the approach stops, facing the POLLEN.
+        const standoff = new Two.Circle(x(plan.standoffPose.x), y(plan.standoffPose.y), px(0.8));
+        standoff.id = `pollen-standoff-${sequenceIndex}`;
+        standoff.fill = "#facc15";
+        standoff.noStroke();
+        legs.push(standoff);
+      }
+
+      const zone = new Two.Circle(x(item.targetX), y(item.targetY), px(item.zoneRadius));
+      zone.id = `pollen-zone-${sequenceIndex}`;
+      zone.fill = "rgba(250, 204, 21, 0.10)";
+      zone.stroke = "rgba(250, 204, 21, 0.95)";
+      zone.linewidth = px(0.3);
+      zone.dashes = [px(1.2), px(0.8)];
+      zones.push(zone);
+
+      // The grab handle is bigger than the ball so it is easy to pick up.
+      const handle = new Two.Circle(x(item.targetX), y(item.targetY), px(3.2));
+      handle.id = `pollen-target-${sequenceIndex}`;
+      handle.fill = "rgba(250, 204, 21, 0.25)";
+      handle.stroke = item.locked ? "rgba(120, 120, 120, 0.9)" : "#111827";
+      handle.linewidth = px(0.25);
+      markers.push(handle);
+
+      const ball = new Two.Circle(x(item.targetX), y(item.targetY), px(1.4));
+      ball.id = `pollen-target-${sequenceIndex}-ball`;
+      ball.fill = "#facc15";
+      ball.stroke = "#111827";
+      ball.linewidth = px(0.3);
+      markers.push(ball);
+    });
+
+    return [...views, ...zones, ...legs, ...markers];
+  })();
+
   $: clearanceElements = (() => {
     const elements: Path[] = [];
     if ($activePaths.length > 0 || settings.showClearance === false) return elements;
@@ -3371,6 +3498,9 @@
     if (secondOnionLayerElements.length > 0) {
       two.add(...secondOnionLayerElements);
     }
+    if (pollenElements.length > 0) {
+      two.add(...pollenElements);
+    }
     if (clearanceElements.length > 0) {
       two.add(...clearanceElements);
     }
@@ -3598,7 +3728,20 @@
         }
 
         // Handle path point dragging
-        if (currentElem.startsWith("obstacle-")) {
+        if (currentElem.startsWith("pollen-target-")) {
+          const sequenceIndex = Number(currentElem.split("-")[2]);
+          const item = sequence[sequenceIndex];
+          if (!item || item.kind !== "pollen" || item.locked) return;
+          const next = [...sequence];
+          next[sequenceIndex] = {
+            ...item,
+            // A hundredth of an inch is finer than the camera can place a ball;
+            // more digits are just noise in the X and Y fields.
+            targetX: Math.round(Math.max(0, Math.min(FIELD_SIZE, inchX)) * 100) / 100,
+            targetY: Math.round(Math.max(0, Math.min(FIELD_SIZE, inchY)) * 100) / 100,
+          };
+          sequence = next;
+        } else if (currentElem.startsWith("obstacle-")) {
           // Handle obstacle vertex dragging
           const parts = currentElem.split("-");
           const shapeIdx = Number(parts[1]);
@@ -3691,10 +3834,12 @@
           (elem?.id.startsWith("point") && !isLockedPathElem(elem.id)) ||
           elem?.id.startsWith("second-point") ||
           elem?.id.startsWith("additional-path-") ||
-          elem?.id.startsWith("obstacle")
+          elem?.id.startsWith("obstacle") ||
+          elem?.id.startsWith("pollen-target-")
         ) {
           two.renderer.domElement.style.cursor = "pointer";
-          currentElem = elem.id;
+          // The ball sits on top of its handle; both drag the same step.
+          currentElem = elem.id.replace(/-ball$/, "");
         } else {
           two.renderer.domElement.style.cursor = "auto";
           currentElem = null;
@@ -3718,7 +3863,13 @@
         let objectX = 0;
         let objectY = 0;
 
-        if (currentElem.startsWith("obstacle-")) {
+        if (currentElem.startsWith("pollen-target-")) {
+          const item = sequence[Number(currentElem.split("-")[2])];
+          if (item && item.kind === "pollen") {
+            objectX = item.targetX;
+            objectY = item.targetY;
+          }
+        } else if (currentElem.startsWith("obstacle-")) {
           const parts = currentElem.split("-");
           const shapeIdx = Number(parts[1]);
           const vertexIdx = Number(parts[2]);
@@ -3807,6 +3958,7 @@
         elem?.id &&
         (elem.id.startsWith("point") ||
           elem.id.startsWith("obstacle") ||
+          elem.id.startsWith("pollen-") ||
           elem.id.startsWith("line"))
       ) {
         return;
@@ -4803,6 +4955,7 @@ pointer-events: none; opacity: ${1.0 - idx * 0.15};`}
     </div>
   </div>
   <ControlTab
+    {pollenPlans}
     bind:playing
     {play}
     {pause}
@@ -4828,3 +4981,18 @@ pointer-events: none; opacity: ${1.0 - idx * 0.15};`}
     {clearanceReport}
   />
 </div>
+
+<style>
+  /*
+   * Pollen Pickup overlays are pictures, not handles: the camera view, the zone
+   * and the legs cover big areas and must never take a click meant for a path
+   * point, an obstacle vertex, or a target marker underneath them.
+   */
+  :global([id^="pollen-view-"]),
+  :global([id^="pollen-reliable-"]),
+  :global([id^="pollen-zone-"]),
+  :global([id^="pollen-leg-"]),
+  :global([id^="pollen-standoff-"]) {
+    pointer-events: none;
+  }
+</style>

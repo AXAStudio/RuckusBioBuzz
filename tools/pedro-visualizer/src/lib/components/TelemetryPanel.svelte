@@ -74,6 +74,15 @@
   function getStateLabel(event: TimePrediction["timeline"][number] | null) {
     if (!event) return "Idle";
     if (event.type === "travel") return "Following path";
+    if (event.type === "maneuver") {
+      const phase = {
+        search: "looking for POLLEN",
+        approach: "driving to POLLEN",
+        intake: "intaking",
+        return: "returning",
+      }[event.maneuverPhase ?? "search"];
+      return `${event.name?.trim() || "Pollen Pickup"}: ${phase}`;
+    }
     if (event.name?.trim()) return event.name;
 
     const startHeading = Number(event.startHeading ?? 0);

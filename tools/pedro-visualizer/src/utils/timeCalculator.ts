@@ -27,6 +27,7 @@ import {
   profileVelocityAtDistance,
 } from "./motionProfile";
 import { buildExpressionScope } from "./numberExpressions";
+import { planPollenStep } from "./pollenVision";
 import { isEnabled } from "./variables";
 
 export interface TravelLineTimingMeta {
@@ -513,6 +514,47 @@ export function calculatePathTime(
 
   while (stepIndex < steps.length) {
     const step = steps[stepIndex];
+
+    // A Pollen Pickup drives legs of its own. They are charged at their
+    // expected length - the search at its expected time, not its timeout - and
+    // replayed as maneuvers, so the animation shows the approach and the
+    // return instead of a robot standing still.
+    if (step.kind === "pollen") {
+      const plan = planPollenStep(
+        step.item,
+        { x: step.atPoint.x, y: step.atPoint.y, heading: currentHeading },
+        {
+          settings,
+          followedByPaths: steps.slice(stepIndex + 1).some((next) => next.kind === "path"),
+        },
+      );
+      for (const leg of plan.legs) {
+        // The search leg is always emitted, even at zero length: it is how the
+        // editor finds the pose a step starts from.
+        if (leg.seconds <= 0 && leg.phase !== "search") continue;
+        timeline.push({
+          type: "maneuver",
+          name: step.item.name,
+          itemId: step.item.id,
+          maneuverPhase: leg.phase,
+          duration: leg.seconds,
+          startTime: currentTime,
+          endTime: currentTime + leg.seconds,
+          atPoint: { x: leg.from.x, y: leg.from.y },
+          toPoint: { x: leg.to.x, y: leg.to.y },
+          startHeading: leg.from.heading,
+          targetHeading: leg.to.heading,
+        });
+        currentTime += leg.seconds;
+      }
+      // Returning puts the robot back on its planned heading; without the
+      // return it is left facing the POLLEN.
+      if (!step.item.returnToStart) {
+        currentHeading = plan.intakeEndPose.heading;
+      }
+      stepIndex++;
+      continue;
+    }
 
     if (step.kind !== "path") {
       const waitSeconds = msToSeconds(step.item.durationMs);

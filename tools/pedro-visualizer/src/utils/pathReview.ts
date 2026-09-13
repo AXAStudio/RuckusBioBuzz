@@ -33,6 +33,12 @@ import {
   getPathSpeed,
 } from "./timeCalculator";
 import type { LoadedProject } from "./projectFile";
+import {
+  planPollenSteps,
+  pollenLegsOf,
+  visionOf,
+  type PollenStepPlan,
+} from "./pollenVision";
 
 /** The AUTO period is 30 seconds; a route that does not fit does not run. */
 export const AUTO_PERIOD_SECONDS = 30;
@@ -85,6 +91,15 @@ export interface PathReview {
     paths: PathTiming[];
   };
   clearance: ClearanceReport;
+  /** Every Pollen Pickup the route runs, with its plan. */
+  pollen: {
+    id: string;
+    name: string;
+    plan: PollenStepPlan;
+  }[];
+  /** Seconds the route takes if every pickup searches to its timeout. */
+  worstCaseSeconds: number;
+  cameraMeasured: boolean;
   findings: ReviewFinding[];
 }
 
@@ -158,6 +173,13 @@ export function reviewProject(
   const prediction = calculatePathTime(startPoint, lines, settings, sequence, variables);
   const route = buildRoute(startPoint, lines, sequence, variables);
   const footprint = footprintFromSettings(settings);
+  const pollenPlans = planPollenSteps(
+    prediction.timeline as any,
+    sequence,
+    route.steps,
+    startPoint,
+    settings,
+  );
 
   const clearance = checkClearance(
     {
@@ -168,6 +190,7 @@ export function reviewProject(
       lineStartPoints: route.startPoints,
       headingTransitions: headingTransitionsOf(prediction, lines),
       stationaryPoses: stationaryPosesFrom(prediction.timeline as any),
+      maneuverLegs: pollenLegsOf(pollenPlans, sequence),
     },
     { fieldSize, margin, midline, step: options.stepInches },
   );
@@ -242,8 +265,10 @@ export function reviewProject(
     const name = line?.name?.trim() || `Path ${span.lineIndex + 1}`;
     // A path can begin in trouble rather than drive into it - the robot was put
     // there by whatever came before, and "crosses at 0.8in" hides that.
+    // Waits and pickup legs are not paths: they name themselves.
+    const ownRow = Boolean(span.stationary || span.maneuver);
     const fromTheStart =
-      !span.stationary &&
+      !ownRow &&
       span.severity === "hit" &&
       (span.contactDistance ?? span.startDistance) <= clearance.step + 1e-6;
 
@@ -255,7 +280,7 @@ export function reviewProject(
               ? "across the midline"
               : `inside ${clearanceTargetName(span)}`
           }.`
-        : `${describeClearanceSpan(span)}${span.stationary ? "" : ` on ${name}`}.`,
+        : `${describeClearanceSpan(span)}${ownRow ? "" : ` on ${name}`}.`,
     });
   }
 
@@ -330,6 +355,28 @@ export function reviewProject(
     });
   }
 
+  // Pollen Pickups: their own findings, and what happens to the AUTO budget
+  // when every search runs to its timeout instead of its expected length.
+  const pollen: PathReview["pollen"] = [];
+  let worstCaseSeconds = prediction.totalTime;
+  pollenPlans.forEach((plan, id) => {
+    const item = sequence.find((candidate) => candidate.kind === "pollen" && candidate.id === id);
+    const name = item && item.kind === "pollen" ? item.name : "Pollen Pickup";
+    pollen.push({ id, name, plan });
+    worstCaseSeconds += plan.worstSeconds - plan.expectedSeconds;
+    for (const finding of plan.findings) {
+      findings.push({ level: finding.level, message: `${name}: ${finding.message}` });
+    }
+  });
+  if (pollen.length && worstCaseSeconds > autoLimit && prediction.totalTime <= autoLimit) {
+    findings.push({
+      level: "warning",
+      message: `If every Pollen Pickup searches to its timeout the route takes ${worstCaseSeconds.toFixed(
+        1,
+      )}s — ${(worstCaseSeconds - autoLimit).toFixed(1)}s past the ${autoLimit}s AUTO period.`,
+    });
+  }
+
   if (usedFieldObstaclePreset) {
     findings.push({
       level: "note",
@@ -382,6 +429,9 @@ export function reviewProject(
       paths,
     },
     clearance,
+    pollen,
+    worstCaseSeconds,
+    cameraMeasured: visionOf(settings).measured,
     findings,
   };
 }
@@ -478,6 +528,24 @@ export function formatPathReview(review: PathReview, title?: string): string {
     }
   }
 
+  if (review.pollen.length) {
+    out.push("", "## Pollen pickups");
+    out.push(
+      `- Camera mount: ${review.cameraMeasured ? "measured" : "**not measured** — every position below is a guess until it is"}.`,
+    );
+    out.push(
+      `- Worst case, every search to its timeout: ${n(review.worstCaseSeconds)}s of the ${review.time.autoLimitSeconds}s AUTO period.`,
+    );
+    for (const { name, plan } of review.pollen) {
+      const view = plan.targetPixel?.inImage
+        ? `in view at (${Math.round(plan.targetPixel.u)}, ${Math.round(plan.targetPixel.v)})px, one ball ~${Math.round(plan.targetPixelArea)}px`
+        : "out of the camera's view";
+      out.push(
+        `- **${name}**: looks from (${n(plan.searchPose.x)}, ${n(plan.searchPose.y)}) heading ${plan.searchPose.heading.toFixed(0)}° for POLLEN at (${n(plan.target.x)}, ${n(plan.target.y)}) — ${view}. ${n(plan.expectedSeconds)}s expected, ${n(plan.worstSeconds)}s worst.`,
+      );
+    }
+  }
+
   if (review.clearance.spans.length) {
     out.push("", "## Clearance detail");
     for (const span of review.clearance.spans) {
@@ -514,11 +582,15 @@ function clearanceDetail(span: ClearanceSpan, review: PathReview): string {
   const line = review.motion.paths.find((path) => path.index === span.lineIndex);
   const where = span.stationary
     ? `wait "${span.stationary.name || span.stationary.id}"`
-    : line?.name || `Path ${span.lineIndex + 1}`;
+    : span.maneuver
+      ? `${span.maneuver.name?.trim() || "Pollen Pickup"} (${span.maneuver.phase} leg)`
+      : line?.name || `Path ${span.lineIndex + 1}`;
   const pose = span.contactPose ?? span.worstPose;
   const at = span.stationary
     ? ""
-    : `, first at ${(span.contactDistance ?? span.startDistance).toFixed(1)}in into it`;
+    : `, first at ${(span.contactDistance ?? span.startDistance).toFixed(1)}in into ${
+        span.maneuver ? "the leg" : "it"
+      }`;
   const worst =
     Math.abs(span.worstClearance) < TOUCH_TOLERANCE
       ? "just touching"

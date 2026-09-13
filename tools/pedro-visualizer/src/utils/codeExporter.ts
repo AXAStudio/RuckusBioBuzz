@@ -7,11 +7,21 @@ import type {
   SequenceEventItem,
   SequenceGroupItem,
   SequenceItem,
+  SequencePollenItem,
   SequenceWaitItem,
   PoseVariable,
   EventMarker,
+  Settings,
   Variable,
 } from "../types";
+import { DEFAULT_SETTINGS, FIELD_SIZE } from "../config/defaults";
+import {
+  INTAKE_CREEP_SPEED,
+  POLLEN_RADIUS_INCHES,
+  normalizePollenItem,
+  visionOf,
+} from "./pollenVision";
+import { calculatePathTime } from "./timeCalculator";
 import {
   buildJavaExpression,
   buildJavaIdentifierMap,
@@ -519,6 +529,7 @@ export async function generateTeamCodeAutoCode(
   className = "GeneratedSwerveAuto",
   sequence: SequenceItem[] = [],
   variables: Variable[] = [],
+  settings: Settings = DEFAULT_SETTINGS,
 ): Promise<string> {
   const autoClassName = sanitizeClassName(className, "GeneratedSwerveAuto");
   const linesWithIds = lines.map((line, idx) => ({
@@ -834,6 +845,7 @@ export async function generateTeamCodeAutoCode(
       }
     | { kind: "wait"; item: SequenceWaitItem }
     | { kind: "event"; item: SequenceEventItem }
+    | { kind: "pollen"; item: SequencePollenItem; field: string }
     | { kind: "group"; item: SequenceGroupItem; slot: number };
 
   const exportSteps: ExportStep[] = [];
@@ -847,6 +859,7 @@ export async function generateTeamCodeAutoCode(
   const groupEventNames: string[] = [];
 
   let pendingTopLevelLineIds: string[] = [];
+  let pollenStepCount = 0;
   const flushTopLevelPaths = () => {
     if (!pendingTopLevelLineIds.length) return;
     const lineIds = pendingTopLevelLineIds;
@@ -882,6 +895,16 @@ export async function generateTeamCodeAutoCode(
 
     if (item.kind === "event") {
       exportSteps.push({ kind: "event", item });
+      return;
+    }
+
+    if (item.kind === "pollen") {
+      exportSteps.push({
+        kind: "pollen",
+        item: normalizePollenItem(item),
+        field: `POLLEN_PICKUP_${pollenStepCount + 1}`,
+      });
+      pollenStepCount++;
       return;
     }
 
@@ -994,6 +1017,13 @@ export async function generateTeamCodeAutoCode(
     registerEventMethod(eventName, `Event${idx + 1}`);
   });
 
+  // A Pollen Pickup runs its intake through the same event methods.
+  exportSteps.forEach((step, idx) => {
+    if (step.kind !== "pollen") return;
+    const intakeEvent = step.item.intakeEvent.trim();
+    if (intakeEvent) registerEventMethod(intakeEvent, `PollenIntake${idx + 1}`);
+  });
+
   // An event inside a loop needs the same generated method as one beside it.
   groupEventNames.forEach((eventName, idx) => {
     registerEventMethod(eventName, `GroupEvent${idx + 1}`);
@@ -1060,6 +1090,14 @@ export async function generateTeamCodeAutoCode(
         );
       }
 
+      if (step.kind === "pollen") {
+        return guardedCase(
+          idx,
+          `runPollenPickupStep(${step.field});`,
+          step.item.enabledExpression,
+        );
+      }
+
       const item = step.item;
       const fieldName = `repeat${step.slot + 1}`;
 
@@ -1122,6 +1160,432 @@ export async function generateTeamCodeAutoCode(
     )
     .join("\n\n    ");
 
+  // --- Pollen Pickup -----------------------------------------------------------
+  // Search poses come from the same route and time model the editor draws, with
+  // every pickup forced on: a step switched off at export time is still switched
+  // by its guard at runtime, so it still needs a real pose to return to.
+  const pollenSteps = exportSteps.filter(
+    (step): step is Extract<ExportStep, { kind: "pollen" }> => step.kind === "pollen",
+  );
+  const hasPollen = pollenSteps.length > 0;
+  const vision = visionOf(settings);
+  const pollenSearchPoses = new Map<string, { x: number; y: number; heading: number }>();
+  if (hasPollen) {
+    const forcedOn = sequenceItems.map((item) =>
+      item.kind === "pollen" ? { ...item, enabledExpression: undefined } : item,
+    );
+    const timeline = calculatePathTime(startPoint, linesWithIds, settings, forcedOn, variables).timeline;
+    timeline.forEach((event) => {
+      if (event.type !== "maneuver" || !event.itemId || pollenSearchPoses.has(event.itemId)) return;
+      pollenSearchPoses.set(event.itemId, {
+        x: event.atPoint?.x ?? startPoint.x,
+        y: event.atPoint?.y ?? startPoint.y,
+        heading: Number(event.startHeading) || 0,
+      });
+    });
+  }
+  const midlineSide =
+    settings.autoMidline === "red" ? 1 : settings.autoMidline === "blue" ? 2 : 0;
+  const javaDouble = (value: number) => {
+    const text = Number(value).toFixed(4).replace(/0+$/, "").replace(/\.$/, ".0");
+    return text.includes(".") ? text : `${text}.0`;
+  };
+  const javaTriple = (values: [number, number, number]) =>
+    `{${values.map((value) => javaDouble(value)).join(", ")}}`;
+
+  const pollenImports = hasPollen
+    ? `
+import android.util.Size;
+
+import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
+import org.firstinspires.ftc.teamcode.pipelines.PollenDetectionPipeline;
+import org.firstinspires.ftc.vision.VisionPortal;`
+    : "";
+
+  const pollenStepConstants = pollenSteps
+    .map(({ item, field }) => {
+      const pose = pollenSearchPoses.get(item.id) ?? { x: item.targetX, y: item.targetY, heading: 0 };
+      return `// ${item.name.replace(/\*\//g, "* /")}
+    private static final PollenPickup ${field} = new PollenPickup(
+        ${javaDouble(pose.x)}, ${javaDouble(pose.y)}, ${javaDouble(pose.heading)}, // search pose: where the route has the robot
+        ${javaDouble(item.targetX)}, ${javaDouble(item.targetY)}, ${javaDouble(item.zoneRadius)}, // expected POLLEN and zone radius
+        ${item.minBalls}, ${item.timeoutMs}L, ${item.onTimeout === "blind"},
+        ${javaDouble(item.standoffInches)}, ${javaDouble(item.retargetInches)}, ${javaDouble(item.approachSpeed)},
+        ${javaDouble(item.intakeDriveInches)}, ${item.intakeMs}L, ${javaStringLiteral(item.intakeEvent.trim())},
+        ${item.returnToStart}
+    );`;
+    })
+    .join("\n\n    ");
+
+  const pollenDeclarations = hasPollen
+    ? `
+    // --- Pollen Pickup ------------------------------------------------------------
+    // Camera model from the visualizer's Settings -> Vision.${
+      vision.measured
+        ? ""
+        : `
+    // NOT MEASURED: these are placeholders. Every field position the robot drives to
+    // comes from them - measure the mount before trusting a pickup.`
+    }
+    private static final String CAMERA_NAME = ${javaStringLiteral(vision.cameraName)};
+    private static final int CAMERA_WIDTH = ${vision.imageWidth};
+    private static final int CAMERA_HEIGHT = ${vision.imageHeight};
+    private static final double CAMERA_HFOV_DEG = ${javaDouble(vision.horizontalFovDeg)};
+    private static final double CAMERA_VFOV_DEG = ${javaDouble(vision.verticalFovDeg)};
+    private static final double CAMERA_FORWARD_IN = ${javaDouble(vision.mountForwardInches)};
+    private static final double CAMERA_LEFT_IN = ${javaDouble(vision.mountLeftInches)};
+    private static final double CAMERA_HEIGHT_IN = ${javaDouble(vision.mountHeightInches)};
+    private static final double CAMERA_PITCH_DEG = ${javaDouble(vision.mountPitchDeg)};
+    private static final double CAMERA_YAW_DEG = ${javaDouble(vision.mountYawDeg)};
+    private static final double CAMERA_MAX_RANGE_IN = ${javaDouble(vision.maxRangeInches)};
+    private static final double POLLEN_RADIUS_IN = ${javaDouble(POLLEN_RADIUS_INCHES)};
+    private static final double POLLEN_INTAKE_CREEP_SPEED = ${javaDouble(INTAKE_CREEP_SPEED)};
+    /** AUTO midline (BIOBUZZ G402): 0 unchecked, 1 stay on red (x <= mid), 2 stay on blue. */
+    private static final int POLLEN_MIDLINE_SIDE = ${midlineSide};
+    private static final double FIELD_MIDLINE_X = ${javaDouble(FIELD_SIZE / 2)};
+
+    private static final int POLLEN_SEARCH = 0;
+    private static final int POLLEN_APPROACH = 1;
+    private static final int POLLEN_INTAKE = 2;
+    private static final int POLLEN_RETURN = 3;
+
+    private VisionPortal visionPortal;
+    private PollenDetectionPipeline pollenPipeline;
+    private int pollenPhase;
+    private long pollenPhaseStart;
+    private double pollenTargetX;
+    private double pollenTargetY;
+    private boolean pollenIntakeRunning;
+    private String pollenIntakeEvent = "";
+
+    /** One Pollen Pickup step, as the visualizer planned it. */
+    private static final class PollenPickup {
+        final double searchX, searchY, searchHeadingDeg;
+        final double targetX, targetY, zoneRadius;
+        final int minBalls;
+        final long timeoutMs;
+        final boolean blindOnTimeout;
+        final double standoffInches, retargetInches, approachSpeed;
+        final double intakeDriveInches;
+        final long intakeMs;
+        final String intakeEvent;
+        final boolean returnToStart;
+
+        PollenPickup(
+            double searchX, double searchY, double searchHeadingDeg,
+            double targetX, double targetY, double zoneRadius,
+            int minBalls, long timeoutMs, boolean blindOnTimeout,
+            double standoffInches, double retargetInches, double approachSpeed,
+            double intakeDriveInches, long intakeMs, String intakeEvent,
+            boolean returnToStart
+        ) {
+            this.searchX = searchX;
+            this.searchY = searchY;
+            this.searchHeadingDeg = searchHeadingDeg;
+            this.targetX = targetX;
+            this.targetY = targetY;
+            this.zoneRadius = zoneRadius;
+            this.minBalls = minBalls;
+            this.timeoutMs = timeoutMs;
+            this.blindOnTimeout = blindOnTimeout;
+            this.standoffInches = standoffInches;
+            this.retargetInches = retargetInches;
+            this.approachSpeed = approachSpeed;
+            this.intakeDriveInches = intakeDriveInches;
+            this.intakeMs = intakeMs;
+            this.intakeEvent = intakeEvent;
+            this.returnToStart = returnToStart;
+        }
+    }
+
+    ${pollenStepConstants}
+`
+    : "";
+
+  const pollenInit = hasPollen
+    ? `
+
+        // Pollen Pickup: PollenDetectionPipeline tuned from Settings -> Vision.
+        PollenDetectionPipeline.Config pollenConfig = new PollenDetectionPipeline.Config();
+        pollenConfig.hsvLowA = new double[] ${javaTriple(vision.pipeline.hsvLowA)};
+        pollenConfig.hsvHighA = new double[] ${javaTriple(vision.pipeline.hsvHighA)};
+        pollenConfig.hsvLowB = new double[] ${javaTriple(vision.pipeline.hsvLowB)};
+        pollenConfig.hsvHighB = new double[] ${javaTriple(vision.pipeline.hsvHighB)};
+        pollenConfig.openRadius = ${vision.pipeline.openRadius};
+        pollenConfig.closeHGap = ${vision.pipeline.closeHGap};
+        pollenConfig.closeVRadius = ${vision.pipeline.closeVRadius};
+        pollenConfig.minArea = ${javaDouble(vision.pipeline.minArea)};
+        pollenConfig.maxArea = ${javaDouble(vision.pipeline.maxArea)};
+        pollenConfig.maxAspect = ${javaDouble(vision.pipeline.maxAspect)};
+        pollenConfig.clumpMergeGap = ${vision.pipeline.clumpMergeGap};
+        pollenConfig.singleBallAreaPx = ${javaDouble(vision.pipeline.singleBallAreaPx)};
+        pollenPipeline = new PollenDetectionPipeline(null, pollenConfig);
+        visionPortal = new VisionPortal.Builder()
+            .setCamera(hardwareMap.get(WebcamName.class, CAMERA_NAME))
+            .setCameraResolution(new Size(CAMERA_WIDTH, CAMERA_HEIGHT))
+            .addProcessor(pollenPipeline)
+            .build();`
+    : "";
+
+  const pollenStop = hasPollen
+    ? `
+        if (pollenIntakeRunning) {
+            finishEvent(pollenIntakeEvent);
+            pollenIntakeRunning = false;
+        }
+        if (visionPortal != null) {
+            visionPortal.close();
+            visionPortal = null;
+        }
+`
+    : "";
+
+  const pollenMethods = hasPollen
+    ? `/**
+     * A Pollen Pickup: look for POLLEN, drive to the best clump in the zone, run the intake,
+     * and come back to where the route has the robot, so every later path starts where it
+     * was planned from.
+     *
+     * The approach re-plans whenever the estimate moves more than retargetInches, which is
+     * what makes a camera mount measured to the nearest inch good enough: the field
+     * position of a clump is least certain far away, and the step keeps refining it as it
+     * closes in. Once the POLLEN drops below the bottom of the image it keeps the last aim.
+     */
+    private void runPollenPickupStep(PollenPickup step) {
+        long now = System.currentTimeMillis();
+        if (!stepStarted) {
+            stepStarted = true;
+            stepStartTime = now;
+            pollenPhase = POLLEN_SEARCH;
+            pollenPhaseStart = now;
+            activePath = null;
+        }
+
+        switch (pollenPhase) {
+            case POLLEN_SEARCH: {
+                double[] seen = bestPollenInZone(step);
+                if (seen != null) {
+                    pollenTargetX = seen[0];
+                    pollenTargetY = seen[1];
+                    startPollenApproach(step);
+                    return;
+                }
+                if (now - stepStartTime < step.timeoutMs) {
+                    return;
+                }
+                if (step.blindOnTimeout) {
+                    pollenTargetX = step.targetX;
+                    pollenTargetY = step.targetY;
+                    startPollenApproach(step);
+                    return;
+                }
+                // Nothing in the zone: leave the robot where the route has it.
+                advanceSequence();
+                return;
+            }
+            case POLLEN_APPROACH: {
+                double[] seen = bestPollenInZone(step);
+                if (
+                    seen != null &&
+                    Math.hypot(seen[0] - pollenTargetX, seen[1] - pollenTargetY) > step.retargetInches
+                ) {
+                    pollenTargetX = seen[0];
+                    pollenTargetY = seen[1];
+                    startPollenApproach(step);
+                    return;
+                }
+                if (!follower.isBusy()) {
+                    startPollenIntake(step);
+                }
+                return;
+            }
+            case POLLEN_INTAKE: {
+                if (follower.isBusy() || now - pollenPhaseStart < step.intakeMs) {
+                    return;
+                }
+                if (pollenIntakeRunning) {
+                    finishEvent(pollenIntakeEvent);
+                    pollenIntakeRunning = false;
+                }
+                if (step.returnToStart) {
+                    startPollenReturn(step);
+                } else {
+                    advanceSequence();
+                }
+                return;
+            }
+            default: {
+                if (!follower.isBusy()) {
+                    advanceSequence();
+                }
+            }
+        }
+    }
+
+    private void startPollenApproach(PollenPickup step) {
+        Pose pose = follower.pose();
+        double dx = pollenTargetX - pose.x();
+        double dy = pollenTargetY - pose.y();
+        double distance = Math.hypot(dx, dy);
+        double facing = distance > 1e-6 ? Math.atan2(dy, dx) : pose.heading();
+        double travel = Math.max(0.0, distance - step.standoffInches);
+
+        pollenPhase = POLLEN_APPROACH;
+        pollenPhaseStart = System.currentTimeMillis();
+        if (travel < 0.5) {
+            // Already inside the standoff: nothing to approach.
+            startPollenIntake(step);
+            return;
+        }
+        followPollenLeg(
+            pose.x(), pose.y(), pose.heading(),
+            pose.x() + Math.cos(facing) * travel, pose.y() + Math.sin(facing) * travel, facing,
+            step.approachSpeed
+        );
+    }
+
+    private void startPollenIntake(PollenPickup step) {
+        Pose pose = follower.pose();
+        pollenPhase = POLLEN_INTAKE;
+        pollenPhaseStart = System.currentTimeMillis();
+
+        if (!step.intakeEvent.isEmpty() && !pollenIntakeRunning) {
+            pollenIntakeEvent = step.intakeEvent;
+            startEvent(pollenIntakeEvent);
+            pollenIntakeRunning = true;
+        }
+
+        double dx = pollenTargetX - pose.x();
+        double dy = pollenTargetY - pose.y();
+        double facing = Math.hypot(dx, dy) > 1e-6 ? Math.atan2(dy, dx) : pose.heading();
+        if (step.intakeDriveInches > 0.25) {
+            followPollenLeg(
+                pose.x(), pose.y(), pose.heading(),
+                pose.x() + Math.cos(facing) * step.intakeDriveInches,
+                pose.y() + Math.sin(facing) * step.intakeDriveInches,
+                facing,
+                POLLEN_INTAKE_CREEP_SPEED
+            );
+        }
+    }
+
+    private void startPollenReturn(PollenPickup step) {
+        Pose pose = follower.pose();
+        pollenPhase = POLLEN_RETURN;
+        pollenPhaseStart = System.currentTimeMillis();
+        followPollenLeg(
+            pose.x(), pose.y(), pose.heading(),
+            step.searchX, step.searchY, Math.toRadians(step.searchHeadingDeg),
+            1.0
+        );
+    }
+
+    /** A straight leg built at runtime, turning the short way from one heading to the other. */
+    private void followPollenLeg(
+        double fromX, double fromY, double fromHeading,
+        double toX, double toY, double toHeading,
+        double speed
+    ) {
+        activePath = null;
+        if (Math.hypot(toX - fromX, toY - fromY) < 0.5) {
+            // A zero-length line has no tangent; there is nowhere to go.
+            return;
+        }
+        Path leg = Paths.line(new Pose(fromX, fromY), new Pose(toX, toY))
+            .heading(headingInterpolator(fromHeading, toHeading, 1.0));
+        follower.holdEnd.set(true);
+        follower.follow(withPathSpeed(leg, clampPathSpeed(speed)));
+    }
+
+    /**
+     * The best clump this frame that is inside the step's zone and on the allowed side of
+     * the midline, as a field position: most estimated balls first, nearest on a tie. Null
+     * when there is none.
+     */
+    private double[] bestPollenInZone(PollenPickup step) {
+        if (pollenPipeline == null) {
+            return null;
+        }
+        Pose pose = follower.pose();
+        double cos = Math.cos(pose.heading());
+        double sin = Math.sin(pose.heading());
+        int frameWidth = Math.max(1, pollenPipeline.getFrameWidth());
+        int frameHeight = Math.max(1, pollenPipeline.getFrameHeight());
+
+        double[] best = null;
+        int bestCount = -1;
+        double bestDistance = Double.MAX_VALUE;
+        for (PollenDetectionPipeline.Clump clump : pollenPipeline.getAllClumps()) {
+            if (clump.estimatedBallCount < step.minBalls) {
+                continue;
+            }
+            // The camera model is for CAMERA_WIDTH x CAMERA_HEIGHT; scale if the stream differs.
+            double[] robot = pollenPixelToRobot(
+                clump.centerX * CAMERA_WIDTH / frameWidth,
+                clump.centerY * CAMERA_HEIGHT / frameHeight
+            );
+            if (robot == null) {
+                continue;
+            }
+            if (Math.hypot(robot[0] - CAMERA_FORWARD_IN, robot[1] - CAMERA_LEFT_IN) > CAMERA_MAX_RANGE_IN) {
+                continue;
+            }
+            double fieldX = pose.x() + robot[0] * cos - robot[1] * sin;
+            double fieldY = pose.y() + robot[0] * sin + robot[1] * cos;
+            if (Math.hypot(fieldX - step.targetX, fieldY - step.targetY) > step.zoneRadius) {
+                continue;
+            }
+            if (POLLEN_MIDLINE_SIDE == 1 && fieldX > FIELD_MIDLINE_X) {
+                continue;
+            }
+            if (POLLEN_MIDLINE_SIDE == 2 && fieldX < FIELD_MIDLINE_X) {
+                continue;
+            }
+            double distance = Math.hypot(fieldX - pose.x(), fieldY - pose.y());
+            if (
+                clump.estimatedBallCount > bestCount ||
+                (clump.estimatedBallCount == bestCount && distance < bestDistance)
+            ) {
+                best = new double[] { fieldX, fieldY };
+                bestCount = clump.estimatedBallCount;
+                bestDistance = distance;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * Where a pixel lands on the TILES, in the robot frame (+x forward, +y left), for a
+     * POLLEN centre POLLEN_RADIUS_IN above them. Null above the horizon. Mirrors
+     * pixelToRobot in the visualizer's src/utils/pollenVision.ts.
+     */
+    private static double[] pollenPixelToRobot(double u, double v) {
+        double pitch = Math.toRadians(CAMERA_PITCH_DEG);
+        double yaw = Math.toRadians(CAMERA_YAW_DEG);
+        double cosPitch = Math.cos(pitch);
+        double sinPitch = Math.sin(pitch);
+        double fx = CAMERA_WIDTH / 2.0 / Math.tan(Math.toRadians(CAMERA_HFOV_DEG) / 2.0);
+        double fy = CAMERA_HEIGHT / 2.0 / Math.tan(Math.toRadians(CAMERA_VFOV_DEG) / 2.0);
+        double xn = (u - CAMERA_WIDTH / 2.0) / fx;
+        double yn = (v - CAMERA_HEIGHT / 2.0) / fy;
+
+        // ray = xn * right + yn * down + forward, with right = (0, -1, 0),
+        // down = (-sin pitch, 0, -cos pitch), forward = (cos pitch, 0, -sin pitch), then yawed.
+        double rayX = -yn * sinPitch + cosPitch;
+        double rayY = -xn;
+        double rayZ = -yn * cosPitch - sinPitch;
+        double yawedX = rayX * Math.cos(yaw) - rayY * Math.sin(yaw);
+        double yawedY = rayX * Math.sin(yaw) + rayY * Math.cos(yaw);
+
+        double drop = CAMERA_HEIGHT_IN - POLLEN_RADIUS_IN;
+        if (rayZ >= -1e-9 || drop <= 0.0) {
+            return null;
+        }
+        double t = drop / -rayZ;
+        return new double[] { CAMERA_FORWARD_IN + t * yawedX, CAMERA_LEFT_IN + t * yawedY };
+    }`
+    : "";
+
   const file = `package org.firstinspires.ftc.teamcode.auto;
 
 import com.pedropathing.algorithm.Foresight;
@@ -1137,6 +1601,7 @@ import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 
 import java.util.ArrayList;
 import java.util.List;
+${pollenImports}
 
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 import org.firstinspires.ftc.teamcode.pedroPathing.SwerveDrivetrainConstants;
@@ -1160,7 +1625,7 @@ public class ${autoClassName} extends OpMode {
     private final String[] activeParallelEventNames = new String[PARALLEL_EVENT_CAPACITY];
     private final long[] activeParallelEventStartTimes = new long[PARALLEL_EVENT_CAPACITY];
     private final long[] activeParallelEventDurations = new long[PARALLEL_EVENT_CAPACITY];
-
+${pollenDeclarations}
     @Override
     public void init() {
         // Pedro 3 follows paths with Foresight, whose braking model and gains must be measured
@@ -1170,7 +1635,7 @@ public class ${autoClassName} extends OpMode {
         follower = Constants.createFollower(hardwareMap);
         follower.setPose(${pointStepExpression(startPoint, "START_STEP")});
 
-        buildPaths();
+        buildPaths();${pollenInit}
         updateTelemetry("Initialized");
     }
 
@@ -1211,7 +1676,7 @@ public class ${autoClassName} extends OpMode {
     @Override
     public void stop() {
         finishAllParallelEvents();
-
+${pollenStop}
         if (follower == null) {
             return;
         }
@@ -1496,6 +1961,8 @@ public class ${autoClassName} extends OpMode {
     }
 
     ${eventMethodStubs}
+
+    ${pollenMethods}
 
     private void advanceSequence() {
         sequenceIndex++;

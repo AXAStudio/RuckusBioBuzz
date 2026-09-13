@@ -359,6 +359,7 @@
   bind:sequence
   bind:pathChains
   bind:variables
+  {settings}
   {clearanceReport}
 />
 

@@ -1,4 +1,11 @@
-import type { Point, Line, Shape, Settings } from "../types";
+import type {
+  Point,
+  Line,
+  Shape,
+  Settings,
+  VisionSettings,
+  PollenPipelineSettings,
+} from "../types";
 import { getRandomColor } from "../utils";
 
 /**
@@ -24,6 +31,55 @@ export const AVAILABLE_FIELD_MAPS = [
   { value: "centerstage.webp", label: "Centerstage (2023-2024)" },
   { value: "custom", label: "Custom Field (Upload)" },
 ];
+
+/**
+ * PollenDetectionPipeline's own constants, as TeamCode ships them
+ * (TeamCode/.../pipelines/PollenDetectionPipeline.java). Exported into a
+ * generated auto as a PollenDetectionPipeline.Config, so a value left here
+ * behaves exactly like the pipeline with no config at all.
+ */
+export const DEFAULT_POLLEN_PIPELINE: PollenPipelineSettings = {
+  hsvLowA: [15, 90, 70],
+  hsvHighA: [38, 255, 255],
+  hsvLowB: [12, 60, 45],
+  hsvHighB: [42, 255, 255],
+  openRadius: 3,
+  closeHGap: 16,
+  closeVRadius: 12,
+  minArea: 350,
+  maxArea: 100_000,
+  maxAspect: 5,
+  clumpMergeGap: 28,
+  singleBallAreaPx: 1600,
+};
+
+/**
+ * The camera model. Nothing below the pipeline block is measured: the webcam
+ * name is the one TeamCode's blob test uses, the field of view is a typical
+ * 640x480 webcam's, and the mount is a guess at a front-mounted camera tilted
+ * down. `measured: false` keeps every Pollen Pickup saying so until someone
+ * measures the real robot and ticks it.
+ */
+export const DEFAULT_VISION_SETTINGS: VisionSettings = {
+  cameraName: "Webcam 1",
+  imageWidth: 640,
+  imageHeight: 480,
+  horizontalFovDeg: 62,
+  verticalFovDeg: 48,
+  mountForwardInches: 8,
+  mountLeftInches: 0,
+  mountHeightInches: 10,
+  mountPitchDeg: 25,
+  mountYawDeg: 0,
+  measured: false,
+  maxRangeInches: 96,
+  pipeline: DEFAULT_POLLEN_PIPELINE,
+};
+
+/** A fresh copy, so an edit to one project's settings never leaks into the defaults. */
+export function defaultVisionSettings(): VisionSettings {
+  return JSON.parse(JSON.stringify(DEFAULT_VISION_SETTINGS));
+}
 
 /**
  * Default settings
@@ -63,6 +119,7 @@ export const DEFAULT_SETTINGS: Settings = {
   showSwerveModules: true,
   showClearance: true,
   autoMidline: "off",
+  vision: DEFAULT_VISION_SETTINGS,
 };
 
 /**

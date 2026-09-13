@@ -36,7 +36,10 @@ const TOOLS = [
       "Review a Pedro Pathing .pp route: collision check against the field's " +
       "obstacles, walls and (optionally) the AUTO midline rule, plus the time " +
       "estimate against the 30 second AUTO period, per-path lengths and times, " +
-      "and route warnings. Measured with the robot's own footprint at the " +
+      "and route warnings, including Pollen Pickup steps (what the camera can see " +
+      "from where each starts, whether a single POLLEN there passes the pipeline's " +
+      "area filter, and the worst case if every search runs to its timeout). " +
+      "Measured with the robot's own footprint at the " +
       "heading it holds, using the visualizer's own modules. Pass either a " +
       "file path or the file's contents.",
     inputSchema: {

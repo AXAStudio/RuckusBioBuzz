@@ -207,6 +207,49 @@ export type SequenceEventItem = {
 };
 
 /**
+ * A vision-guided pollen pickup: look for POLLEN with PollenDetectionPipeline,
+ * drive to what it finds, run the intake, and come back.
+ *
+ * The robot runs it from wherever the route has it when the step begins - the
+ * "search pose". Everything here is in field inches and degrees, in the same
+ * frame as paths.
+ */
+export type SequencePollenItem = {
+  kind: "pollen";
+  id: string;
+  name: string;
+  /** Where the POLLEN is expected to be. The zone is centred on it. */
+  targetX: number;
+  targetY: number;
+  /** Clumps are only accepted within this radius of the expected point. */
+  zoneRadius: number;
+  /** Smallest clump, in estimated balls, worth driving to. */
+  minBalls: number;
+  /** How long to look before giving up, ms. */
+  timeoutMs: number;
+  /** How long the search is expected to take, ms - for the time estimate. */
+  expectedSearchMs: number;
+  /** What to do when nothing shows up before the timeout. */
+  onTimeout: "skip" | "blind";
+  /** Stop this far short of the POLLEN centre, so the intake reaches it. */
+  standoffInches: number;
+  /** Re-plan the approach when the estimate moves further than this. */
+  retargetInches: number;
+  /** Fraction of max velocity for the approach, 0.05-1. */
+  approachSpeed: number;
+  /** Drive forward this far with the intake running. */
+  intakeDriveInches: number;
+  /** Keep the intake running at least this long, ms. */
+  intakeMs: number;
+  /** Event started for the intake and finished after it; empty for none. */
+  intakeEvent: string;
+  /** Drive back to the search pose afterwards, so later paths start where planned. */
+  returnToStart: boolean;
+  enabledExpression?: string;
+  locked?: boolean;
+};
+
+/**
  * What a repeat loop or an `if` block can contain.
  *
  * Ordered and heterogeneous, because a loop that drives a path, pauses, then
@@ -256,6 +299,7 @@ export type SequenceItem =
   | SequencePathItem
   | SequenceWaitItem
   | SequenceEventItem
+  | SequencePollenItem
   | SequenceRepeatItem
   | SequenceConditionalItem;
 
@@ -335,6 +379,56 @@ export interface Settings {
    * nearest x = 0.
    */
   autoMidline?: "off" | "red" | "blue";
+  /** Camera mount and pollen pipeline tuning, for Pollen Pickup steps. */
+  vision?: VisionSettings;
+}
+
+/**
+ * The robot's camera and how PollenDetectionPipeline is tuned.
+ *
+ * The mount is what turns a pixel into a place on the field, so every number
+ * in it has to be measured on the robot - `measured` stays false until someone
+ * says it has been, and the editor says so on every Pollen Pickup until then.
+ */
+export interface VisionSettings {
+  /** hardwareMap name of the webcam. */
+  cameraName: string;
+  /** Stream resolution; the pipeline's pixel thresholds assume this. */
+  imageWidth: number;
+  imageHeight: number;
+  /** Full field of view across and down the image, degrees. */
+  horizontalFovDeg: number;
+  verticalFovDeg: number;
+  /** Lens position from the robot centre: forward, left, and up from the TILES. */
+  mountForwardInches: number;
+  mountLeftInches: number;
+  mountHeightInches: number;
+  /** Tilt below horizontal, degrees (positive looks down). */
+  mountPitchDeg: number;
+  /** Turn from robot forward, degrees (positive looks left). */
+  mountYawDeg: number;
+  /** Set once the mount above has been measured on the robot. */
+  measured: boolean;
+  /** Beyond this the ground footprint is not drawn and nothing is accepted. */
+  maxRangeInches: number;
+  pipeline: PollenPipelineSettings;
+}
+
+/** PollenDetectionPipeline.Config, field for field. */
+export interface PollenPipelineSettings {
+  /** OpenCV HSV: H 0-179, S and V 0-255. Two ranges, OR-ed. */
+  hsvLowA: [number, number, number];
+  hsvHighA: [number, number, number];
+  hsvLowB: [number, number, number];
+  hsvHighB: [number, number, number];
+  openRadius: number;
+  closeHGap: number;
+  closeVRadius: number;
+  minArea: number;
+  maxArea: number;
+  maxAspect: number;
+  clumpMergeGap: number;
+  singleBallAreaPx: number;
 }
 
 export interface Shape {
@@ -345,7 +439,7 @@ export interface Shape {
   fillColor: string;
 }
 
-export type TimelineEventType = "travel" | "wait";
+export type TimelineEventType = "travel" | "wait" | "maneuver";
 
 /**
  * The chain a travel segment belongs to. Consecutive paths are followed as one
@@ -437,6 +531,13 @@ export interface TimelineEvent {
    * ROBOT holds through it can be reported against the Wait itself.
    */
   itemId?: string;
+  /**
+   * Set on maneuver events - the straight-line legs a Pollen Pickup drives,
+   * which are not paths in `lines`. The robot goes from `atPoint` to `toPoint`,
+   * turning from `startHeading` to `targetHeading`.
+   */
+  toPoint?: BasePoint;
+  maneuverPhase?: "search" | "approach" | "intake" | "return";
 }
 
 export interface TimePrediction {

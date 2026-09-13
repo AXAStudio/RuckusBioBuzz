@@ -6,6 +6,7 @@ import type {
   SequenceGroupItem,
   SequenceGroupMember,
   SequenceItem,
+  SequencePollenItem,
   SequenceWaitItem,
   Variable,
 } from "../types";
@@ -330,7 +331,18 @@ export type RouteHoldStep = {
   iteration?: number;
 };
 
-export type RouteStep = RoutePathStep | RouteHoldStep;
+/**
+ * A Pollen Pickup the robot actually runs. Top-level only: it drives legs that
+ * depend on what the camera sees, which a repeat loop's fixed slots cannot hold.
+ */
+export type RoutePollenStep = {
+  kind: "pollen";
+  item: SequencePollenItem;
+  /** Where the route has the robot when the step begins - the search pose. */
+  atPoint: Point;
+};
+
+export type RouteStep = RoutePathStep | RouteHoldStep | RoutePollenStep;
 
 export type Route = {
   /** Exactly what runs, in order — repeats expanded, skipped steps removed. */
@@ -466,6 +478,15 @@ export function buildRoute(
       continue;
     }
 
+    // A Pollen Pickup returns the robot to where it started (or it is flagged
+    // when it does not), so the route carries on from the same place.
+    if (item.kind === "pollen") {
+      if (isEnabled(item, variables, scope)) {
+        steps.push({ kind: "pollen", item, atPoint: current });
+      }
+      continue;
+    }
+
     if (item.kind === "repeat") {
       const runs = isEnabled(item, variables, scope)
         ? clampRepeatCount(item.count)
@@ -531,7 +552,7 @@ export type ChainBreakReason =
 
 export const CHAIN_BREAK_LABELS: Record<ChainBreakReason, string> = {
   end: "end of the route",
-  wait: "a wait or event step follows",
+  wait: "a wait, event or pollen pickup follows",
   loop: "the repeat loop starts its next pass",
   branch: "the block ends",
   stopAtEnd: "Stop at end is on",

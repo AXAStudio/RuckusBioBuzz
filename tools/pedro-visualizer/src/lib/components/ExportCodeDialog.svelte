@@ -4,6 +4,7 @@
     Line,
     SequenceItem,
     PathChain,
+    Settings,
     Variable,
   } from "../../types";
   import Highlight from "svelte-highlight";
@@ -37,6 +38,8 @@
   export let sequence: SequenceItem[];
   export let pathChains: PathChain[] = [];
   export let variables: Variable[] = [];
+  /** Camera model and midline rule for Pollen Pickup steps; defaults when absent. */
+  export let settings: Settings | undefined = undefined;
   /** Where the robot's footprint comes too close to an obstacle or a wall. */
   export let clearanceReport: ClearanceReport = EMPTY_CLEARANCE_REPORT;
 
@@ -127,6 +130,7 @@
           teamCodeClassName,
           sequence,
           variables,
+          settings,
         );
         currentLanguage = java;
         validationMessages = validateTeamCodeExport();
@@ -174,6 +178,7 @@
           teamCodeClassName,
           sequence,
           variables,
+          settings,
         );
         validationMessages = validateTeamCodeExport();
       } catch (error) {

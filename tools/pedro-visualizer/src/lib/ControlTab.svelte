@@ -75,6 +75,16 @@
   import ExpressionInput from "./components/ExpressionInput.svelte";
   import PlaybackControls from "./components/PlaybackControls.svelte";
   import WaitRow from "./components/WaitRow.svelte";
+  import PollenPickupRow from "./components/PollenPickupRow.svelte";
+  import {
+    makePollenItem,
+    reliableRangeInches,
+    robotToField,
+    visionOf,
+    type PollenStepPlan,
+  } from "../utils/pollenVision";
+  import type { SequencePollenItem } from "../types";
+  import { getLineEndHeading } from "../utils/math";
 
   export let percent: number;
   export let playing: boolean;
@@ -105,6 +115,8 @@
    * the shapes on the field can never disagree.
    */
   export let clearanceReport: ClearanceReport = EMPTY_CLEARANCE_REPORT;
+  /** Every Pollen Pickup the route runs, planned by App from the timeline. */
+  export let pollenPlans: Map<string, PollenStepPlan> = new Map();
 
   // Pose variables still drive the point-binding dropdowns, so keep a
   // derived view of them rather than a second source of truth.
@@ -2214,6 +2226,84 @@
     sequence = [...sequence, makeWaitItem()];
   }
 
+  /** Pollen Pickup rows the user has open. A new one opens itself. */
+  let pollenExpanded: Record<string, boolean> = {};
+  $: vision = visionOf(settings);
+
+  /**
+   * Somewhere sensible to look first: straight out from wherever the route
+   * currently ends, well inside the range a single ball registers at. The user
+   * drags it where the POLLEN really is.
+   */
+  function pollenTargetAhead(pose: { x: number; y: number; heading: number }) {
+    const reach = Math.max(12, Math.min(36, reliableRangeInches(vision) * 0.6));
+    const yaw = (vision.mountYawDeg * Math.PI) / 180;
+    const point = robotToField(pose, {
+      x: vision.mountForwardInches + reach * Math.cos(yaw),
+      y: vision.mountLeftInches + reach * Math.sin(yaw),
+    });
+    return {
+      x: Math.max(0, Math.min(141.5, point.x)),
+      y: Math.max(0, Math.min(141.5, point.y)),
+    };
+  }
+
+  function routeEndPose() {
+    const pathSteps = mainRoute.steps.filter((step) => step.kind === "path");
+    const last = pathSteps[pathSteps.length - 1];
+    if (!last || last.kind !== "path") {
+      const degrees =
+        startPoint.heading === "constant"
+          ? Number(startPoint.degrees) || 0
+          : startPoint.heading === "linear"
+            ? Number(startPoint.startDeg) || 0
+            : 0;
+      return { x: startPoint.x, y: startPoint.y, heading: degrees };
+    }
+    return {
+      x: last.line.endPoint.x,
+      y: last.line.endPoint.y,
+      heading: getLineEndHeading(last.line, last.startPoint),
+    };
+  }
+
+  function addPollenPickup() {
+    const item = makePollenItem(makeId(), pollenTargetAhead(routeEndPose()));
+    pollenExpanded = { ...pollenExpanded, [item.id]: true };
+    sequence = [...sequence, item];
+    recordChange?.();
+  }
+
+  function insertPollenAfter(seqIndex: number) {
+    const item = makePollenItem(makeId(), pollenTargetAhead(routeEndPose()));
+    pollenExpanded = { ...pollenExpanded, [item.id]: true };
+    const next = [...sequence];
+    next.splice(seqIndex + 1, 0, item);
+    sequence = next;
+    recordChange?.();
+  }
+
+  function updatePollen(seqIndex: number, patch: Partial<SequencePollenItem>) {
+    const current = sequence[seqIndex];
+    if (!current || current.kind !== "pollen") return;
+    const next = [...sequence];
+    next[seqIndex] = { ...current, ...patch };
+    sequence = next;
+  }
+
+  function aimPollenAhead(seqIndex: number) {
+    const current = sequence[seqIndex];
+    if (!current || current.kind !== "pollen") return;
+    const plan = pollenPlans.get(current.id);
+    if (!plan) return;
+    const target = pollenTargetAhead(plan.searchPose);
+    updatePollen(seqIndex, { targetX: target.x, targetY: target.y });
+    recordChange?.();
+  }
+
+  const pollenSpansFor = (report: ClearanceReport, id: string) =>
+    report.spans.filter((span) => span.maneuver?.id === id);
+
   function addEvent() {
     sequence = [...sequence, makeShootEventItem()];
   }
@@ -2474,6 +2564,13 @@
           class="px-2 py-1 text-xs font-semibold rounded bg-purple-100 text-purple-700 dark:bg-purple-900 dark:text-purple-200"
         >
           Event
+        </button>
+        <button
+          on:click={addPollenPickup}
+          title="Find POLLEN with the camera, drive to it, intake, and come back"
+          class="px-2 py-1 text-xs font-semibold rounded bg-yellow-200 text-yellow-900 dark:bg-yellow-800 dark:text-yellow-50"
+        >
+          Pollen
         </button>
         <button
           on:click={addRepeatLoop}
@@ -3007,6 +3104,37 @@
                 {/each}
               </div>
             </div>
+          {:else if item.kind === "pollen"}
+            <PollenPickupRow
+              {item}
+              plan={pollenPlans.get(item.id) ?? null}
+              {vision}
+              {variables}
+              clearanceSpans={pollenSpansFor(clearanceReport, item.id)}
+              expanded={pollenExpanded[item.id] ?? false}
+              onExpandedChange={(value) =>
+                (pollenExpanded = { ...pollenExpanded, [item.id]: value })}
+              onChange={(patch) => updatePollen(sIdx, patch)}
+              onCommit={() => recordChange?.()}
+              onEnabledExpressionChange={(raw) =>
+                setSequenceExpression(sIdx, "enabledExpression", raw)}
+              onToggleLock={() => {
+                updatePollen(sIdx, { locked: !item.locked });
+                recordChange?.();
+              }}
+              onRemove={() => {
+                const next = [...sequence];
+                next.splice(sIdx, 1);
+                sequence = next;
+                recordChange?.();
+              }}
+              onMoveUp={() => moveSequenceItem(sIdx, -1)}
+              onMoveDown={() => moveSequenceItem(sIdx, 1)}
+              onAddPathAfter={() => insertPathAfter(sIdx)}
+              onAimAhead={() => aimPollenAhead(sIdx)}
+              canMoveUp={sIdx !== 0}
+              canMoveDown={sIdx !== sequence.length - 1}
+            />
           {:else}
             <WaitRow
               {...waitClearanceProps(item.id)}

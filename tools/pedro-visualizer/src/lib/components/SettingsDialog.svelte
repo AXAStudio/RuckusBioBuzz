@@ -3,6 +3,7 @@
   import { fade, fly } from "svelte/transition";
   import { resetSettings } from "../../utils/settingsPersistence";
   import { AVAILABLE_FIELD_MAPS } from "../../config/defaults";
+  import VisionSettingsSection from "./VisionSettingsSection.svelte";
   import type { Settings } from "../../types";
   import {
     diffAgainstSettings,
@@ -54,6 +55,7 @@
   // Track which sections are collapsed
   let collapsedSections = {
     robot: true,
+    vision: true,
     motion: true,
     advanced: true,
     theme: true,
@@ -963,6 +965,51 @@
                   Display an arrow showing the robot's current heading direction
                 </div>
               </div>
+            </div>
+          {/if}
+        </div>
+
+        <!-- Vision Section: camera + PollenDetectionPipeline, for Pollen Pickup steps -->
+        <div class="mb-4">
+          <button
+            on:click={() =>
+              (collapsedSections.vision = !collapsedSections.vision)}
+            class="flex items-center justify-between w-full py-2 px-3 bg-neutral-100 dark:bg-neutral-800 rounded-lg transition-colors duration-250"
+            aria-expanded={!collapsedSections.vision}
+          >
+            <div class="flex items-center gap-2">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke-width={1.5}
+                stroke="currentColor"
+                class="size-5"
+              >
+                <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z" />
+                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+              </svg>
+              <span class="font-semibold">Vision — Pollen Pickup</span>
+              {#if !settings?.vision?.measured}
+                <span class="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-amber-200 text-amber-900 dark:bg-amber-900 dark:text-amber-100">not measured</span>
+              {/if}
+            </div>
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke-width={2}
+              stroke="currentColor"
+              class="size-5 transition-transform duration-200"
+              class:rotate-180={collapsedSections.vision}
+            >
+              <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+            </svg>
+          </button>
+
+          {#if !collapsedSections.vision}
+            <div class="mt-2 p-3 bg-neutral-50 dark:bg-neutral-800/50 rounded-lg">
+              <VisionSettingsSection bind:settings />
             </div>
           {/if}
         </div>

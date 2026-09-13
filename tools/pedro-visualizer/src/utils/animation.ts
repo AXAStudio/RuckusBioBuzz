@@ -119,6 +119,30 @@ export function calculateRobotState(
       (e) => currentSeconds >= e.startTime && currentSeconds <= e.endTime,
     ) || timeline[timeline.length - 1];
 
+  // A leg of a Pollen Pickup: a straight drive that is not a path in `lines`.
+  // Eased like a profiled move so the robot does not jump to speed, turning
+  // toward the leg's end heading as it goes - the heading model paths use.
+  if (activeEvent.type === "maneuver") {
+    const from = activeEvent.atPoint ?? startPoint;
+    const to = activeEvent.toPoint ?? from;
+    const raw =
+      activeEvent.duration > 0
+        ? (currentSeconds - activeEvent.startTime) / activeEvent.duration
+        : 1;
+    const progress = Math.max(0, Math.min(1, Number.isFinite(raw) ? raw : 1));
+    const eased = easeInOutQuad(progress);
+    const startHeading = Number(activeEvent.startHeading) || 0;
+    const targetHeading = Number.isFinite(Number(activeEvent.targetHeading))
+      ? Number(activeEvent.targetHeading)
+      : startHeading;
+
+    return {
+      x: xScale(from.x + (to.x - from.x) * eased),
+      y: yScale(from.y + (to.y - from.y) * eased),
+      heading: -shortestRotation(startHeading, targetHeading, eased),
+    };
+  }
+
   if (activeEvent.type === "wait") {
     // --- STATIONARY ROTATION ---
     const point = activeEvent.atPoint ?? startPoint;

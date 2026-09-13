@@ -74,7 +74,11 @@ Pass **either** `file` (a path to a `.pp`, absolute or relative to
 
 Returns a written review: time against the AUTO period, the field and robot it
 was measured with, findings worst-first, clearance detail with the pose the
-robot is in where it first touches, and a per-path table.
+robot is in where it first touches, and a per-path table. Routes with Pollen
+Pickup steps also get a section for them: whether the camera mount is measured,
+the worst case if every search runs to its timeout, and for each pickup where it
+looks from, whether the expected POLLEN is in the camera's view and how many
+pixels a single ball covers there. Pickup legs are collision-checked like paths.
 
 A file that carries no obstacles of its own is measured against its field map's
 obstacle preset, and the review says so.

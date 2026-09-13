@@ -101,6 +101,11 @@ export interface ClearanceSpan {
    * path - a Wait in the sequence. The distances are both zero: nothing moves.
    */
   stationary?: { id: string; name?: string; seconds?: number };
+  /**
+   * Set when the span is on a leg a Pollen Pickup drives - not a path in
+   * `lines`, so it has no row of its own and is reported against the step.
+   */
+  maneuver?: { id: string; name?: string; phase: ManeuverLeg["phase"] };
 }
 
 export interface ClearanceLineReport {
@@ -184,6 +189,18 @@ export interface ClearanceInput {
   measureLineIds?: Set<string>;
   /** Poses held between paths; measured on their own, not walked. */
   stationaryPoses?: StationaryPose[];
+  /** Straight legs a Pollen Pickup drives; walked like a path. */
+  maneuverLegs?: ManeuverLeg[];
+}
+
+/** One straight leg of a Pollen Pickup, turning from `from` to `to` as it goes. */
+export interface ManeuverLeg {
+  /** The step's sequence item id. */
+  id: string;
+  name?: string;
+  phase: "approach" | "intake" | "return";
+  from: { x: number; y: number; heading: number };
+  to: { x: number; y: number; heading: number };
 }
 
 /**
@@ -608,7 +625,7 @@ export function checkClearance(
 
   const routeLines = routeLinesOf(input);
   // A route with no paths still has poses to check: the Waits it holds.
-  if (!routeLines.length && !input.stationaryPoses?.length) {
+  if (!routeLines.length && !input.stationaryPoses?.length && !input.maneuverLegs?.length) {
     return { ...EMPTY_CLEARANCE_REPORT, margin, step: requestedStep };
   }
 
@@ -795,6 +812,67 @@ export function checkClearance(
       contactFootprint: clearance < -TOUCH_TOLERANCE ? placed : undefined,
       stationary: { id: pose.id, name: pose.name, seconds: pose.seconds },
     });
+  }
+
+  // Legs a Pollen Pickup drives. Walked at the same spacing as a path, turning
+  // the footprint as the robot turns. A leg starts where the route or the leg
+  // before it left the robot, so any sample already reported is dropped rather
+  // than counted twice.
+  for (const leg of input.maneuverLegs || []) {
+    const length = Math.hypot(leg.to.x - leg.from.x, leg.to.y - leg.from.y);
+    const turn = ((((leg.to.heading - leg.from.heading) % 360) + 540) % 360) - 180;
+    const stepCount = Math.max(1, Math.ceil(length / step));
+    const samples: ClearanceSample[] = [];
+
+    for (let i = 0; i <= stepCount; i++) {
+      const t = i / stepCount;
+      const x = leg.from.x + (leg.to.x - leg.from.x) * t;
+      const y = leg.from.y + (leg.to.y - leg.from.y) * t;
+      const heading = leg.from.heading + turn * t;
+      const placed = transformFootprint(footprint, x, y, heading);
+
+      let clearance = wallClearance(placed, fieldSize);
+      let kind: ClearanceKind = "wall";
+      let obstacleId: string | undefined;
+      let obstacleName: string | undefined;
+      if (midline) {
+        const value = midlineClearance(placed, midline, fieldSize);
+        if (value < clearance) {
+          clearance = value;
+          kind = "midline";
+        }
+      }
+      for (const shape of obstacles) {
+        const value = polygonClearance(placed, shape.vertices);
+        if (value < clearance) {
+          clearance = value;
+          kind = "obstacle";
+          obstacleId = shape.id;
+          obstacleName = shape.name;
+        }
+      }
+
+      if (clearance < minClearance) minClearance = clearance;
+      const key = poseKey(x, y, heading);
+      if (flaggedPoses.has(key)) continue;
+      if (clearance < margin || clearance < -TOUCH_TOLERANCE) flaggedPoses.add(key);
+
+      samples.push({
+        distance: length * t,
+        clearance,
+        kind,
+        obstacleId,
+        obstacleName,
+        x,
+        y,
+        heading,
+        footprint: placed,
+      });
+    }
+
+    for (const span of groupSpans(samples, margin, `pollen:${leg.id}:${leg.phase}`, -1)) {
+      spans.push({ ...span, maneuver: { id: leg.id, name: leg.name, phase: leg.phase } });
+    }
   }
 
   return {
@@ -1541,6 +1619,14 @@ export function describeClearanceSpan(span: ClearanceSpan): string {
   // collision nor a distance worth printing as "-0.0in".
   const touching = Math.abs(span.worstClearance) < TOUCH_TOLERANCE;
   const gap = touching ? `Touching ${target}` : `${span.worstClearance.toFixed(1)}in from ${target}`;
+
+  if (span.maneuver) {
+    const who = `${span.maneuver.name?.trim() || "Pollen Pickup"} (${span.maneuver.phase})`;
+    if (span.severity === "hit") {
+      return crosses ? `${who} crosses the midline` : `${who} hits ${target}`;
+    }
+    return `${who}: ${touching ? `touching ${target}` : gap}`;
+  }
 
   if (span.stationary) {
     const who = span.stationary.name?.trim() || "Wait";
