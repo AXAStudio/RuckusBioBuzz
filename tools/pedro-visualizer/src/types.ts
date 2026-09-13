@@ -385,7 +385,8 @@ export interface Settings {
    * Visual effect per robot state (States tab), keyed by the state's name:
    * an event or wait name, a path event marker, "Pollen intake", "Driving"...
    */
-  stateVfx?: Record<string, "none" | "fire" | "roll" | "flip">;
+  /** Effect per state name (States tab). "fire" is from older files and plays as "shoot". */
+  stateVfx?: Record<string, "none" | "shoot" | "roll" | "flip" | "fire">;
 }
 
 /**

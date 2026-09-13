@@ -12,6 +12,7 @@
     activeStatesAt,
     routeStatesOf,
     stateWindowsOf,
+    normalizeVfxKind,
     suggestVfx,
     type RouteState,
     type StateGroup,
@@ -37,7 +38,9 @@
   $: nowSeconds = (totalTime * percent) / 100;
   $: activeKeys = new Set(activeStatesAt(windows, nowSeconds).map((w) => `${w.group}|${w.key}`));
 
-  $: assignments = settings.stateVfx || {};
+  $: assignments = Object.fromEntries(
+    Object.entries(settings.stateVfx || {}).map(([key, kind]) => [key, normalizeVfxKind(kind)]),
+  ) as Record<string, VfxKind>;
   $: grouped = (["event", "marker", "pollen", "motion"] as StateGroup[])
     .map((group) => ({ group, states: states.filter((state) => state.group === group) }))
     .filter((entry) => entry.states.length > 0);
@@ -90,7 +93,7 @@
 
   const kindTone: Record<VfxKind, string> = {
     none: "bg-neutral-200 text-neutral-700 dark:bg-neutral-700 dark:text-neutral-200",
-    fire: "bg-orange-500 text-white",
+    shoot: "bg-orange-500 text-white",
     roll: "bg-cyan-500 text-white",
     flip: "bg-fuchsia-500 text-white",
   };
@@ -137,8 +140,9 @@
         <div class="flex items-center gap-2 rounded-md border border-neutral-200 dark:border-neutral-700 p-2">
           <div class="vfx-demo vfx-demo-{kind.id}" aria-hidden="true">
             <div class="vfx-demo-robot"></div>
-            {#if kind.id === "fire"}
-              <span class="flame f1"></span><span class="flame f2"></span><span class="flame f3"></span>
+            {#if kind.id === "shoot"}
+              <span class="demo-goal"></span>
+              <span class="demo-ball b1"></span><span class="demo-ball b2"></span>
             {/if}
           </div>
           <div class="min-w-0">
@@ -261,19 +265,27 @@
   .vfx-demo-flip .vfx-demo-robot {
     animation: demo-flip 1.4s ease-in-out infinite;
   }
-  .flame {
+  .demo-goal {
     position: absolute;
-    left: 22px;
-    top: 13px;
-    width: 8px;
-    height: 8px;
+    right: 0;
+    top: 2px;
+    width: 9px;
+    height: 9px;
     border-radius: 999px;
-    background: radial-gradient(circle, #fff7d6 0%, #ffb020 45%, rgba(255, 60, 0, 0) 72%);
-    mix-blend-mode: screen;
-    animation: demo-flame 0.6s ease-out infinite;
+    border: 2px solid #ef4444;
   }
-  .flame.f2 { animation-delay: 0.2s; top: 10px; }
-  .flame.f3 { animation-delay: 0.4s; top: 16px; }
+  .demo-ball {
+    position: absolute;
+    left: 20px;
+    top: 13px;
+    width: 5px;
+    height: 5px;
+    border-radius: 999px;
+    background: #ef4444;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
+    animation: demo-shot 0.9s ease-in infinite;
+  }
+  .demo-ball.b2 { animation-delay: 0.45s; }
   @keyframes demo-roll {
     from { transform: rotateX(0deg); }
     to { transform: rotateX(360deg); }
@@ -283,14 +295,16 @@
     50% { transform: scale(1.3) rotateY(180deg); }
     100% { transform: scale(1) rotateY(360deg); }
   }
-  @keyframes demo-flame {
-    from { transform: translateX(0) scale(0.8); opacity: 1; }
-    to { transform: translateX(12px) scale(1.8); opacity: 0; }
+  @keyframes demo-shot {
+    0% { transform: translate(0, 0) scale(1); opacity: 1; }
+    50% { transform: translate(7px, -9px) scale(1.5); opacity: 1; }
+    90% { transform: translate(13px, -8px) scale(1); opacity: 1; }
+    100% { transform: translate(13px, -8px) scale(1); opacity: 0; }
   }
   @media (prefers-reduced-motion: reduce) {
     .vfx-demo-roll .vfx-demo-robot,
     .vfx-demo-flip .vfx-demo-robot,
-    .flame {
+    .demo-ball {
       animation: none;
     }
   }

@@ -1,11 +1,12 @@
 <script lang="ts">
   /**
-   * The parts of a state effect drawn around the robot rather than on it:
-   * flames streaming out of the front for fire, and a ground shadow that
-   * shrinks as the robot leaves the TILES for roll and flip. The robot image
-   * itself does the rolling and flipping (see spriteMotion).
+   * The parts of a state effect drawn around the robot rather than on it: the
+   * volley for shoot - aim line, reticle on the goal, muzzle flash, NECTAR in
+   * the air and the landing ring - and a ground shadow that shrinks as the robot
+   * leaves the TILES for roll and flip. The robot image itself does the rolling,
+   * flipping and recoil (see spriteMotion and App).
    */
-  import { fireParticles, fireSparks, type ActiveVfx } from "../../utils/robotStates";
+  import type { ActiveVfx, ShotFrame } from "../../utils/robotStates";
 
   /** Robot centre on screen, px. */
   export let x: number;
@@ -18,35 +19,23 @@
   export let vfx: ActiveVfx | null;
   /** 0-1 height above the TILES, from spriteMotion. */
   export let lift = 0;
+  /** The volley at this moment, when the effect is shoot. */
+  export let shot: ShotFrame | null = null;
+  /** NECTAR diameter on screen, px. */
+  export let ballPx = 8;
+  /** Colour of the goal's alliance, for the balls, aim line and reticle. */
+  export let color = "#facc15";
 
-  $: particles = vfx?.kind === "fire" ? fireParticles(vfx) : [];
-  $: sparks = vfx?.kind === "fire" ? fireSparks(vfx) : [];
+  const uid = Math.random().toString(36).slice(2, 8);
 
-  /** White-hot at birth, through yellow and orange, to spent red. */
-  function flameColor(heat: number, opacity: number): string {
-    const stops: [number, [number, number, number]][] = [
-      [0, [255, 244, 170]],
-      [0.2, [255, 190, 40]],
-      [0.5, [255, 96, 12]],
-      [1, [170, 20, 8]],
-    ];
-    let a = stops[0];
-    let b = stops[stops.length - 1];
-    for (let i = 0; i < stops.length - 1; i++) {
-      if (heat >= stops[i][0] && heat <= stops[i + 1][0]) {
-        a = stops[i];
-        b = stops[i + 1];
-        break;
+  $: elapsed = vfx?.elapsed ?? 0;
+  $: muzzle = shot
+    ? {
+        x: shot.from.x + Math.cos((shot.angle * Math.PI) / 180) * lengthPx * 0.5,
+        y: shot.from.y + Math.sin((shot.angle * Math.PI) / 180) * lengthPx * 0.5,
       }
-    }
-    const t = (heat - a[0]) / Math.max(1e-6, b[0] - a[0]);
-    const mix = (i: number) => Math.round(a[1][i] + (b[1][i] - a[1][i]) * t);
-    return `rgba(${mix(0)}, ${mix(1)}, ${mix(2)}, ${opacity.toFixed(3)})`;
-  }
-
-  $: glow = vfx?.kind === "fire"
-    ? Math.min(1, vfx.elapsed / 0.12) * (0.75 + 0.25 * Math.sin(vfx.elapsed * 38))
-    : 0;
+    : null;
+  $: reticleR = Math.max(10, ballPx * 2.2);
 </script>
 
 {#if vfx && (vfx.kind === "roll" || vfx.kind === "flip")}
@@ -59,39 +48,106 @@
   ></div>
 {/if}
 
-{#if vfx && vfx.kind === "fire"}
-  <!-- Rotates with the robot; +x is the robot's front. -->
-  <div
+{#if vfx && vfx.kind === "shoot" && shot && muzzle}
+  <svg
     class="absolute pointer-events-none z-[21]"
-    style={`left: ${x}px; top: ${y}px; width: 0; height: 0; transform: rotate(${heading}deg);`}
+    style="left: 0; top: 0; width: 1px; height: 1px; overflow: visible;"
     aria-hidden="true"
   >
-    <!-- Muzzle glow at the front edge -->
-    <div
-      class="absolute rounded-full"
-      style={`left: ${lengthPx / 2}px; top: 0; width: ${widthPx * 0.9}px; height: ${widthPx * 0.9}px;
-        transform: translate(-50%, -50%); mix-blend-mode: screen;
-        background: radial-gradient(circle, rgba(255,240,200,${(0.9 * glow).toFixed(3)}) 0%, rgba(255,150,40,${(0.5 * glow).toFixed(3)}) 35%, rgba(255,80,0,0) 70%);`}
-    ></div>
-    {#each particles as particle}
-      <div
-        class="absolute rounded-full"
-        style={`left: ${(lengthPx / 2 + particle.ahead * lengthPx).toFixed(1)}px;
-          top: ${(particle.side * widthPx).toFixed(1)}px;
-          width: ${(particle.size * widthPx).toFixed(1)}px; height: ${(particle.size * widthPx).toFixed(1)}px;
-          transform: translate(-50%, -50%); filter: blur(${(0.5 + particle.heat * 1.5).toFixed(1)}px);
-          background: radial-gradient(circle, ${flameColor(particle.heat * 0.5, particle.opacity)} 0%, ${flameColor(Math.min(1, particle.heat + 0.25), particle.opacity * 0.9)} 45%, rgba(0,0,0,0) 70%);`}
-      ></div>
+    <defs>
+      <radialGradient id="nectar-{uid}" cx="35%" cy="35%" r="70%">
+        <stop offset="0%" stop-color="#ffffff" stop-opacity="0.9" />
+        <stop offset="35%" stop-color={color} />
+        <stop offset="100%" stop-color={color} stop-opacity="0.85" />
+      </radialGradient>
+      <radialGradient id="flash-{uid}">
+        <stop offset="0%" stop-color="#fffbe6" />
+        <stop offset="40%" stop-color="#fde047" stop-opacity="0.9" />
+        <stop offset="100%" stop-color="#f97316" stop-opacity="0" />
+      </radialGradient>
+    </defs>
+
+    <!-- Aim line, marching toward the goal -->
+    <line
+      x1={muzzle.x}
+      y1={muzzle.y}
+      x2={shot.to.x}
+      y2={shot.to.y}
+      stroke={color}
+      stroke-width="2"
+      stroke-linecap="round"
+      stroke-dasharray="6 6"
+      stroke-dashoffset={(-elapsed * 60).toFixed(1)}
+      opacity={(0.75 * shot.aim).toFixed(3)}
+    />
+
+    <!-- Reticle on the goal -->
+    <g transform="translate({shot.to.x.toFixed(1)} {shot.to.y.toFixed(1)})" opacity={shot.aim.toFixed(3)}>
+      <circle r={reticleR} fill="none" stroke="#0b0b0b" stroke-opacity="0.5" stroke-width="4" />
+      <circle r={reticleR} fill="none" stroke={color} stroke-width="2" />
+      <g transform="rotate({(elapsed * 120).toFixed(1)})">
+        {#each [0, 90, 180, 270] as tick}
+          <line
+            x1={reticleR * 0.55}
+            x2={reticleR * 1.35}
+            y1="0"
+            y2="0"
+            stroke={color}
+            stroke-width="2"
+            stroke-linecap="round"
+            transform="rotate({tick})"
+          />
+        {/each}
+      </g>
+      <circle r={(reticleR * (0.22 + 0.08 * Math.sin(elapsed * 14))).toFixed(2)} fill={color} />
+    </g>
+
+    <!-- Landing rings -->
+    {#each shot.impacts as p}
+      <circle
+        cx={shot.to.x}
+        cy={shot.to.y}
+        r={(ballPx * (0.6 + 2.6 * p)).toFixed(2)}
+        fill="none"
+        stroke={color}
+        stroke-width={(3 * (1 - p) + 0.5).toFixed(2)}
+        opacity={(1 - p).toFixed(3)}
+      />
+      <circle cx={shot.to.x} cy={shot.to.y} r={(ballPx * 0.9 * (1 - p)).toFixed(2)} fill="#fffbe6" opacity={(0.8 * (1 - p)).toFixed(3)} />
     {/each}
-    {#each sparks as spark}
-      <div
-        class="absolute rounded-full"
-        style={`left: ${(lengthPx / 2 + spark.ahead * lengthPx).toFixed(1)}px;
-          top: ${(spark.side * widthPx).toFixed(1)}px;
-          width: ${Math.max(2, spark.size * widthPx).toFixed(1)}px; height: ${Math.max(2, spark.size * widthPx).toFixed(1)}px;
-          transform: translate(-50%, -50%); background: rgba(255, 236, 150, ${spark.opacity.toFixed(3)});
-          box-shadow: 0 0 4px rgba(255, 150, 30, ${spark.opacity.toFixed(3)});`}
-      ></div>
+
+    <!-- NECTAR in the air: shadow on the TILES, ball up the arc -->
+    {#each shot.balls as ball}
+      <ellipse
+        cx={ball.x + ball.lift * ballPx * 0.6}
+        cy={ball.y + ball.lift * ballPx * 0.9}
+        rx={(ballPx * 0.5 * (1 - 0.35 * ball.lift)).toFixed(2)}
+        ry={(ballPx * 0.4 * (1 - 0.35 * ball.lift)).toFixed(2)}
+        fill="#000"
+        opacity={(0.4 - 0.2 * ball.lift).toFixed(3)}
+      />
+      <circle
+        cx={ball.x}
+        cy={ball.y - ball.lift * ballPx * 1.2}
+        r={(ballPx * 0.5 * (1 + 0.7 * ball.lift)).toFixed(2)}
+        fill="url(#nectar-{uid})"
+        stroke="#111"
+        stroke-opacity="0.6"
+        stroke-width="1"
+      />
     {/each}
-  </div>
+
+    <!-- Muzzle flash -->
+    {#if shot.flash > 0}
+      <g transform="translate({muzzle.x.toFixed(1)} {muzzle.y.toFixed(1)}) rotate({shot.angle.toFixed(1)})">
+        <ellipse
+          cx={ballPx * 0.9 * shot.flash}
+          cy="0"
+          rx={(ballPx * 1.9 * shot.flash).toFixed(2)}
+          ry={(ballPx * 1.1 * shot.flash).toFixed(2)}
+          fill="url(#flash-{uid})"
+        />
+      </g>
+    {/if}
+  </svg>
 {/if}

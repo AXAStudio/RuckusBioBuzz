@@ -61,9 +61,16 @@
   import { planPollenSteps, pollenLegsOf } from "./utils/pollenVision";
   import { buildEventTimingWindows } from "./utils/timeCalculator";
   import {
+    NECTAR_DIAMETER_INCHES,
+    aheadOf,
+    nearestPoint,
+    scoringPointsFor,
+    shotFrame,
     spriteMotion,
     stateWindowsOf,
     vfxAt,
+    type ActiveVfx,
+    type ScoringPoint,
   } from "./utils/robotStates";
   import RobotVfx from "./lib/components/RobotVfx.svelte";
   import {
@@ -1880,6 +1887,40 @@
   $: playbackSeconds = ((timePrediction?.totalTime || 0) * percent) / 100;
   $: activeVfx = vfxAt(stateWindows, playbackSeconds, settings.stateVfx);
   $: robotSpriteMotion = spriteMotion(activeVfx, x ? x(robotWidth) : 0);
+
+  /**
+   * A Shoot effect aims at the goal nearest the robot right now - on BIOBUZZ,
+   * the closest of the four HIVE CELLS - or straight ahead on a field map with
+   * no goals listed.
+   */
+  $: scoringPoints = scoringPointsFor(settings.fieldMap);
+  $: robotShot = shotAt(activeVfx, robotXY, robotHeading, scoringPoints, x, y);
+  $: shotRecoil = robotShot
+    ? {
+        x: -Math.cos((robotShot.frame.angle * Math.PI) / 180) * robotShot.frame.recoil * robotShot.pxPerInch * 1.2,
+        y: -Math.sin((robotShot.frame.angle * Math.PI) / 180) * robotShot.frame.recoil * robotShot.pxPerInch * 1.2,
+      }
+    : { x: 0, y: 0 };
+
+  function shotAt(
+    vfx: ActiveVfx | null,
+    from: { x: number; y: number },
+    headingDeg: number,
+    goals: ScoringPoint[],
+    xScale: typeof x,
+    yScale: typeof y,
+  ) {
+    if (!vfx || vfx.kind !== "shoot" || !xScale || !yScale || !from) return null;
+    const pxPerInch = Math.abs(xScale(1) - xScale(0));
+    const goal = nearestPoint(goals, xScale.invert(from.x), yScale.invert(from.y));
+    const to = goal ? { x: xScale(goal.x), y: yScale(goal.y) } : aheadOf(from, headingDeg, pxPerInch * 48);
+    return {
+      goal,
+      pxPerInch,
+      color: goal?.alliance === "red" ? "#ef4444" : goal?.alliance === "blue" ? "#3b82f6" : "#facc15",
+      frame: shotFrame(vfx, from, to, pxPerInch),
+    };
+  }
 
   $: pollenPlans = planPollenSteps(
     timePrediction?.timeline || [],
@@ -4825,7 +4866,7 @@
           src={settings.robotImage || "/robot.png"}
           alt="Robot"
           style={`position: absolute; top: ${robotXY.y}px;
-left: ${robotXY.x}px; transform: translate(-50%, -50%) rotate(${robotHeading}deg) ${robotSpriteMotion.transform}; z-index: 20; width: ${x(robotWidth)}px; height: ${x(robotHeight)}px;user-select: none; -webkit-user-select: none; -moz-user-select: none;-ms-user-select: none;
+left: ${robotXY.x}px; transform: translate(-50%, -50%) translate(${shotRecoil.x.toFixed(2)}px, ${shotRecoil.y.toFixed(2)}px) rotate(${robotHeading}deg) ${robotSpriteMotion.transform}; z-index: 20; width: ${x(robotWidth)}px; height: ${x(robotHeight)}px;user-select: none; -webkit-user-select: none; -moz-user-select: none;-ms-user-select: none;
 pointer-events: none;`}
           draggable="false"
           on:error={(e) => {
@@ -4843,6 +4884,9 @@ pointer-events: none;`}
           widthPx={x(robotHeight)}
           vfx={activeVfx}
           lift={robotSpriteMotion.lift}
+          shot={robotShot?.frame ?? null}
+          ballPx={(robotShot?.pxPerInch ?? 0) * NECTAR_DIAMETER_INCHES}
+          color={robotShot?.color ?? "#facc15"}
         />
         <!-- Heading arrow for main robot -->
         {#if settings.showHeadingArrow}
