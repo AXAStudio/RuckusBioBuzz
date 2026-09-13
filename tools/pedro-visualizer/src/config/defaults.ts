@@ -39,7 +39,7 @@ export const DEFAULT_SETTINGS: Settings = {
   maxVelocity: 40,
   maxAcceleration: 30,
   maxDeceleration: 30,
-  fieldMap: "decode.webp",
+  fieldMap: "biobuzz.webp",
   robotImage: "/robot.png",
   theme: "auto",
   showGhostPaths: false,

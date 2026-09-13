@@ -180,10 +180,10 @@
 
   $: fieldMapSrc =
     settings.fieldMap === "custom"
-      ? settings.customFieldImage || "/fields/decode.webp"
+      ? settings.customFieldImage || `/fields/${DEFAULT_SETTINGS.fieldMap}`
       : settings.fieldMap
         ? `/fields/${settings.fieldMap}`
-        : "/fields/decode.webp";
+        : `/fields/${DEFAULT_SETTINGS.fieldMap}`;
   let sequence: SequenceItem[] = lines.map((ln) => ({
     kind: "path",
     lineId: ln.id!,
@@ -3063,7 +3063,7 @@
         });
 
       const fieldImage = await loadImage(fieldMapSrc).catch(async () => {
-        return loadImage("/fields/decode.webp");
+        return loadImage(`/fields/${DEFAULT_SETTINGS.fieldMap}`);
       });
       const robotImage = await loadImage(settings.robotImage || "/robot.png").catch(async () => {
         return loadImage("/robot.png");
@@ -4560,7 +4560,7 @@
         draggable="false"
         on:error={(e) => {
           console.error("Failed to load field map:", settings.fieldMap);
-          setImageFallback(e, "/fields/decode.webp");
+          setImageFallback(e, `/fields/${DEFAULT_SETTINGS.fieldMap}`);
         }}
         on:dragstart={(e) => e.preventDefault()}
         on:selectstart={(e) => e.preventDefault()}

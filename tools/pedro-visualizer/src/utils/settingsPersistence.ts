@@ -1,8 +1,9 @@
 import { DEFAULT_SETTINGS } from "../config/defaults";
 import type { Settings } from "../types";
 
-// Versioning for settings schema
-const SETTINGS_VERSION = "1.0.0";
+// Versioning for settings schema.
+// 1.1.0: BIOBUZZ became the default field map (was DECODE).
+const SETTINGS_VERSION = "1.1.0";
 
 interface StoredSettings {
   version: string;
@@ -52,6 +53,15 @@ function migrateSettings(stored: Partial<StoredSettings>): Settings {
   }
 
   if (!migrated.fieldMap) {
+    migrated.fieldMap = defaults.fieldMap;
+  }
+
+  // Every change to the settings saves the whole object, so a browser that ran
+  // any build before 1.1.0 has "decode.webp" stored whether anyone chose it or
+  // not - the old default is indistinguishable from a pick. Move those to the
+  // new default once. The next save writes 1.1.0, so someone who then picks
+  // DECODE on purpose keeps it.
+  if (stored.version !== SETTINGS_VERSION && migrated.fieldMap === "decode.webp") {
     migrated.fieldMap = defaults.fieldMap;
   }
 
