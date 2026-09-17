@@ -1,22 +1,21 @@
-package org.firstinspires.ftc.teamcode.tests;
-
+package org.firstinspires.ftc.teamcode.diagnostics.tests;
 import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
+
 import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
-import org.firstinspires.ftc.teamcode.tools.colorTuner;
+import org.firstinspires.ftc.teamcode.pipelines.tools.blobDetection;
 import org.firstinspires.ftc.vision.VisionPortal;
 
-@TeleOp(name = "Color Tuner Test", group = "TeleOp")
-public class colorTunerTest extends LinearOpMode {
+@Disabled
+@TeleOp(name = "Blob Detection Test",group = "TeleOp")
+public class blobDetectionTest extends LinearOpMode {
 
-    colorTuner detector;
+    blobDetection detector = new blobDetection();
     VisionPortal portal;
 
     @Override
     public void runOpMode() {
-
-        detector = new colorTuner(telemetry); // pass telemetry here
 
         portal = new VisionPortal.Builder()
                 .setCamera(hardwareMap.get(WebcamName.class, "Webcam 1"))
@@ -29,6 +28,8 @@ public class colorTunerTest extends LinearOpMode {
         waitForStart();
 
         while (opModeIsActive()) {
+            telemetry.addData("Raw   Angle", detector.rawAngle);
+            telemetry.addData("Median X",  detector.median);
             telemetry.update();
         }
 

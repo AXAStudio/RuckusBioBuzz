@@ -12,20 +12,15 @@ import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 @Autonomous(name = "Full18Auto", group = "Auto")
 public class Full18Auto extends OpMode {
 
-  private static final PathStep POSE_GATE_INTAKE_STEP = new PathStep(
-    11.05245972673443,
-    51.90197461212974,
+  private static final PathStep POSE_CYCLE_SHOOT_STEP = new PathStep(
+    52.25,
+    90.15493264741795,
     150
   );
-  private static final PathStep START_STEP = new PathStep(
-    21.872,
-    122.757,
-    90.000
-  );
-  private static final PathStep POINT_1 = new PathStep(8.102, 58.153, 180.000);
-  private static final PathStep POINT_2 = new PathStep(57.978, 90.155, 180.000);
-  private static final PathStep POINT_4 = new PathStep(57.978, 90.155, 150.000);
-  private static final PathStep POINT_5 = new PathStep(14.905, 82.625, 180.000);
+  private static final PathStep START_STEP = new PathStep(22.522, 122.382, 143);
+  private static final PathStep POINT_1 = new PathStep(10.002, 58.153, 180.000);
+  private static final PathStep POINT_3 = new PathStep(12.966, 59.329, 150.000);
+  private static final PathStep POINT_5 = new PathStep(16.001, 82.625, 180.000);
   private static final PathStep POINT_6 = new PathStep(
     52.719,
     108.508,
@@ -33,14 +28,16 @@ public class Full18Auto extends OpMode {
   );
 
   private Follower follower;
-  private PathChain path1;
-  private PathChain path2;
-  private PathChain path3;
-  private PathChain path4;
-  private PathChain path5;
-  private PathChain path6;
-  private PathChain[] repeat3Paths;
-  private double[] repeat3PathSpeeds;
+  private PathChain chain1;
+  private PathChain chain2;
+  private PathChain chain3;
+  private PathChain chain4;
+  private PathChain chain5;
+  private PathChain chain6;
+  private PathChain[] repeat1Paths;
+  private double[] repeat1PathSpeeds;
+  private long[] repeat1HoldMs;
+  private String[] repeat1HoldEvents;
   private int sequenceIndex;
   private long stepStartTime;
   private boolean stepStarted;
@@ -106,7 +103,7 @@ public class Full18Auto extends OpMode {
   }
 
   private void buildPaths() {
-    path1 = follower
+    chain1 = follower
       .pathBuilder()
       .addPath(
         new BezierCurve(
@@ -119,57 +116,55 @@ public class Full18Auto extends OpMode {
       )
       .setHeadingInterpolation(closestPoint ->
         interpolateHeading(
-          Math.toRadians(142.000),
+          Math.toRadians(143.000),
           Math.toRadians(180.000),
           closestPoint.getTValue(),
-          0.700
+          0.35
         )
       )
       .addParametricCallback(0.010, () -> startParallelEvent("Shoot", 1800L))
       .addParametricCallback(0.450, () -> startParallelEvent("Intake", 3000L))
       .build();
 
-    path2 = follower
+    chain2 = follower
       .pathBuilder()
       .addPath(
         new BezierCurve(
           POINT_1.toPose(),
           new Pose(52.397, 55.795),
-          POINT_2.toPose()
+          POSE_CYCLE_SHOOT_STEP.toPose()
         )
       )
       .setLinearHeadingInterpolation(
         Math.toRadians(180.000),
-        Math.toRadians(180.000)
+        Math.toRadians(150.000)
       )
       .addParametricCallback(0.670, () -> startParallelEvent("Shoot", 2200L))
       .build();
 
-    path3 = follower
+    chain3 = follower
       .pathBuilder()
       .addPath(
         new BezierCurve(
-          POINT_2.toPose(),
-          new Pose(55.957, 63.278),
-          new Pose(0.000, 66.334),
-          new Pose(12.057, 58.852),
-          POSE_GATE_INTAKE_STEP.toPose()
+          POSE_CYCLE_SHOOT_STEP.toPose(),
+          new Pose(35.85249781359191, 63.839),
+          POINT_3.toPose()
         )
       )
       .setLinearHeadingInterpolation(
-        Math.toRadians(150.000),
+        Math.toRadians(150),
         Math.toRadians(150.000)
       )
       .addParametricCallback(0.400, () -> startParallelEvent("Intake", 2500L))
       .build();
 
-    path4 = follower
+    chain4 = follower
       .pathBuilder()
       .addPath(
         new BezierCurve(
-          POSE_GATE_INTAKE_STEP.toPose(),
-          new Pose(40.276, 69.600),
-          POINT_4.toPose()
+          POINT_3.toPose(),
+          new Pose(35.85249781359191, 63.839018905682344),
+          POSE_CYCLE_SHOOT_STEP.toPose()
         )
       )
       .setLinearHeadingInterpolation(
@@ -179,11 +174,11 @@ public class Full18Auto extends OpMode {
       .addParametricCallback(0.710, () -> startParallelEvent("Shoot", 1780L))
       .build();
 
-    path5 = follower
+    chain5 = follower
       .pathBuilder()
       .addPath(
         new BezierCurve(
-          POINT_4.toPose(),
+          POSE_CYCLE_SHOOT_STEP.toPose(),
           new Pose(41.584, 81.247),
           POINT_5.toPose()
         )
@@ -200,18 +195,22 @@ public class Full18Auto extends OpMode {
       .addParametricCallback(0.530, () -> startParallelEvent("Intake", 1700L))
       .build();
 
-    path6 = follower
+    chain6 = follower
       .pathBuilder()
       .addPath(new BezierLine(POINT_5.toPose(), POINT_6.toPose()))
       .setLinearHeadingInterpolation(
         Math.toRadians(180.000),
         Math.toRadians(180.000)
       )
-      .addParametricCallback(0.430, () -> startParallelEvent("Shoot", 0L))
+      .addParametricCallback(0.430, () ->
+        startParallelEvent("Shoot", Math.round(3000))
+      )
       .build();
 
-    repeat3Paths = new PathChain[] { path3, path4 };
-    repeat3PathSpeeds = new double[] { 1.000, 1.000 };
+    repeat1Paths = new PathChain[] { chain3, chain4 };
+    repeat1PathSpeeds = new double[] { 1.000, 1.000 };
+    repeat1HoldMs = new long[] { 0, 0 };
+    repeat1HoldEvents = new String[] { null, null };
   }
 
   private void runSequence() {
@@ -221,19 +220,26 @@ public class Full18Auto extends OpMode {
 
     switch (sequenceIndex) {
       case 0:
-        followPathStep(path1, 1.000);
+        followPathStep(chain1, 1.000);
         break;
       case 1:
-        followPathStep(path2, 1.000);
+        followPathStep(chain2, 1.000);
         break;
       case 2:
-        followRepeatStep(repeat3Paths, repeat3PathSpeeds, 3, 0);
+        followRepeatStep(
+          repeat1Paths,
+          repeat1PathSpeeds,
+          repeat1HoldMs,
+          repeat1HoldEvents,
+          3,
+          0
+        );
         break;
       case 3:
-        followPathStep(path5, 1.000);
+        followPathStep(chain5, 1.000);
         break;
       case 4:
-        followPathStep(path6, 1.000);
+        followPathStep(chain6, 1.000);
         break;
       default:
         pathFinished = true;
@@ -281,6 +287,8 @@ public class Full18Auto extends OpMode {
   private void followRepeatStep(
     PathChain[] repeatPaths,
     double[] repeatPathSpeeds,
+    long[] repeatHoldMs,
+    String[] repeatHoldEvents,
     int repeatCount,
     int repeatSlot
   ) {
@@ -304,6 +312,46 @@ public class Full18Auto extends OpMode {
       pathIndex < repeatPathSpeeds.length
       ? repeatPathSpeeds[pathIndex]
       : 1.0;
+
+    // A null chain marks a wait or an event sitting between two paths: the
+    // slot holds a duration instead of something to drive.
+    if (path == null) {
+      long holdMs = repeatHoldMs != null && pathIndex < repeatHoldMs.length
+        ? repeatHoldMs[pathIndex]
+        : 0L;
+
+      if (!stepStarted) {
+        stepStartTime = System.currentTimeMillis();
+        stepStarted = true;
+
+        String eventName = repeatHoldEvents != null &&
+          pathIndex < repeatHoldEvents.length
+          ? repeatHoldEvents[pathIndex]
+          : null;
+        if (eventName != null) {
+          startParallelEvent(eventName, holdMs);
+        }
+      }
+
+      if (System.currentTimeMillis() - stepStartTime < holdMs) {
+        return;
+      }
+
+      stepStarted = false;
+      repeatLoopPathIndexes[repeatSlot]++;
+
+      if (repeatLoopPathIndexes[repeatSlot] >= repeatPaths.length) {
+        repeatLoopPathIndexes[repeatSlot] = 0;
+        repeatLoopIterations[repeatSlot]++;
+      }
+
+      if (repeatLoopIterations[repeatSlot] >= repeatCount) {
+        repeatLoopIterations[repeatSlot] = 0;
+        repeatLoopPathIndexes[repeatSlot] = 0;
+        advanceSequence();
+      }
+      return;
+    }
 
     if (!stepStarted) {
       follower.followPath(path, clampPathSpeed(pathSpeed), true);
