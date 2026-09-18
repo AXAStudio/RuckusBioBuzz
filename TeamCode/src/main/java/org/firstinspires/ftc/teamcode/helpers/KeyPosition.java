@@ -15,9 +15,8 @@ public class KeyPosition {
     /**
      * @param x The X coordinate
      * @param y The Y coordinate
-     * @param heading Degrees (automatically converted to Radians)
      */
-    public KeyPosition(double x, double y, double heading) {
+    public KeyPosition(double x, double y) {
         this.x = x;
         this.y = y;
     }
