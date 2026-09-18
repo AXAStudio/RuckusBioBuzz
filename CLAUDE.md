@@ -76,7 +76,9 @@ TeamCode/src/main/java/org/firstinspires/ftc/teamcode/
 tools/swervetune/                        HOST-SIDE Python harness
 ├── swervebench.py    Bench client + scorer → trials.jsonl
 ├── drivecapture.py   chunked pod capture while a human drives → runs/
-└── looprate_ab.py    randomized interleaved A/B driver
+├── looprate_ab.py    randomized interleaved A/B driver
+├── robot.py          front door for a Claude session: check/state/cmd/drive/stop (ROBOT_CONTROL.md)
+└── ftcdash.py        FTC Dashboard WebSocket client (robot.py estop uses its STOP)
 ```
 
 `CoaxialPod` owns the 17 turn tunables and is the class both `DriveTeleOp` and
@@ -114,8 +116,9 @@ and `SwerveDrivetrainConstants` in red — that is correct behaviour, not a bug.
 - Publish rate: `PUBLISH_INTERVAL_DEFAULT_S = 0.05` (20 Hz), changeable at
   runtime via the `setPublishHz` command, clamped [1, 200] Hz.
 - Commands (`setPidf`, `setPublishHz`, `recStart`, `recStop`, `pidStep`,
-  `pidStepAll`, `saveCalibration`) are **queued and drained on the OpMode
-  loop**; `/state` serves the *last published* snapshot. Poll for identity
+  `pidStepAll`, `save`) are **queued and drained on the OpMode loop**
+  (`saveCalibration` is the Java method, not an action — sent as an action it
+  is an UNKNOWN COMMAND); `/state` serves the *last published* snapshot. Poll for identity
   (the run `label`), never for timing.
 - Recorder: **3000 samples, one per loop, stops when full — it does not wrap.**
   ~30 s at 90 Hz. Columns include `tgt`, `wheel`, `dt`, `volts`, `loopHz`.
@@ -127,7 +130,12 @@ and `SwerveDrivetrainConstants` in red — that is correct behaviour, not a bug.
 - Browser-gamepad drive path lives at `dashboard.html:556-628`: 60 ms poll,
   **400 ms watchdog**. A backgrounded tab stops reporting axes and the watchdog
   cuts the robot.
-- Nothing is written to `/sdcard`.
+- The recorder is never written to `/sdcard` — it lives in RAM until pulled
+  via `/swerve/rec.csv`. The hub *does* hold `FIRST/swerve_bringup_cal.txt`
+  (tool calibration, every per-pod edit) and `FIRST/swerve_field_box.txt` (the
+  box plus a witness pose).
+- **Connecting and driving from a Claude session: `ROBOT_CONTROL.md`**, through
+  `tools/swervetune/robot.py` (gates, watchdog keep-alive, stop-on-exit).
 
 ### Field frame and the safe-area hard limit
 
@@ -145,10 +153,18 @@ footprint + heading indicator.
   and there is no 144 × 144 in field here. Any path work targets a **51 × 46 in
   practice area**.
 - Because the clamp modifies the commanded velocity, it is in the control path
-  for steering. Whether it clamps per-axis or along the commanded direction
-  decides whether engaging it rotates the velocity vector (and therefore the
-  per-pod `atan2` azimuth targets) discontinuously. **Verify which before
-  trusting any azimuth trace taken near an edge.**
+  for steering. **Verified 2026-09-18 against `SwerveBringUp.applyBoxLimit`:**
+  it clamps *velocity*, **per field axis**, with a smoothstep taper over the
+  last 6 in before a margin of 4 in + 0.30 s × outward velocity. Per-axis means
+  engaging it *does* rotate the velocity vector (and the per-pod `atan2`
+  targets); the taper makes that rotation continuous rather than a step. Treat
+  any azimuth sample with `box.clamped=true` as suspect.
+- The box **reloads from the hub file at OpMode init** and can survive a
+  redeploy. The OpMode discards it itself if the pose is back at the origin
+  while the witness says otherwise (Pinpoint power cycle, or any OpMode that
+  builds a Pedro `Follower` — including `DriveTeleOp`), or if odometry jumps
+  faster than the robot can move. Rule 6 still applies: `/state` `box.valid` is
+  the only authority, and a reloaded box still gets the corner check.
 
 ### Statistics rule (this repo has been burned by it three times)
 
