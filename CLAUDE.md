@@ -60,7 +60,10 @@ TeamCode/src/main/java/org/firstinspires/ftc/teamcode/
 │   ├── Tuning.java                      Pedro 3 AutoTune registry (@Tuner), port 10158
 │   └── procedures/                      Quickstart pedro3 tuners (Foresight, Pinpoint, Tests)
 ├── tele/DriveTeleOp.java                COMPETITION drive OpMode
-├── auto/{Full18Auto,ExampleSwerveAuto,PathStep}.java
+├── auto/{Full18Auto,RedPollenAuto,ExampleSwerveAuto,PathStep}.java
+│   └── visualizerAutos/*.pp             visualizer sources the auto .java files are exported from
+├── systems/                             shooter / aiming (aimingSystem, predictiveAiming, shooter, shootingRegression)
+├── diagnostics/tests/                   blobDetectionTest, colorTunerTest
 ├── diagnostics/swerve/                  DIAGNOSTIC ONLY — never ships
 │   ├── SwerveBringUp.java               (~193 KB) bring-up OpMode + HTTP server
 │   ├── dashboard.html                   (~72 KB) local web UI + browser-gamepad drive
@@ -68,7 +71,8 @@ TeamCode/src/main/java/org/firstinspires/ftc/teamcode/
 │   ├── SwerveBench.java  SwerveExport.java  SwerveWebApp.java
 │   ├── SwerveDirectTeleOp.java  RawMotorTest.java
 │   └── README.md
-└── pipelines/, tools/, tests/, visualizerAutos/, wiring/swervewiring.png
+├── pipelines/                           PollenDetectionPipeline; tools/ = blobDetection, colorTuner, getMedian
+└── wiring/swervewiring.png
 tools/swervetune/                        HOST-SIDE Python harness
 ├── swervebench.py    Bench client + scorer → trials.jsonl
 ├── drivecapture.py   chunked pod capture while a human drives → runs/

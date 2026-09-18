@@ -23,8 +23,13 @@ jobs:
       # Installs the Android SDK and pre-accepts its licenses, so Gradle/AGP can silently
       # auto-download whatever compileSdk/build-tools/NDK versions build.common.gradle asks for
       # (compileSdk 34, ndkVersion 21.3.6528147) without an interactive `sdkmanager --licenses`.
+      # packages: override the action's default "tools platform-tools". The legacy 'tools' package
+      # does not exist in cmdline-tools 16.0 (on the runner image; first hit 2026-09-17), so
+      # sdkmanager exits 1 and the step fails before Gradle runs. Gradle fetches everything else.
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
 
       - name: Make gradlew executable
         run: chmod +x gradlew

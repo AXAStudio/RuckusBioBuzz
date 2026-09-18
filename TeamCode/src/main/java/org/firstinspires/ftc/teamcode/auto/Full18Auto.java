@@ -6,9 +6,8 @@ import com.pedropathing.drivetrain.DrivePowers;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.math.Pose;
 import com.pedropathing.paths.Path;
-import com.pedropathing.paths.curves.Curve;
+import com.pedropathing.paths.PathSegment;
 import com.pedropathing.paths.interpolator.Interpolator;
-import com.pedropathing.utils.Angle;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import java.util.ArrayList;
@@ -19,19 +18,14 @@ import org.firstinspires.ftc.teamcode.pedroPathing.SwerveDrivetrainConstants;
 @Autonomous(name = "Full18Auto", group = "Auto")
 public class Full18Auto extends OpMode {
 
-  private static final PathStep POSE_GATE_INTAKE_STEP = new PathStep(
-    11.05245972673443,
-    51.90197461212974,
+  private static final PathStep POSE_CYCLE_SHOOT_STEP = new PathStep(
+    52.25,
+    90.15493264741795,
     150
   );
-  private static final PathStep START_STEP = new PathStep(
-    21.872,
-    122.757,
-    90.000
-  );
+  private static final PathStep START_STEP = new PathStep(21.872, 122.757, 143);
   private static final PathStep POINT_1 = new PathStep(8.102, 58.153, 180.000);
-  private static final PathStep POINT_2 = new PathStep(57.978, 90.155, 180.000);
-  private static final PathStep POINT_4 = new PathStep(57.978, 90.155, 150.000);
+  private static final PathStep POINT_3 = new PathStep(12.966, 59.329, 150.000);
   private static final PathStep POINT_5 = new PathStep(14.905, 82.625, 180.000);
   private static final PathStep POINT_6 = new PathStep(
     52.719,
@@ -40,14 +34,16 @@ public class Full18Auto extends OpMode {
   );
 
   private Follower follower;
-  private AutoPath path1;
-  private AutoPath path2;
-  private AutoPath path3;
-  private AutoPath path4;
-  private AutoPath path5;
-  private AutoPath path6;
-  private AutoPath[] repeat3Paths;
-  private double[] repeat3PathSpeeds;
+  private AutoPath chain1;
+  private AutoPath chain2;
+  private AutoPath chain3;
+  private AutoPath chain4;
+  private AutoPath chain5;
+  private AutoPath chain6;
+  private AutoPath[] repeat1Paths;
+  private double[] repeat1PathSpeeds;
+  private long[] repeat1HoldMs;
+  private String[] repeat1HoldEvents;
   private AutoPath activePath;
   private int sequenceIndex;
   private long stepStartTime;
@@ -66,8 +62,8 @@ public class Full18Auto extends OpMode {
 
   @Override
   public void init() {
-    // Pedro 3 follows paths with Foresight, whose braking model and gains have not been
-    // measured on this robot yet. Refuse to build a path-following OpMode on placeholders.
+    // Pedro 3 follows paths with Foresight, whose braking model and gains must be measured
+    // on the robot first. Refuse to build a path-following OpMode on placeholders.
     SwerveDrivetrainConstants.requireForesightMeasured();
 
     follower = Constants.createFollower(hardwareMap);
@@ -79,9 +75,8 @@ public class Full18Auto extends OpMode {
 
   @Override
   public void init_loop() {
-    // Pedro 2's update() with no path only refreshed the pose. Pedro 3's update() in IDLE
-    // calls drivetrain.stop(), which writes every servo and zero-power behaviour each loop,
-    // so refresh the localizer alone to keep init actuator-silent as before.
+    // Pedro 3's update() with no path stops the drivetrain, writing every servo each loop.
+    // Refresh the localizer alone so init stays actuator-silent.
     follower.localizer.update();
     updateTelemetry("Ready");
   }
@@ -101,9 +96,9 @@ public class Full18Auto extends OpMode {
   @Override
   public void loop() {
     follower.update();
-    // Pedro 2 ran path callbacks inside follower.update(); keep them at the same point.
+    // Path callbacks run right after the follower update, where Pedro 2 ran them.
     if (activePath != null) {
-      activePath.fireReadyCallbacks(follower);
+      activePath.update(follower);
     }
     updateParallelEvents();
 
@@ -125,82 +120,100 @@ public class Full18Auto extends OpMode {
   }
 
   private void buildPaths() {
-    path1 = new AutoPath(
+    chain1 = new AutoPath(
       Paths.curve(
         START_STEP.toPose(),
         new Pose(90.924, 67.605),
         new Pose(53.701, 49.043),
         new Pose(11.696, 60.121),
         POINT_1.toPose()
-      ).heading((curve, t) ->
-        interpolateHeading(
-          Math.toRadians(142.000),
+      ).heading(
+        headingInterpolator(
+          Math.toRadians(143.000),
           Math.toRadians(180.000),
-          t,
-          0.700
+          0.350
         )
       )
     )
-      .addParametricCallback(0.010, () -> startParallelEvent("Shoot", 1800L))
-      .addParametricCallback(0.450, () -> startParallelEvent("Intake", 3000L));
+      .addParametricCallback(0, 0.010, () -> startParallelEvent("Shoot", 1800L))
+      .addParametricCallback(0, 0.450, () ->
+        startParallelEvent("Intake", 3000L)
+      );
 
-    path2 = new AutoPath(
+    chain2 = new AutoPath(
       Paths.curve(
         POINT_1.toPose(),
         new Pose(52.397, 55.795),
-        POINT_2.toPose()
+        POSE_CYCLE_SHOOT_STEP.toPose()
       ).heading(
-        linearHeading(Math.toRadians(180.000), Math.toRadians(180.000))
+        headingInterpolator(
+          Math.toRadians(180.000),
+          Math.toRadians(150.000),
+          1.000
+        )
       )
-    ).addParametricCallback(0.670, () -> startParallelEvent("Shoot", 2200L));
+    ).addParametricCallback(0, 0.670, () -> startParallelEvent("Shoot", 2200L));
 
-    path3 = new AutoPath(
+    chain3 = new AutoPath(
       Paths.curve(
-        POINT_2.toPose(),
-        new Pose(55.957, 63.278),
-        new Pose(0.000, 66.334),
-        new Pose(12.057, 58.852),
-        POSE_GATE_INTAKE_STEP.toPose()
+        POSE_CYCLE_SHOOT_STEP.toPose(),
+        new Pose(35.85249781359191, 63.839),
+        POINT_3.toPose()
       ).heading(
-        linearHeading(Math.toRadians(150.000), Math.toRadians(150.000))
+        headingInterpolator(Math.toRadians(150), Math.toRadians(150.000), 1.000)
       )
-    ).addParametricCallback(0.400, () -> startParallelEvent("Intake", 2500L));
+    ).addParametricCallback(0, 0.400, () ->
+      startParallelEvent("Intake", 2500L)
+    );
 
-    path4 = new AutoPath(
+    chain4 = new AutoPath(
       Paths.curve(
-        POSE_GATE_INTAKE_STEP.toPose(),
-        new Pose(40.276, 69.600),
-        POINT_4.toPose()
+        POINT_3.toPose(),
+        new Pose(35.85249781359191, 63.839018905682344),
+        POSE_CYCLE_SHOOT_STEP.toPose()
       ).heading(
-        linearHeading(Math.toRadians(150.000), Math.toRadians(150.000))
+        headingInterpolator(
+          Math.toRadians(150.000),
+          Math.toRadians(150.000),
+          1.000
+        )
       )
-    ).addParametricCallback(0.710, () -> startParallelEvent("Shoot", 1780L));
+    ).addParametricCallback(0, 0.710, () -> startParallelEvent("Shoot", 1780L));
 
-    path5 = new AutoPath(
+    chain5 = new AutoPath(
       Paths.curve(
-        POINT_4.toPose(),
+        POSE_CYCLE_SHOOT_STEP.toPose(),
         new Pose(41.584, 81.247),
         POINT_5.toPose()
-      ).heading((curve, t) ->
-        interpolateHeading(
+      ).heading(
+        headingInterpolator(
           Math.toRadians(150.000),
           Math.toRadians(180.000),
-          t,
           0.250
         )
       )
     )
-      .addParametricCallback(0.220, () -> startParallelEvent("Shoot", 400L))
-      .addParametricCallback(0.530, () -> startParallelEvent("Intake", 1700L));
+      .addParametricCallback(0, 0.220, () -> startParallelEvent("Shoot", 400L))
+      .addParametricCallback(0, 0.530, () ->
+        startParallelEvent("Intake", 1700L)
+      );
 
-    path6 = new AutoPath(
+    chain6 = new AutoPath(
       Paths.line(POINT_5.toPose(), POINT_6.toPose()).heading(
-        linearHeading(Math.toRadians(180.000), Math.toRadians(180.000))
+        headingInterpolator(
+          Math.toRadians(180.000),
+          Math.toRadians(180.000),
+          1.000
+        )
       )
-    ).addParametricCallback(0.430, () -> startParallelEvent("Shoot", 0L));
+    ).addParametricCallback(0, 0.430, () ->
+      startParallelEvent("Shoot", Math.round(3000))
+    );
 
-    repeat3Paths = new AutoPath[] { path3, path4 };
-    repeat3PathSpeeds = new double[] { 1.000, 1.000 };
+    repeat1Paths = new AutoPath[] { chain3, chain4 };
+    repeat1PathSpeeds = new double[] { 1.000, 1.000 };
+    repeat1HoldMs = new long[] { 0, 0 };
+    repeat1HoldEvents = new String[] { null, null };
   }
 
   private void runSequence() {
@@ -210,19 +223,26 @@ public class Full18Auto extends OpMode {
 
     switch (sequenceIndex) {
       case 0:
-        followPathStep(path1, 1.000);
+        followPathStep(chain1, 1.000);
         break;
       case 1:
-        followPathStep(path2, 1.000);
+        followPathStep(chain2, 1.000);
         break;
       case 2:
-        followRepeatStep(repeat3Paths, repeat3PathSpeeds, 3, 0);
+        followRepeatStep(
+          repeat1Paths,
+          repeat1PathSpeeds,
+          repeat1HoldMs,
+          repeat1HoldEvents,
+          3,
+          0
+        );
         break;
       case 3:
-        followPathStep(path5, 1.000);
+        followPathStep(chain5, 1.000);
         break;
       case 4:
-        followPathStep(path6, 1.000);
+        followPathStep(chain6, 1.000);
         break;
       default:
         pathFinished = true;
@@ -233,35 +253,23 @@ public class Full18Auto extends OpMode {
     }
   }
 
-  private static double interpolateHeading(
+  /**
+   * Heading from start to end on the curve parameter t, shaped by t^curve - exactly what the
+   * visualizer draws, and Pedro 2's setLinearHeadingInterpolation at curve 1. Pedro 3's
+   * Path.linear() interpolates on distance fraction instead, which differs on most Beziers.
+   */
+  private static Interpolator headingInterpolator(
     double startHeading,
     double endHeading,
-    double tValue,
     double curve
   ) {
-    double clampedT = Math.max(0.0, Math.min(1.0, tValue));
     double clampedCurve = Math.max(0.25, Math.min(4.0, curve));
-    double shapedT = Math.pow(clampedT, clampedCurve);
     double deltaHeading = normalizeRadians(endHeading - startHeading);
-    return normalizeRadians(startHeading + deltaHeading * shapedT);
-  }
-
-  /**
-   * Pedro 2's setLinearHeadingInterpolation: shortest-way linear in the curve PARAMETER t.
-   * Pedro 3's Path.linear() interpolates on curve.pathCompletion(t) - distance fraction - instead,
-   * which differs on any Bezier whose speed along t is not uniform. (Upstream 3.0.0's default
-   * pathCompletion also ran backwards on a Line; patched in the vendored tree, see
-   * RUCKUS_PATCHES.md.) This keeps the Pedro 2 behaviour exactly.
-   */
-  private static Interpolator linearHeading(
-    double startHeading,
-    double endHeading
-  ) {
-    double start = Angle.normalize(startHeading);
-    double end = Angle.normalize(endHeading);
-    double delta =
-      Angle.turnDirection(start, end) * Angle.smallestDifference(end, start);
-    return (curve, t) -> Angle.normalize(start + delta * t);
+    return (pathCurve, t) ->
+      normalizeRadians(
+        startHeading +
+          deltaHeading * Math.pow(Math.max(0.0, Math.min(1.0, t)), clampedCurve)
+      );
   }
 
   private static double normalizeRadians(double angle) {
@@ -285,9 +293,33 @@ public class Full18Auto extends OpMode {
     }
   }
 
+  /** Pedro 2's followPath(path, maxPower, holdEnd = true), callbacks re-armed as it did. */
+  private void startPath(AutoPath path, double pathSpeed) {
+    path.arm();
+    activePath = path;
+    follower.holdEnd.set(true);
+    follower.follow(withPathSpeed(path.path, clampPathSpeed(pathSpeed)));
+  }
+
+  /**
+   * Pedro 2 capped drive POWER per path; Pedro 3 has no power cap. The nearest thing is
+   * Foresight's maxPathSpeed - a fraction of max achievable VELOCITY - applied only while
+   * this path is followed. At 1.0 nothing is applied.
+   */
+  private Path withPathSpeed(Path path, double pathSpeed) {
+    if (pathSpeed >= 1.0 || !(follower.algorithm() instanceof Foresight)) {
+      return path;
+    }
+    return path.with(
+      ((Foresight) follower.algorithm()).config.maxPathSpeed.at(pathSpeed)
+    );
+  }
+
   private void followRepeatStep(
     AutoPath[] repeatPaths,
     double[] repeatPathSpeeds,
+    long[] repeatHoldMs,
+    String[] repeatHoldEvents,
     int repeatCount,
     int repeatSlot
   ) {
@@ -312,6 +344,46 @@ public class Full18Auto extends OpMode {
       ? repeatPathSpeeds[pathIndex]
       : 1.0;
 
+    // A null chain marks a wait or an event sitting between two paths: the
+    // slot holds a duration instead of something to drive.
+    if (path == null) {
+      long holdMs = repeatHoldMs != null && pathIndex < repeatHoldMs.length
+        ? repeatHoldMs[pathIndex]
+        : 0L;
+
+      if (!stepStarted) {
+        stepStartTime = System.currentTimeMillis();
+        stepStarted = true;
+
+        String eventName = repeatHoldEvents != null &&
+          pathIndex < repeatHoldEvents.length
+          ? repeatHoldEvents[pathIndex]
+          : null;
+        if (eventName != null) {
+          startParallelEvent(eventName, holdMs);
+        }
+      }
+
+      if (System.currentTimeMillis() - stepStartTime < holdMs) {
+        return;
+      }
+
+      stepStarted = false;
+      repeatLoopPathIndexes[repeatSlot]++;
+
+      if (repeatLoopPathIndexes[repeatSlot] >= repeatPaths.length) {
+        repeatLoopPathIndexes[repeatSlot] = 0;
+        repeatLoopIterations[repeatSlot]++;
+      }
+
+      if (repeatLoopIterations[repeatSlot] >= repeatCount) {
+        repeatLoopIterations[repeatSlot] = 0;
+        repeatLoopPathIndexes[repeatSlot] = 0;
+        advanceSequence();
+      }
+      return;
+    }
+
     if (!stepStarted) {
       startPath(path, pathSpeed);
       stepStarted = true;
@@ -334,28 +406,6 @@ public class Full18Auto extends OpMode {
       repeatLoopPathIndexes[repeatSlot] = 0;
       advanceSequence();
     }
-  }
-
-  /** Pedro 2's followPath(path, maxPower, holdEnd=true), callbacks re-armed as it did. */
-  private void startPath(AutoPath path, double pathSpeed) {
-    path.armCallbacks();
-    activePath = path;
-    follower.holdEnd.set(true);
-    follower.follow(withPathSpeed(path.path, clampPathSpeed(pathSpeed)));
-  }
-
-  /**
-   * Pedro 2 capped drive POWER per path. Pedro 3 has no power cap; the nearest thing is
-   * Foresight's maxPathSpeed, a fraction of max achievable VELOCITY, applied while this path is
-   * followed. Every call site passes 1.0, where no modifier is applied at all.
-   */
-  private Path withPathSpeed(Path path, double pathSpeed) {
-    if (pathSpeed >= 1.0 || !(follower.algorithm() instanceof Foresight)) {
-      return path;
-    }
-    return path.with(
-      ((Foresight) follower.algorithm()).config.maxPathSpeed.at(pathSpeed)
-    );
   }
 
   private double clampPathSpeed(double pathSpeed) {
@@ -533,61 +583,132 @@ public class Full18Auto extends OpMode {
   }
 
   /**
-   * A path plus Pedro 2's parametric callbacks, which Pedro 3 dropped.
+   * A Pedro 3 path plus the per-path callbacks Pedro 2's PathBuilder had and Pedro 3 dropped.
    *
-   * <p>Pedro 2's ParametricCallback fired once per followPath when
-   * {@code atParametricEnd() || getPathCompletion() >= t}, where getPathCompletion() is the
-   * DISTANCE fraction along the curve at the closest point - not the raw parameter. This keeps
-   * that trigger: arc-length completion from the current curve's remaining distance at the
-   * follower's closest parameter. (Pedro 3's Follower.completion() is not used: it goes through
-   * the default Curve.pathCompletion, which returns the fraction remaining on a Line.)
+   * <p>Segment indexes count the paths of a chain (Paths.path(...)) from 0, as Pedro 2
+   * attached a callback to the path it was added after. Each trigger keeps Pedro 2's rule:
+   * <ul>
+   *   <li>parametric - once the segment's DISTANCE completion reaches the value (Pedro 2's
+   *       getPathCompletion()), at the parametric end, or once the follower has left it;
+   *   <li>temporal - that many milliseconds after the segment began; dropped if the segment
+   *       ends first, as Pedro 2 dropped it with its path;
+   *   <li>pose - once the follower's curve parameter passes the point on the segment closest
+   *       to the pose, or once the follower has left it.
+   * </ul>
    */
   private static final class AutoPath {
 
+    private static final int PARAMETRIC = 0;
+    private static final int TEMPORAL = 1;
+    private static final int POSE = 2;
+
     final Path path;
-    private final List<Double> triggers = new ArrayList<>();
-    private final List<Runnable> actions = new ArrayList<>();
-    private boolean[] fired = new boolean[0];
+    private final List<PathSegment> segments;
+    private final List<Trigger> triggers = new ArrayList<>();
+    private int segmentIndex;
+    private long segmentStartMs;
 
     AutoPath(Path path) {
       this.path = path;
+      this.segments = path.getSegments();
     }
 
-    AutoPath addParametricCallback(double completion, Runnable action) {
-      triggers.add(completion);
-      actions.add(action);
-      fired = new boolean[triggers.size()];
+    AutoPath addParametricCallback(
+      int segment,
+      double completion,
+      Runnable action
+    ) {
+      triggers.add(new Trigger(PARAMETRIC, segment, completion, action));
       return this;
     }
 
-    void armCallbacks() {
-      fired = new boolean[triggers.size()];
+    AutoPath addTemporalCallback(int segment, long delayMs, Runnable action) {
+      triggers.add(new Trigger(TEMPORAL, segment, delayMs, action));
+      return this;
     }
 
-    void fireReadyCallbacks(Follower follower) {
-      double completion = follower.atParametricEnd()
-        ? 1.0
-        : distanceCompletion(follower);
-      for (int i = 0; i < triggers.size(); i++) {
-        if (!fired[i] && completion >= triggers.get(i)) {
-          fired[i] = true;
-          actions.get(i).run();
+    AutoPath addPoseCallback(
+      int segment,
+      Pose pose,
+      Runnable action,
+      double initialGuess
+    ) {
+      double t = segments
+        .get(segment)
+        .curve.closestParameter(pose.toVector2D(), initialGuess);
+      triggers.add(new Trigger(POSE, segment, t, action));
+      return this;
+    }
+
+    /** Call as the path is handed to the follower; Pedro 2 re-armed callbacks on every followPath. */
+    void arm() {
+      segmentIndex = 0;
+      segmentStartMs = System.currentTimeMillis();
+      for (Trigger trigger : triggers) {
+        trigger.fired = false;
+      }
+    }
+
+    /** Call once per loop, after follower.update(). */
+    void update(Follower follower) {
+      long now = System.currentTimeMillis();
+      // Once the follower stops following this path, every segment counts as left.
+      int index = follower.following() ? follower.pathIndex() : segments.size();
+      if (index != segmentIndex) {
+        segmentIndex = index;
+        segmentStartMs = now;
+      }
+
+      PathSegment current = index < segments.size()
+        ? follower.currentSegment()
+        : null;
+      double parameter = current != null
+        ? Math.max(0.0, Math.min(1.0, follower.parametricCompletion()))
+        : 1.0;
+      double completion = current != null
+        ? current.curve.pathCompletion(parameter)
+        : 1.0;
+      boolean atEnd = follower.atParametricEnd();
+
+      for (Trigger trigger : triggers) {
+        if (trigger.fired) {
+          continue;
+        }
+        boolean left = trigger.segment < segmentIndex;
+        boolean here = trigger.segment == segmentIndex;
+        boolean ready;
+        if (trigger.kind == TEMPORAL) {
+          if (left) {
+            trigger.fired = true;
+            continue;
+          }
+          ready = here && now - segmentStartMs >= trigger.value;
+        } else if (trigger.kind == POSE) {
+          ready = left || (here && parameter >= trigger.value);
+        } else {
+          ready = left || (here && (atEnd || completion >= trigger.value));
+        }
+        if (ready) {
+          trigger.fired = true;
+          trigger.action.run();
         }
       }
     }
 
-    private static double distanceCompletion(Follower follower) {
-      Curve curve = follower.currentCurve();
-      if (curve == null) {
-        return 1.0;
+    private static final class Trigger {
+
+      final int kind;
+      final int segment;
+      final double value;
+      final Runnable action;
+      boolean fired;
+
+      Trigger(int kind, int segment, double value, Runnable action) {
+        this.kind = kind;
+        this.segment = segment;
+        this.value = value;
+        this.action = action;
       }
-      double length = curve.length();
-      if (length <= 0) {
-        return 1.0;
-      }
-      return (
-        1.0 - curve.remainingDistance(follower.parametricCompletion()) / length
-      );
     }
   }
 }
