@@ -339,7 +339,7 @@ function buildPathStepCode(
           identifiers,
         )
       : headingFallback;
-  return `private static final PathStep ${name} = new PathStep(${xExpression}, ${yExpression}, ${headingExpression});`;
+  return `public static PathStep ${name} = new PathStep(${xExpression}, ${yExpression}, ${headingExpression});`;
 }
 
 function buildPoseVariablePathStepCode(
@@ -362,7 +362,7 @@ function buildPoseVariablePathStepCode(
     fixed(Number(variable.heading) || 0),
     identifiers,
   );
-  return `private static final PathStep ${name} = new PathStep(${xExpression}, ${yExpression}, ${headingExpression});`;
+  return `public static PathStep ${name} = new PathStep(${xExpression}, ${yExpression}, ${headingExpression});`;
 }
 
 /**
@@ -1588,6 +1588,7 @@ import org.firstinspires.ftc.vision.VisionPortal;`
 
   const file = `package org.firstinspires.ftc.teamcode.auto;
 
+import com.acmerobotics.dashboard.config.Config;
 import com.pedropathing.algorithm.Foresight;
 import com.pedropathing.api.Paths;
 import com.pedropathing.drivetrain.DrivePowers;
@@ -1606,8 +1607,10 @@ ${pollenImports}
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 import org.firstinspires.ftc.teamcode.pedroPathing.SwerveDrivetrainConstants;
 
+@Config
 @Autonomous(name = "${autoClassName}", group = "Auto")
 public class ${autoClassName} extends OpMode {
+    // PathStep fields are editable from FTC Dashboard; paths are built in init(), so edits apply on the next init.
     ${pathStepDeclarationBlock}
 
     private Follower follower;

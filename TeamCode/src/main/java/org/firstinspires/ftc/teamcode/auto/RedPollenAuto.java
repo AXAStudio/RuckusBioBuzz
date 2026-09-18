@@ -1,5 +1,6 @@
 package org.firstinspires.ftc.teamcode.auto;
 
+import com.acmerobotics.dashboard.config.Config;
 import android.util.Size;
 import com.pedropathing.algorithm.Foresight;
 import com.pedropathing.api.Paths;
@@ -19,23 +20,25 @@ import org.firstinspires.ftc.teamcode.pedroPathing.SwerveDrivetrainConstants;
 import org.firstinspires.ftc.teamcode.pipelines.PollenDetectionPipeline;
 import org.firstinspires.ftc.vision.VisionPortal;
 
+@Config
 @Autonomous(name = "RedPollenAuto", group = "Auto")
 public class RedPollenAuto extends OpMode {
+  // PathStep fields are editable from FTC Dashboard; paths are built in init(), so edits apply on the next init.
 
   private static final double NUMBER_SHOOT_MS = 1000.000;
   private static final boolean FLAG_TAKE_THIRD_SHOT = true;
-  private static final PathStep START_STEP = new PathStep(
+  public static PathStep START_STEP = new PathStep(
     55.000,
     9.000,
     90.000
   );
-  private static final PathStep POINT_1 = new PathStep(55.000, 28.000, 84.600);
-  private static final PathStep POINT_2 = new PathStep(30.000, 62.000, 41.300);
-  private static final PathStep POINT_3 = new PathStep(15.600, 47.167, 180.000);
-  private static final PathStep POINT_4 = new PathStep(30.000, 47.167, 180.000);
-  private static final PathStep POINT_5 = new PathStep(55.000, 28.000, 84.600);
-  private static final PathStep POINT_6 = new PathStep(17.000, 106.000, 90.000);
-  private static final PathStep POINT_7 = new PathStep(17.000, 106.000, 90.000);
+  public static PathStep POINT_1 = new PathStep(55.000, 28.000, 84.600);
+  public static PathStep POINT_2 = new PathStep(30.000, 62.000, 41.300);
+  public static PathStep POINT_3 = new PathStep(15.600, 47.167, 180.000);
+  public static PathStep POINT_4 = new PathStep(30.000, 47.167, 180.000);
+  public static PathStep POINT_5 = new PathStep(55.000, 28.000, 84.600);
+  public static PathStep POINT_6 = new PathStep(17.000, 106.000, 90.000);
+  public static PathStep POINT_7 = new PathStep(17.000, 106.000, 90.000);
 
   private Follower follower;
   private AutoPath chain1;

@@ -1,5 +1,6 @@
 package org.firstinspires.ftc.teamcode.auto;
 
+import com.acmerobotics.dashboard.config.Config;
 import com.pedropathing.algorithm.Foresight;
 import com.pedropathing.api.Paths;
 import com.pedropathing.drivetrain.DrivePowers;
@@ -15,19 +16,20 @@ import java.util.List;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 import org.firstinspires.ftc.teamcode.pedroPathing.SwerveDrivetrainConstants;
 
+@Config
 @Autonomous(name = "Full18Auto", group = "Auto")
 public class Full18Auto extends OpMode {
-
-  private static final PathStep POSE_CYCLE_SHOOT_STEP = new PathStep(
+  // PathStep fields are editable from FTC Dashboard; paths are built in init(), so edits apply on the next init.
+  public static PathStep POSE_CYCLE_SHOOT_STEP = new PathStep(
     52.25,
     90.15493264741795,
     150
   );
-  private static final PathStep START_STEP = new PathStep(21.872, 122.757, 143);
-  private static final PathStep POINT_1 = new PathStep(8.102, 58.153, 180.000);
-  private static final PathStep POINT_3 = new PathStep(12.966, 59.329, 150.000);
-  private static final PathStep POINT_5 = new PathStep(14.905, 82.625, 180.000);
-  private static final PathStep POINT_6 = new PathStep(
+  public static PathStep START_STEP = new PathStep(21.872, 122.757, 143);
+  public static PathStep POINT_1 = new PathStep(8.102, 58.153, 180.000);
+  public static PathStep POINT_3 = new PathStep(12.966, 59.329, 150.000);
+  public static PathStep POINT_5 = new PathStep(14.905, 82.625, 180.000);
+  public static PathStep POINT_6 = new PathStep(
     52.719,
     108.508,
     180.000
