@@ -1,8 +1,6 @@
 package org.firstinspires.ftc.teamcode.systems;
 
 import com.acmerobotics.dashboard.config.Config;
-import com.pedropathing.follower.Follower;
-import com.pedropathing.math.Pose;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
@@ -25,11 +23,10 @@ public class shooter {
     public static double NECTAR_TURRET_CENTER = 0.5;
     public static boolean POLLEN_TURRET_REVERSED = false;
     public static boolean NECTAR_TURRET_REVERSED = false;
-    public static double TURRET_RANGE_DEG = 360;
+    public static double TURRET_RANGE_DEG = 355;
     public static double UNWIND_HYSTERESIS_DEG = 10;
     public static double UNWIND_SETTLE_S = 1.0;
 
-    private final Follower follower;
     private final predictiveAiming predictor;
     private final zoneCheck zone;
     private aimingSystem aiming;
@@ -49,8 +46,7 @@ public class shooter {
     private double pollenVelocity;
     private double nectarVelocity;
 
-    public shooter(HardwareMap hardwareMap, Follower follower, predictiveAiming predictor) {
-        this.follower = follower;
+    public shooter(HardwareMap hardwareMap, predictiveAiming predictor) {
         this.predictor = predictor;
         this.zone = new zoneCheck(predictor);
 
@@ -66,8 +62,8 @@ public class shooter {
     }
 
     public void setAlliance(Alliance alliance) {
-        aiming = new aimingSystem(follower, alliance);
-        regression = new shootingRegression(predictor, alliance);
+        aiming = new aimingSystem(predictor, alliance);
+        regression = new shootingRegression(aiming);
     }
 
     public void update(boolean shooting) {
@@ -75,15 +71,14 @@ public class shooter {
         pollenFlywheel.setDirection(POLLEN_FLYWHEEL_REVERSED ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD);
         nectarFlywheel.setDirection(NECTAR_FLYWHEEL_REVERSED ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD);
 
-        Pose predicted = predictor.predictPose();
         inZone = zone.predictedInZone();
 
         pollenAimed = false;
         nectarAimed = false;
         if (shooting && inZone) {
-            pollenAimed = pollenTurret.track(aiming.aimPollen(predicted)[1],
+            pollenAimed = pollenTurret.track(aiming.aimPollen()[1],
                 POLLEN_TURRET_CENTER, POLLEN_TURRET_REVERSED);
-            nectarAimed = nectarTurret.track(aiming.aim(predicted)[1],
+            nectarAimed = nectarTurret.track(aiming.aim()[1],
                 NECTAR_TURRET_CENTER, NECTAR_TURRET_REVERSED);
         } else {
             pollenTurret.center(POLLEN_TURRET_CENTER);

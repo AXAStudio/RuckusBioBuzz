@@ -42,7 +42,7 @@ public class TeleOp extends OpMode {
             follower.setPose(PoseStorage.pose);
         }
         predictor = new predictiveAiming(follower);
-        shooter = new shooter(hardwareMap, follower, predictor);
+        shooter = new shooter(hardwareMap, predictor);
 
         intake = hardwareMap.get(DcMotor.class, "intake");
         intake.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
