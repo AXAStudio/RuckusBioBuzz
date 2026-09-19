@@ -4,7 +4,7 @@ import org.firstinspires.ftc.teamcode.helpers.HivePosition;
 
 @Config
 public class aimingSystem{
-    public static HivePosition hivePos = new HivePosition(0, 0); // (upPos, downPos) - set real values
+    public static HivePosition hivePos = new HivePosition();
     //return int array in the form of [target vel, target angle relative to front of bot]
     public int[] aim(int xPos, int yPos){
         return null;

@@ -1,29 +1,26 @@
 package org.firstinspires.ftc.teamcode.helpers;
 
 /**
- * Where the hive is. Its x never changes, so it is the constant {@link #X}; the up and down
- * positions are editable.
+ * Where the hive is. Only {@link #x} can be changed; the up and down positions are read-only.
  *
- * <p>The fields are public and non-final so FTC Dashboard can edit them when the instance is held
- * in a {@code public static} field of a {@code @Config} class - the shared one is
- * {@code aimingSystem.hivePos}. Read it from anywhere as {@code aimingSystem.hivePos.upPos} and
- * {@code HivePosition.X}.
+ * <p>x is public and non-final so FTC Dashboard can edit it when the instance is held in a
+ * {@code public static} field of a {@code @Config} class - the shared one is
+ * {@code aimingSystem.hivePos}. upPos and downPos are final, so neither code nor the dashboard
+ * can change them. Read them from anywhere as {@code aimingSystem.hivePos.x} /
+ * {@code .upPos} / {@code .downPos}.
  */
 public class HivePosition {
-    /** The hive's X coordinate. Constant, so it is not dashboard-editable. */
-    public static final double X = 58;
+    public double x = 58;
 
-    public double upPos = 0;
-    public double downPos = 52;
+    public final double upPos = 90;
+    public final double downPos = 52;
 
     public HivePosition() {}
 
     /**
-     * @param upPos The up position
-     * @param downPos The down position
+     * @param x The hive's X coordinate
      */
-    public HivePosition(double upPos, double downPos) {
-        this.upPos = upPos;
-        this.downPos = downPos;
+    public HivePosition(double x) {
+        this.x = x;
     }
 }

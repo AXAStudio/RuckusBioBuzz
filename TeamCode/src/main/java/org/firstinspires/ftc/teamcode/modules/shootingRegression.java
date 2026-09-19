@@ -1,7 +1,6 @@
 package org.firstinspires.ftc.teamcode.modules;
 
 import com.pedropathing.math.Pose;
-import org.firstinspires.ftc.teamcode.helpers.HivePosition;
 
 public class shootingRegression {
 
@@ -26,6 +25,6 @@ public class shootingRegression {
         double hiveY = future.y() < 71
             ? aimingSystem.hivePos.downPos
             : aimingSystem.hivePos.upPos;
-        return Math.hypot(HivePosition.X - future.x(), hiveY - future.y());
+        return Math.hypot(aimingSystem.hivePos.x - future.x(), hiveY - future.y());
     }
 }
