@@ -21,7 +21,6 @@ public class zoneCheck {
     }
 
     public static boolean inZone(Pose pose) {
-        // How far the footprint reaches from its center in y, for this heading.
         double reach = ROBOT_LENGTH / 2 * Math.abs(Math.sin(pose.heading()))
             + ROBOT_WIDTH / 2 * Math.abs(Math.cos(pose.heading()));
         return pose.y() - reach <= ZONE_Y || pose.y() + reach >= FIELD_SIZE - ZONE_Y;

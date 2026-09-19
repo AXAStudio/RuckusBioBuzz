@@ -15,17 +15,22 @@ public class shootingRegression {
     }
 
     public double shooterspeedpollen() {
-        double distance = predictedDistance();
-        return distance; //insert function here for pollen
+        double distance = predictedPollenDistance();
+        return distance;
     }
 
     public double shooterspeednectar() {
-        double distance = predictedDistance();
-        return distance; //insert function here for nectar
+        double distance = predictedNectarDistance();
+        return distance;
     }
 
-    public double predictedDistance() {
+    public double predictedPollenDistance() {
         Pose future = predictor.predictPose();
-        return future.distance(HivePosition.target(future, alliance));
+        return aimingSystem.pollenTurretPose(future).distance(HivePosition.target(future, alliance));
+    }
+
+    public double predictedNectarDistance() {
+        Pose future = predictor.predictPose();
+        return aimingSystem.nectarTurretPose(future).distance(HivePosition.target(future, alliance));
     }
 }
