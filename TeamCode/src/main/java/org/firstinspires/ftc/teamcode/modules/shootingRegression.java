@@ -22,9 +22,6 @@ public class shootingRegression {
 
     public double predictedDistance() {
         Pose future = predictor.predictPose();
-        double hiveY = future.y() < 71
-            ? aimingSystem.hivePos.downPos
-            : aimingSystem.hivePos.upPos;
-        return Math.hypot(aimingSystem.hivePos.x - future.x(), hiveY - future.y());
+        return future.distance(aimingSystem.hivePos.target(future));
     }
 }
