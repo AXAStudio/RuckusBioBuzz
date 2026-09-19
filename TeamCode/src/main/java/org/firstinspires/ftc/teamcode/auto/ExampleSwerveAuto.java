@@ -11,6 +11,7 @@ import com.pedropathing.utils.Angle;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 
+import org.firstinspires.ftc.teamcode.helpers.PoseStorage;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 import org.firstinspires.ftc.teamcode.pedroPathing.SwerveDrivetrainConstants;
 
@@ -85,6 +86,7 @@ public class ExampleSwerveAuto extends OpMode {
 
         follower.manual(DrivePowers.zero());
         follower.update();
+        PoseStorage.pose = follower.pose();
     }
 
     private void buildPaths() {

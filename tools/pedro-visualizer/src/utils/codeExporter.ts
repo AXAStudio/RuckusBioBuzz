@@ -1604,6 +1604,7 @@ import java.util.ArrayList;
 import java.util.List;
 ${pollenImports}
 
+import org.firstinspires.ftc.teamcode.helpers.PoseStorage;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 import org.firstinspires.ftc.teamcode.pedroPathing.SwerveDrivetrainConstants;
 
@@ -1686,6 +1687,7 @@ ${pollenStop}
 
         follower.manual(DrivePowers.zero());
         follower.update();
+        PoseStorage.pose = follower.pose();
     }
 
     private void buildPaths() {

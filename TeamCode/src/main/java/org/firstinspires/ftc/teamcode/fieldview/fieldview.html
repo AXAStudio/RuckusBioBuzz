@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Field View</title>
+<style>
+  :root {
+    --bg: #111317;
+    --panel: #1b1e24;
+    --line: #2c313a;
+    --text: #e8eaed;
+    --muted: #9aa0a8;
+    --robot: #38bdf8;
+    --pred: #f59e0b;
+    --zone: #22c55e;
+    --bad: #ef4444;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  .status {
+    margin-left: auto;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 13px;
+    font-weight: 600;
+    background: #3a1d1d;
+    color: #fca5a5;
+  }
+  .status.live { background: #13301f; color: #86efac; }
+  main {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 260px;
+    gap: 16px;
+    padding: 16px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  .field-wrap {
+    position: relative;
+    width: 100%;
+    max-width: calc(100vh - 100px);
+    aspect-ratio: 1;
+    justify-self: center;
+  }
+  canvas { width: 100%; height: 100%; display: block; border-radius: 6px; }
+  aside { display: flex; flex-direction: column; gap: 12px; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px 14px;
+  }
+  .card h2 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--muted);
+    margin: 0 0 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .row { display: flex; justify-content: space-between; font-variant-numeric: tabular-nums; }
+  .row span:first-child { color: var(--muted); }
+  .zone-state { font-size: 20px; font-weight: 700; }
+  .zone-state.in { color: var(--zone); }
+  .zone-state.out { color: var(--bad); }
+  .hint { color: var(--muted); font-size: 13px; }
+  @media (max-width: 760px) {
+    main { grid-template-columns: minmax(0, 1fr); padding: 12px; }
+    .field-wrap { max-width: 100%; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Field View</h1>
+  <span id="status" class="status">Connecting…</span>
+</header>
+<main>
+  <div class="field-wrap"><canvas id="field"></canvas></div>
+  <aside>
+    <div class="card">
+      <h2>Shooting zone</h2>
+      <div id="zone" class="zone-state out">–</div>
+      <div class="hint" id="zoneDetail">Predicted pose</div>
+    </div>
+    <div class="card">
+      <h2><span class="swatch" style="background:var(--robot)"></span>Robot</h2>
+      <div class="row"><span>x</span><span id="rx">–</span></div>
+      <div class="row"><span>y</span><span id="ry">–</span></div>
+      <div class="row"><span>heading</span><span id="rh">–</span></div>
+    </div>
+    <div class="card">
+      <h2><span class="swatch" style="background:var(--pred)"></span>Predicted <span id="pms"></span></h2>
+      <div class="row"><span>x</span><span id="px">–</span></div>
+      <div class="row"><span>y</span><span id="py">–</span></div>
+      <div class="row"><span>heading</span><span id="ph">–</span></div>
+    </div>
+    <div class="card hint">
+      Run the <b>TeleOp</b> OpMode to see the robot. Green bands are the shooting zone
+      (below <span id="zy">–</span> in and its mirror).
+    </div>
+  </aside>
+</main>
+<script>
+  const canvas = document.getElementById("field");
+  const ctx = canvas.getContext("2d");
+  const img = new Image();
+  img.src = "/field/field.webp";
+  img.onload = draw;
+
+  let state = null;
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const $ = (id) => document.getElementById(id);
+
+  function resize() {
+    const r = canvas.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(r.width * dpr);
+    canvas.height = Math.round(r.height * dpr);
+    draw();
+  }
+  window.addEventListener("resize", resize);
+
+  function footprint(x, y, h, L, W) {
+    const c = Math.cos(h), s = Math.sin(h);
+    const along = [L / 2, L / 2, -L / 2, -L / 2];
+    const across = [W / 2, -W / 2, -W / 2, W / 2];
+    return along.map((a, i) => [x + a * c - across[i] * s, y + a * s + across[i] * c]);
+  }
+
+  function draw() {
+    const S = canvas.width;
+    ctx.clearRect(0, 0, S, S);
+    if (img.complete && img.naturalWidth) ctx.drawImage(img, 0, 0, S, S);
+    else { ctx.fillStyle = "#222"; ctx.fillRect(0, 0, S, S); }
+    if (!state || state.field === undefined) return;
+
+    const F = state.field;
+    const X = (x) => x / F * S;
+    const Y = (y) => (1 - y / F) * S;
+
+    ctx.fillStyle = "rgba(34, 197, 94, 0.28)";
+    ctx.strokeStyle = css("--zone");
+    ctx.lineWidth = Math.max(2, S / 400);
+    ctx.fillRect(0, Y(state.zoneY), S, S - Y(state.zoneY));
+    ctx.fillRect(0, 0, S, Y(F - state.zoneY));
+    ctx.beginPath();
+    ctx.moveTo(0, Y(state.zoneY)); ctx.lineTo(S, Y(state.zoneY));
+    ctx.moveTo(0, Y(F - state.zoneY)); ctx.lineTo(S, Y(F - state.zoneY));
+    ctx.stroke();
+
+    ctx.setLineDash([S / 120, S / 160]);
+    ctx.strokeStyle = css("--pred");
+    ctx.lineWidth = Math.max(2, S / 350);
+    ctx.beginPath();
+    ctx.moveTo(X(state.x), Y(state.y));
+    ctx.lineTo(X(state.px), Y(state.py));
+    ctx.stroke();
+
+    robot(state.px, state.py, state.ph, css("--pred"), "rgba(245, 158, 11, 0.18)", X, Y, S, true);
+    ctx.setLineDash([]);
+    robot(state.x, state.y, state.h, css("--robot"), "rgba(56, 189, 248, 0.30)", X, Y, S, false);
+  }
+
+  function robot(x, y, h, stroke, fill, X, Y, S, dashed) {
+    const pts = footprint(x, y, h, state.robotL, state.robotW);
+    ctx.beginPath();
+    pts.forEach(([px, py], i) => (i ? ctx.lineTo(X(px), Y(py)) : ctx.moveTo(X(px), Y(py))));
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.fill();
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = Math.max(2, S / 300);
+    ctx.stroke();
+    const nose = state.robotL / 2;
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(X(x), Y(y));
+    ctx.lineTo(X(x + nose * Math.cos(h)), Y(y + nose * Math.sin(h)));
+    ctx.stroke();
+    if (dashed) ctx.setLineDash([S / 120, S / 160]);
+  }
+
+  const f1 = (v) => v.toFixed(1) + " in";
+  const deg = (r) => ((r * 180 / Math.PI) % 360 + 360) % 360;
+
+  function render() {
+    const live = state && state.live;
+    const status = $("status");
+    status.textContent = live ? "Live" : state && state.field !== undefined ? "OpMode stopped" : "Waiting for OpMode";
+    status.className = "status" + (live ? " live" : "");
+    if (!state || state.field === undefined) { draw(); return; }
+
+    $("rx").textContent = f1(state.x);
+    $("ry").textContent = f1(state.y);
+    $("rh").textContent = deg(state.h).toFixed(1) + "°";
+    $("px").textContent = f1(state.px);
+    $("py").textContent = f1(state.py);
+    $("ph").textContent = deg(state.ph).toFixed(1) + "°";
+    $("pms").textContent = "(" + Math.round(state.predictMs) + " ms)";
+    $("zy").textContent = state.zoneY;
+
+    const zone = $("zone");
+    zone.textContent = state.predInZone ? "IN ZONE" : "OUT OF ZONE";
+    zone.className = "zone-state " + (state.predInZone ? "in" : "out");
+    $("zoneDetail").textContent = "Predicted pose · robot now: " + (state.inZone ? "in" : "out");
+    draw();
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch("/field/state", { cache: "no-store" });
+      state = await r.json();
+    } catch (e) {
+      state = null;
+    }
+    render();
+    setTimeout(poll, 50);
+  }
+
+  resize();
+  poll();
+</script>
+</body>
+</html>

@@ -15,6 +15,7 @@ import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import java.util.ArrayList;
 import java.util.List;
 import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
+import org.firstinspires.ftc.teamcode.helpers.PoseStorage;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 import org.firstinspires.ftc.teamcode.pedroPathing.SwerveDrivetrainConstants;
 import org.firstinspires.ftc.teamcode.pipelines.PollenDetectionPipeline;
@@ -286,6 +287,7 @@ public class RedPollenAuto extends OpMode {
 
     follower.manual(DrivePowers.zero());
     follower.update();
+    PoseStorage.pose = follower.pose();
   }
 
   private void buildPaths() {
