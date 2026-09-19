@@ -1,7 +1,9 @@
 package org.firstinspires.ftc.teamcode.modules;
 import com.acmerobotics.dashboard.config.Config;
 import com.pedropathing.follower.Follower;
+import com.pedropathing.math.Pose;
 
+import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.teamcode.helpers.HivePosition;
 
 @Config
@@ -16,11 +18,12 @@ public class aimingSystem{
 
 
     //return int array in the form of [target vel, target angle relative to front of bot (rad)]
-    public double[] aim(int xPos, int yPos){ //check for polarity
-        double adj = hivePos.target(follower.pose()).x()-xPos;
-        double op = hivePos.target(follower.pose()).y() -yPos;
-        double dist = Math.sqrt(adj*adj+op*op);
-        double theta = Math.atan2(op, adj);
+    public double[] aim(Pose robot) {
+        Pose target = hivePos.target(robot);
+        double dx = target.x() - robot.x();
+        double dy = target.y() - robot.y();
+        double dist = Math.hypot(dx, dy);
+        double theta = AngleUnit.normalizeRadians(Math.atan2(dy, dx) - robot.heading());
         return new double[]{dist, theta};
     }
 }
