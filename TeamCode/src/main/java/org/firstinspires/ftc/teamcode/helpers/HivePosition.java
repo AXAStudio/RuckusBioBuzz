@@ -1,23 +1,29 @@
 package org.firstinspires.ftc.teamcode.helpers;
 
-import com.pedropathing.math.Pose;
-
 /**
- * A helper class to store coordinate data for Pedro Pathing.
- * This class handles the conversion from human-readable degrees to robot-ready radians.
+ * Where the hive is. Its x never changes, so it is the constant {@link #X}; the up and down
+ * positions are editable.
+ *
+ * <p>The fields are public and non-final so FTC Dashboard can edit them when the instance is held
+ * in a {@code public static} field of a {@code @Config} class - the shared one is
+ * {@code aimingSystem.hivePos}. Read it from anywhere as {@code aimingSystem.hivePos.upPos} and
+ * {@code HivePosition.X}.
  */
-public class KeyPosition {
-    public double x = 0;
-    public double y = 0;
+public class HivePosition {
+    /** The hive's X coordinate. Constant, so it is not dashboard-editable. */
+    public static final double X = 58;
 
-    public KeyPosition() {}
+    public double upPos = 0;
+    public double downPos = 52;
+
+    public HivePosition() {}
 
     /**
-     * @param x The X coordinate
-     * @param y The Y coordinate
+     * @param upPos The up position
+     * @param downPos The down position
      */
-    public KeyPosition(double x, double y) {
-        this.x = x;
-        this.y = y;
+    public HivePosition(double upPos, double downPos) {
+        this.upPos = upPos;
+        this.downPos = downPos;
     }
 }
