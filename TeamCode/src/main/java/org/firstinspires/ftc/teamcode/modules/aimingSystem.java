@@ -9,7 +9,7 @@ import org.firstinspires.ftc.teamcode.helpers.HivePosition;
 @Config
 public class aimingSystem{
 
-    public static double[] nectarTurretOffset = {0, 0};
+    public static double[] nectarTurretOffset = {0, 0}; //need to change
     public static double[] pollenTurretOffset = {0, 0};
 
     private final predictiveAiming predictor;
@@ -33,7 +33,7 @@ public class aimingSystem{
         double dx = target.x() - turret.x();
         double dy = target.y() - turret.y();
         double dist = Math.hypot(dx, dy);
-        double theta = AngleUnit.normalizeRadians(Math.atan2(dy, dx) - turret.heading());
+        double theta = AngleUnit.normalizeRadians(Math.atan2(dy, dx)); //no turret calc needed(for you guys new to the stream calc stands for calculator)
         return new double[]{dist, theta};
     }
 }
