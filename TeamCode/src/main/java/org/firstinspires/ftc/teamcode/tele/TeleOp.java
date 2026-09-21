@@ -1,6 +1,8 @@
 package org.firstinspires.ftc.teamcode.tele;
 
 import com.acmerobotics.dashboard.config.Config;
+import com.pedropathing.control.PIDFCoefficients;
+import com.pedropathing.control.PIDFController;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.math.Pose;
 import com.qualcomm.hardware.lynx.LynxModule;
@@ -14,6 +16,7 @@ import org.firstinspires.ftc.teamcode.fieldview.FieldView;
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
 import org.firstinspires.ftc.teamcode.helpers.PoseStorage;
 import org.firstinspires.ftc.teamcode.modules.predictiveAiming;
+import org.firstinspires.ftc.teamcode.modules.aimingSystem;
 import org.firstinspires.ftc.teamcode.systems.shooter;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 
@@ -28,11 +31,15 @@ public class TeleOp extends OpMode {
     private shooter shooter;
     private List<LynxModule> hubs;
     private Alliance alliance = Alliance.RED;
+    aimingSystem aimer;
 
     private DcMotor intake;
+    private final PIDFController aimPid = new PIDFController(new PIDFCoefficients(1.20, 0, 0.080, 0));
+    private boolean aiming = false;
 
     @Override
     public void init() {
+
         hubs = hardwareMap.getAll(LynxModule.class);
         for (LynxModule hub : hubs) {
             hub.setBulkCachingMode(LynxModule.BulkCachingMode.MANUAL);
@@ -43,6 +50,8 @@ public class TeleOp extends OpMode {
         }
         predictor = new predictiveAiming(follower);
         shooter = new shooter(hardwareMap, predictor);
+        aimer = new aimingSystem(predictor, alliance);
+
 
         intake = hardwareMap.get(DcMotor.class, "intake");
         intake.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
@@ -54,15 +63,15 @@ public class TeleOp extends OpMode {
         if (gamepad1.b) alliance = Alliance.RED;
         telemetry.addData("alliance (X blue, B red)", alliance);
         telemetry.update();
+
     }
 
-    @Override
-    public void start() {
-        shooter.setAlliance(alliance);
-    }
 
     @Override
     public void loop() {
+
+
+        Pose current = follower.pose();
         for (LynxModule hub : hubs) {
             hub.clearBulkCache();
         }
@@ -74,7 +83,6 @@ public class TeleOp extends OpMode {
         FieldView.publish(pose, predictor.predictPose());
 
         boolean shooting = gamepad2.right_bumper;
-        shooter.update(shooting);
 
         intake.setDirection(INTAKE_REVERSED ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD);
         if (shooting) {
@@ -82,16 +90,18 @@ public class TeleOp extends OpMode {
         } else {
             intake.setPower(gamepad2.right_trigger - gamepad2.left_trigger);
         }
+        if(gamepad1.left_trigger > 0.5){
+            double aimAngle = aimer.aimFrom(pose)[1];
+            follower.hold(current.withHeading(aimAngle));
+
+        }
 
         telemetry.addData("alliance", alliance);
         telemetry.addData("x", pose.x());
         telemetry.addData("y", pose.y());
         telemetry.addData("heading (deg)", Math.toDegrees(pose.heading()));
         telemetry.addData("shooting", shooting);
-        telemetry.addData("in zone", shooter.inZone());
-        telemetry.addData("pollen vel / target", "%.0f / %.0f", shooter.pollenVelocity(), shooter.pollenTarget());
-        telemetry.addData("nectar vel / target", "%.0f / %.0f", shooter.nectarVelocity(), shooter.nectarTarget());
-        telemetry.addData("aimed pollen / nectar", shooter.pollenAimed() + " / " + shooter.nectarAimed());
+
         telemetry.addData("ready", shooter.ready());
         telemetry.update();
     }

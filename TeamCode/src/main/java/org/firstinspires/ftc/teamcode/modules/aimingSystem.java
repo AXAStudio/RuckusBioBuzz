@@ -20,15 +20,8 @@ public class aimingSystem{
     }
 
 
-    public double[] aim() {
-        return aimFrom(predictor.leadPose(nectarTurretOffset));
-    }
 
-    public double[] aimPollen() {
-        return aimFrom(predictor.leadPose(pollenTurretOffset));
-    }
-
-    private double[] aimFrom(Pose turret) {
+    public double[] aimFrom(Pose turret) {
         Pose target = HivePosition.target(predictor.leadPose(), alliance);
         double dx = target.x() - turret.x();
         double dy = target.y() - turret.y();
