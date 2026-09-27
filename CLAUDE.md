@@ -1,4 +1,4 @@
-# RuckusBioBuzz — FTC swerve (DECODE 2025–26)
+# RuckusBioBuzz — FTC swerve (BIOBUZZ 2026–27)
 
 Repo-wide context for Claude Code. Facts here are drawn from the codebase, the
 build files, and prior session logs. **If you find something here that
@@ -10,7 +10,7 @@ contradicts the code, the code wins — fix this file in the same commit.**
 
 | Thing | Value |
 |---|---|
-| FTC SDK | `org.firstinspires.ftc:*` **11.2.1** (DECODE 2025–26). **Must stay ≥ 11.2**: Sloth 0.3.x → Sinister 2.3.0 references `opmode.Utility` (new in 11.2); on 11.1 the app builds and installs but registers zero TeamCode OpModes. Bumped 2026-09-27 without upstream's Gradle 9.1 / AGP 8.13.2 move |
+| FTC SDK | `org.firstinspires.ftc:*` **12.0.0** (BIOBUZZ 2026–27), set in `build.dependencies.gradle` — the only pin that ships (Pedro's is `compileOnly`). **Must stay ≥ 11.2**: Sloth 0.3.x → Sinister 2.3.0 references `opmode.Utility` (new in 11.2); on 11.1 the app builds and installs but registers zero TeamCode OpModes. `FtcRobotController/` samples match upstream v12.0. Bumped 2026-09-27 without upstream's Gradle 9.1 / AGP 8.13.2 move. Driver Station app should match (12.0) |
 | AGP | `com.android.tools.build:gradle:8.7.0`, `org.gradle.jvmargs=-Xmx2048M` |
 | Path lib | **Pedro Pathing 3.0.0** — `com.pedropathing:revhub:3.0.0` (vendored fork, see `third_party/PedroPathing/RUCKUS_PATCHES.md`) + `com.pedropathing:telemetry:1.0.0` (local module) + AutoTune `com.pedropathing:tuning:1.0.0` (needs `repo.dairy.foundation` for Sloth). Branches cut before `pedro-3.0.0-migration` are on **2.1.2**, and every measurement in §5–§7 was taken on 2.1.2 |
 | Pedro source | vendored — `settings.gradle` does `includeBuild 'third_party/PedroPathing'`; `settings.gradle` seeds `third_party/PedroPathing/local.properties` from the root one (gitignored, else "SDK location not found") |

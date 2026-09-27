@@ -6,17 +6,18 @@ repositories {
     maven { url = 'https://repo.dairy.foundation/releases/' } // Sloth, required by com.pedropathing:tuning
 }
 
-// SDK must be >= 11.2: Sloth 0.3.x pulls Sinister 2.3.0, whose OpMode scanner references
-// com.qualcomm.robotcore.eventloop.opmode.Utility (added in 11.2). On 11.1 that throws
-// NoClassDefFoundError at app start and NO TeamCode OpModes register on the Driver Station.
+// SDK 12.0 = BIOBUZZ (2026-27). Must stay >= 11.2: Sloth 0.3.x pulls Sinister 2.3.0, whose
+// OpMode scanner references com.qualcomm.robotcore.eventloop.opmode.Utility (added in 11.2).
+// Below that it throws NoClassDefFoundError at app start and NO TeamCode OpModes register.
+// This file is what ships; Pedro's own ftc pin is compileOnly and never reaches the hub.
 dependencies {
-    implementation 'org.firstinspires.ftc:Inspection:11.2.1'
-    implementation 'org.firstinspires.ftc:Blocks:11.2.1'
-    implementation 'org.firstinspires.ftc:RobotCore:11.2.1'
-    implementation 'org.firstinspires.ftc:RobotServer:11.2.1'
-    implementation 'org.firstinspires.ftc:OnBotJava:11.2.1'
-    implementation 'org.firstinspires.ftc:Hardware:11.2.1'
-    implementation 'org.firstinspires.ftc:FtcCommon:11.2.1'
-    implementation 'org.firstinspires.ftc:Vision:11.2.1'
+    implementation 'org.firstinspires.ftc:Inspection:12.0.0'
+    implementation 'org.firstinspires.ftc:Blocks:12.0.0'
+    implementation 'org.firstinspires.ftc:RobotCore:12.0.0'
+    implementation 'org.firstinspires.ftc:RobotServer:12.0.0'
+    implementation 'org.firstinspires.ftc:OnBotJava:12.0.0'
+    implementation 'org.firstinspires.ftc:Hardware:12.0.0'
+    implementation 'org.firstinspires.ftc:FtcCommon:12.0.0'
+    implementation 'org.firstinspires.ftc:Vision:12.0.0'
     implementation 'androidx.appcompat:appcompat:1.2.0'
 }
