@@ -39,7 +39,16 @@ public class PodRecorder {
     private static final int POD_COLS = 7;
 
     private static final int POD_COUNT = 4;
-    private static final int COLS = GLOBAL_COLS + POD_COUNT * POD_COLS;
+
+    /**
+     * Follower columns, appended AFTER the pod block on 2026-10-01 so every existing column keeps
+     * its position: {@code fterr} (Foresight translational error, in), {@code fherr} (heading
+     * error, deg), {@code fcx,fcy,fch} (closest point on the path and its target heading),
+     * {@code fvel} (target velocity, in/s), {@code fbusy}. Empty outside FOLLOW.
+     */
+    public static final int FOLLOW_COLS = 7;
+
+    private static final int COLS = GLOBAL_COLS + POD_COUNT * POD_COLS + FOLLOW_COLS;
 
     /**
      * Roughly 30 s at 100 Hz. Floats rather than doubles: the widest value recorded is an angle in
@@ -123,12 +132,13 @@ public class PodRecorder {
      * @param cmdF forward command applied this loop
      * @param cmdS strafe command applied this loop
      * @param cmdT rotation actually applied (heading-hold output, not the raw stick)
+     * @param follow the {@link #FOLLOW_COLS} follower values, or null outside FOLLOW
      */
     public void add(double dt, double volts, double loopHz, int mode, double servoMa,
             double batteryMa, double[] podVolts, double[] wheelDeg, double[] targetDeg,
             double[] cmdTargetDeg, double[] errDeg, double[] power, boolean[] flipped,
             double headingDeg, double headingTgtDeg, double poseX, double poseY,
-            double cmdF, double cmdS, double cmdT) {
+            double cmdF, double cmdS, double cmdT, double[] follow) {
         if (!recording) {
             return;
         }
@@ -164,6 +174,10 @@ public class PodRecorder {
             data[p + 5] = flipped[i] ? 1 : 0;
             data[p + 6] = (float) cmdTargetDeg[i];
         }
+        int f = at + GLOBAL_COLS + POD_COUNT * POD_COLS;
+        for (int k = 0; k < FOLLOW_COLS; k++) {
+            data[f + k] = follow == null ? Float.NaN : (float) follow[k];
+        }
 
         count++;
     }
@@ -195,6 +209,7 @@ public class PodRecorder {
                     .append(",p").append(i).append("_flip")
                     .append(",p").append(i).append("_ctgt");
         }
+        sb.append(",fterr,fherr,fcx,fcy,fch,fvel,fbusy");
         sb.append('\n');
 
         for (int r = 0; r < rows; r++) {

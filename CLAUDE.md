@@ -16,7 +16,7 @@ contradicts the code, the code wins — fix this file in the same commit.**
 | Pedro source | vendored — `settings.gradle` does `includeBuild 'third_party/PedroPathing'`; `settings.gradle` seeds `third_party/PedroPathing/local.properties` from the root one (gitignored, else "SDK location not found") |
 | Other deps | `com.acmerobotics.dashboard:dashboard:0.5.1`, `com.bylazar:fullpanels:1.0.12` |
 | Modules | `:FtcRobotController`, `:TeamCode`, `:PedroVisualizer` (`tools/pedro-visualizer`), `:PollenCameraTester` (`tools/pollen-camera-tester`) |
-| Resources | `TeamCode/build.gradle` adds `resources.srcDirs += ['src/main/java']` so `config.jsonc` etc. load via `Class#getResourceAsStream` at OpMode init |
+| Resources | `TeamCode/build.gradle` adds `resources.srcDirs += ['src/main/java']` so `field/biobuzz_field.json` etc. load via `Class#getResourceAsStream` at OpMode init (`config.jsonc` and its drivetrain switch were removed 2026-10-01) |
 
 **There is no simulator.** Every number comes off the physical robot. `gradlew
 :TeamCode:assembleDebug` is the only thing you can run unattended.
@@ -53,9 +53,8 @@ contradicts the code, the code wins — fix this file in the same commit.**
 ```
 TeamCode/src/main/java/org/firstinspires/ftc/teamcode/
 ├── pedroPathing/
-│   ├── Constants.java                  Pedro follower/localizer wiring
-│   ├── SwerveDrivetrainConstants.java   SHIPPED gains + provenance comments
-│   ├── MecanumDrivetrainConstants.java
+│   ├── Constants.java                  THE constants file (swerve only, Quickstart layout): TUNED VALUES block on top
+│   │                                    (what robot.py constants splices), then follower / localizer / drivetrain + provenance
 │   ├── PositionalPod.java
 │   ├── Tuning.java                      Pedro 3 AutoTune registry (@Tuner), port 10158
 │   └── procedures/                      Quickstart pedro3 tuners (Foresight, Pinpoint, Tests)
@@ -64,6 +63,7 @@ TeamCode/src/main/java/org/firstinspires/ftc/teamcode/
 │   └── visualizerAutos/*.pp             visualizer sources the auto .java files are exported from
 ├── modules/                             compute only, no hardware: aimingSystem, predictiveAiming, shootingRegression, zoneCheck
 ├── helpers/                             HivePosition, Alliance, PoseStorage (auto stop() saves, TeleOp init loads)
+├── field/biobuzz_field.json             BIOBUZZ obstacles - ONE source: the visualizer imports it, the bring-up field fence loads it
 ├── fieldview/                           http://192.168.43.1:8080/field - live field, robot, predicted pose, zone (TeleOp publishes at 20 Hz)
 ├── diagnostics/tests/                   blobDetectionTest, colorTunerTest
 ├── diagnostics/swerve/                  DIAGNOSTIC ONLY — never ships
@@ -71,6 +71,7 @@ TeamCode/src/main/java/org/firstinspires/ftc/teamcode/
 │   ├── dashboard.html                   (~72 KB) local web UI + browser-gamepad drive
 │   ├── PodCal.java  PodRecorder.java  PodAutoTuner.java
 │   ├── SwerveBench.java  SwerveExport.java  SwerveWebApp.java
+│   ├── FenceGeometry.java               pure-Java keep-out geometry (host check: tools/swervetune/FenceGeometryCheck.java)
 │   ├── SwerveDirectTeleOp.java  RawMotorTest.java
 │   └── README.md
 ├── pipelines/                           PollenDetectionPipeline; tools/ = blobDetection, colorTuner, getMedian
@@ -79,7 +80,8 @@ tools/swervetune/                        HOST-SIDE Python harness
 ├── swervebench.py    Bench client + scorer → trials.jsonl
 ├── drivecapture.py   chunked pod capture while a human drives → runs/
 ├── looprate_ab.py    randomized interleaved A/B driver
-├── robot.py          front door for a Claude session: check/state/cmd/drive/stop (ROBOT_CONTROL.md)
+├── robot.py          front door for a Claude session: check/state/cmd/drive/stop/constants/foresight (ROBOT_CONTROL.md)
+├── pedrocheck.py     VALIDATION through the real Pedro follower: suite / .pp path / report (TUNING_TASK.md)
 └── ftcdash.py        FTC Dashboard WebSocket client (robot.py estop uses its STOP)
 ```
 
@@ -96,7 +98,7 @@ measured on the deleted OpMode. **`TeleOp`'s loop rate is unmeasured.**
 `third_party/PedroPathing/revhub/src/main/java/com/pedropathing/revhub/drivetrains/`
 (Pedro 3 renamed the `ftc` module `revhub`), and is wired as
 `new Swerve(hardwareMap, SwerveConfig, pods...)` inside
-`SwerveDrivetrainConstants.createSwerve` — Pedro 3 has no `FollowerBuilder`.
+`Constants.createSwerve` — Pedro 3 has no `FollowerBuilder`.
 **A grep scoped to `TeamCode/` will miss the pod control loop, the
 encoder→angle map, and the shortest-path flip.** Read the vendored tree, not
 upstream docs. It is a **fork, not a wrapper**: in-place `RUCKUS PATCH` edits,
@@ -113,7 +115,16 @@ such change and name the upstream 3.0.0 behaviour it changes.
 `diagnostics/swerve/**` and `tools/swervetune/**` are **tools**. `tele/`,
 `auto/`, `pedroPathing/` are **shipped**. Say which side of that line every
 change falls on. The dashboard deliberately flags divergence between tool gains
-and `SwerveDrivetrainConstants` in red — that is correct behaviour, not a bug.
+and `Constants` in red — that is correct behaviour, not a bug.
+
+**A tuning session ends in `Constants.java`.** `export` → `robot.py constants`
+(dry run) → `--write` splices the TUNED VALUES block by name. That is a
+**shipped** change: build, commit each value with its evidence. The task prompt
+for a tuning run is **`TUNING_TASK.md`**: the tool's own tests (pidStep,
+headingGoto, stick driving) only SEARCH; gains are accepted only on
+`tools/swervetune/pedrocheck.py` (real Follower + Foresight), `--pods live`
+before export and `--pods shipped` after deploy. Foresight Tuner output goes in
+with `robot.py foresight`.
 
 ## 4. Telemetry and logging — how data actually gets off the robot
 
@@ -152,6 +163,21 @@ Mark corner A / Mark corner B / Clear box / Reset pose / Clear trail. Readout is
 footprint + heading indicator.
 
 - **Safe area currently set: 51 × 46 in, hard limit armed, persisted to the hub.**
+- **Field fence (2026-10-01, never run on the robot yet):** `fieldFence x y
+  headingDeg` writes an operator-measured FIELD pose (visualizer frame: x = 0
+  red wall, y = 0 audience wall) into the Pinpoint and arms the perimeter as a
+  wall (footprint, heading-aware, default 18 × 18 in) plus every obstacle in
+  `field/biobuzz_field.json` as a keep-out (same 4 in + 0.30 s·v margin and
+  6 in taper, along the obstacle normal, robot = half-diagonal circle).
+  Follower paths are sampled against keep-outs. A marked box behaves exactly as
+  before. ROBOT_CONTROL.md §3.4.1. **Border fence:** `borderFence width height
+  x y headingDeg` - the same perimeter semantics on any W × H in area, no
+  keep-outs (§3.4.2).
+- **Odometry geometry lives only in `Constants.java`** (`pinpointX/YPodOffset`,
+  `pinpointX/YPodReversed`); every OpMode configures the Pinpoint from
+  `Constants.pinpointConfig`, device name included. `odoConfig` uses the same
+  names, `/state` `odo` and `errors[]` flag a live difference, and `export` /
+  `robot.py pinpoint` carry values back.
 - The box is a **hard limit**, not an advisory: drive commands that would carry
   the robot out are **clamped at the wall**, and the box edges flash red while
   clamping.
@@ -188,7 +214,7 @@ famous "33 → 100 Hz" was really ~18 → 50 Hz.
 ## 5. Current tuning state
 
 ```java
-// SwerveDrivetrainConstants — shipped. VERIFIED against the file 2026-08-16.
+// pedroPathing/Constants.java (was SwerveDrivetrainConstants until 2026-10-01) — shipped. VERIFIED 2026-08-16.
 // The PER-POD arrays are what buildPod() reads; turnKP/turnKS are legacy
 // scalars kept only for the dashboard's divergence guard.
 turnKPPerPod = {0.380, 0.380, 0.380, 0.380};   // NOT 0.200 — that is the scalar

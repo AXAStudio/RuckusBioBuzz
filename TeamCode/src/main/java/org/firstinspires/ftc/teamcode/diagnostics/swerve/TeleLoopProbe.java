@@ -5,7 +5,7 @@ import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
-import org.firstinspires.ftc.teamcode.pedroPathing.SwerveDrivetrainConstants;
+import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 
 import java.util.Locale;
 import java.util.Map;
@@ -81,7 +81,7 @@ public class TeleLoopProbe {
         if (!ENABLED) {
             return;
         }
-        pods = SwerveDrivetrainConstants.builtPods;
+        pods = Constants.builtPods;
         try {
             voltageSensor = hardwareMap.voltageSensor.iterator().next();
             volts = voltageSensor.getVoltage();
@@ -143,7 +143,7 @@ public class TeleLoopProbe {
             samplePods();
             recorder.add(dt, volts, loopHz, MODE_DRIVE, Double.NaN, Double.NaN,
                     podVolts, wheelDeg, targetDeg, cmdTargetDeg, errDeg, power, flipped,
-                    headingDeg, headingTargetDeg, poseX, poseY, cmdF, cmdS, cmdT);
+                    headingDeg, headingTargetDeg, poseX, poseY, cmdF, cmdS, cmdT, null);
         }
 
         if (publishTimer.seconds() >= PUBLISH_INTERVAL_S) {
@@ -279,11 +279,11 @@ public class TeleLoopProbe {
             }
             sb.append("{\"i\":").append(i)
                     .append(",\"label\":\"ss").append(i).append('"')
-                    .append(",\"kp\":").append(f(SwerveDrivetrainConstants.turnKPPerPod[i]))
-                    .append(",\"kd\":").append(f(SwerveDrivetrainConstants.turnKDPerPod[i]))
-                    .append(",\"ks\":").append(f(SwerveDrivetrainConstants.turnKSPerPod[i]))
+                    .append(",\"kp\":").append(f(Constants.turnKPPerPod[i]))
+                    .append(",\"kd\":").append(f(Constants.turnKDPerPod[i]))
+                    .append(",\"ks\":").append(f(Constants.turnKSPerPod[i]))
                     .append(",\"ksband\":")
-                    .append(f(SwerveDrivetrainConstants.turnKSBandDegPerPod[i]))
+                    .append(f(Constants.turnKSBandDegPerPod[i]))
                     .append(",\"wheelDeg\":").append(f(pod == null ? Double.NaN : wheelDeg[i]))
                     .append(",\"tgtDeg\":").append(f(pod == null ? Double.NaN : cmdTargetDeg[i]))
                     .append(",\"servoPower\":")

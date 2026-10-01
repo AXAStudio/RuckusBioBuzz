@@ -7,6 +7,8 @@ import type {
   PollenPipelineSettings,
 } from "../types";
 import { getRandomColor } from "../utils";
+// Shared with the robot (TeamCode bundles it as a resource); see the BIOBUZZ preset below.
+import biobuzzField from "../../../../TeamCode/src/main/java/org/firstinspires/ftc/teamcode/field/biobuzz_field.json";
 
 /**
  * Default robot dimensions
@@ -197,111 +199,18 @@ const FIELD_OBSTACLE_PRESETS: Record<string, () => Shape[]> = {
     },
   ],
 
-  // BIOBUZZ (2026-2027). The field IMAGE is Pedro Pathing's
-  // (Pedro-Pathing/Visualizer public/fields/biobuzz.webp at e976a746); upstream
-  // ships no obstacles for it, so these are ours, measured off that image so
-  // the outlines sit on what it draws. 1080px over 141.5in is 0.13in a pixel,
-  // which is the precision claimed. Visualizer coordinates: x = 0 the red wall,
-  // y = 0 the audience wall.
-  //
-  // Almost none of the HIVE Structure is in a ROBOT's way. The bottom of a
-  // HIVE is 25.5 in. above the TILES (Manual V1 Fig 9-10) and an FTC ROBOT is
-  // at most 18 in. tall, so a ROBOT drives under the CELLS, under the crossbar
-  // at 43.95 in., and under the Frame legs climbing to it. What is on the
-  // floor is the two base rails. Pedro's drawing puts them 2.42 in. wide
-  // (outline included) over y 50.97-90.53, outer faces 50.32 in. apart - the
-  // manual's 49.46 in. frame width plus the outline, inside its +/- 1 in.
-  // Measured faces were averaged about the FIELD centre, since the real frame
-  // is symmetric and the pixel error is not.
-  "biobuzz.webp": () => [
-    {
-      id: "biobuzz-hive-rail-red",
-      name: "HIVE Frame Rail - Red Side",
-      vertices: [
-        { x: 45.59, y: 50.97 },
-        { x: 48.01, y: 50.97 },
-        { x: 48.01, y: 90.53 },
-        { x: 45.59, y: 90.53 },
-      ],
-      color: "#dc2626",
-      fillColor: "#ff6b6b",
-    },
-    {
-      id: "biobuzz-hive-rail-blue",
-      name: "HIVE Frame Rail - Blue Side",
-      vertices: [
-        { x: 93.49, y: 50.97 },
-        { x: 95.91, y: 50.97 },
-        { x: 95.91, y: 90.53 },
-        { x: 93.49, y: 90.53 },
-      ],
-      color: "#2563eb",
-      fillColor: "#60a5fa",
-    },
-    // The four FLOWERS are bolted to the perimeter wall and their lower ring
-    // sits on the TILES (Manual V1 Sec 9.7), so they are obstacles all the way
-    // down. Pedro draws each as a chamfered hexagon on a wall bracket; the
-    // outline here follows it: 7.2 in. across at the wall (the bracket),
-    // 6.7 in. at its widest, 4.6 in. across the end, 5.1 in. into the FIELD.
-    // Centres are on the TILE seam two seams round from a corner, where the
-    // drawing puts them to within 1.5px.
-    {
-      id: "biobuzz-flower-far",
-      name: "FLOWER - Far Wall",
-      vertices: [
-        { x: 43.57, y: 141.5 },
-        { x: 50.77, y: 141.5 },
-        { x: 50.52, y: 138.9 },
-        { x: 49.47, y: 136.4 },
-        { x: 44.87, y: 136.4 },
-        { x: 43.82, y: 138.9 },
-      ],
-      color: "#b7791f",
-      fillColor: "#f6c667",
-    },
-    {
-      id: "biobuzz-flower-blue-wall",
-      name: "FLOWER - Blue Wall",
-      vertices: [
-        { x: 141.5, y: 90.73 },
-        { x: 141.5, y: 97.93 },
-        { x: 138.9, y: 97.68 },
-        { x: 136.4, y: 96.63 },
-        { x: 136.4, y: 92.03 },
-        { x: 138.9, y: 90.98 },
-      ],
-      color: "#b7791f",
-      fillColor: "#f6c667",
-    },
-    {
-      id: "biobuzz-flower-audience",
-      name: "FLOWER - Audience Wall",
-      vertices: [
-        { x: 90.73, y: 0.0 },
-        { x: 97.93, y: 0.0 },
-        { x: 97.68, y: 2.6 },
-        { x: 96.63, y: 5.1 },
-        { x: 92.03, y: 5.1 },
-        { x: 90.98, y: 2.6 },
-      ],
-      color: "#b7791f",
-      fillColor: "#f6c667",
-    },
-    {
-      id: "biobuzz-flower-red-wall",
-      name: "FLOWER - Red Wall",
-      vertices: [
-        { x: 0.0, y: 43.57 },
-        { x: 0.0, y: 50.77 },
-        { x: 2.6, y: 50.52 },
-        { x: 5.1, y: 49.47 },
-        { x: 5.1, y: 44.87 },
-        { x: 2.6, y: 43.82 },
-      ],
-      color: "#b7791f",
-      fillColor: "#f6c667",
-    },
-  ],
+  // BIOBUZZ (2026-2027). The obstacles live in TeamCode's
+  // field/biobuzz_field.json - the one copy, shared with Swerve Bring-Up's
+  // field fence on the robot. Measurement notes are in that file. Copied per
+  // call, as every preset is, so an edit in the editor never reaches the import.
+  "biobuzz.webp": () =>
+    biobuzzField.obstacles.map((o) => ({
+      id: o.id,
+      name: o.name,
+      vertices: o.vertices.map((v) => ({ x: v.x, y: v.y })),
+      color: o.color,
+      fillColor: o.fillColor,
+    })),
 };
 
 /**

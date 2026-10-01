@@ -346,7 +346,9 @@ Tuned constants from TeamCode (`src/utils/teamcodeConstants.ts`):
   turned out to be unmeasured (73.9 dates from the constants skeleton, before
   the pods existed) or wrong (the robot's measured coast-down is 40 in/s², not
   197.1), which is exactly why placeholders are now reported, not applied.
-- `config.jsonc` picks the drivetrain, and the matching constants file is read.
+- The constants come from `TeamCode/.../pedroPathing/Constants.java`, the one
+  (swerve-only) constants file since 2026-10-01; `config.jsonc` and the mecanum
+  file are gone.
   The forward speed is the cap; the sideways speed and coast-down are shown as
   context only, since paths are profiled at one speed.
 - Comments are stripped before anything is read. These files park alternates

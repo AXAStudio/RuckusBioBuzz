@@ -438,6 +438,48 @@
       the robot out is clamped at the wall (edges flash red when clamping). Resetting the pose
       clears the box &mdash; it lives in the pose frame.
     </div>
+    <div class="row" style="margin-bottom:8px">
+      <label class="inline">fence <select id="ffMode" onchange="fenceModeChanged()">
+        <option value="field">BIOBUZZ field</option>
+        <option value="border">Border only</option>
+      </select></label>
+      <span id="ffBorderDims" style="display:none">
+        <label class="inline">width <input type="number" id="ffBW" step="0.5" style="width:65px"></label>
+        <label class="inline">height <input type="number" id="ffBH" step="0.5" style="width:65px"> in</label>
+      </span>
+      <label class="inline">robot x <input type="number" id="ffX" step="0.5" style="width:70px"></label>
+      <label class="inline">y <input type="number" id="ffY" step="0.5" style="width:70px"></label>
+      <label class="inline">heading&deg; <input type="number" id="ffH" step="1" style="width:60px"></label>
+      <label class="inline">robot <input type="number" id="ffL" value="18" step="0.5" style="width:55px">
+        &times; <input type="number" id="ffW" value="18" step="0.5" style="width:55px"> in</label>
+      <button id="ffArm" onclick="armFieldFence()">Arm BIOBUZZ field fence</button>
+    </div>
+    <div class="hint" style="margin-bottom:8px">
+      <b>Field fence</b> (instead of marking corners): place the robot, measure its pose in
+      FIELD coordinates &mdash; inches, x = 0 the red wall, y = 0 the audience wall, the Pedro
+      visualizer's frame &mdash; and arm. The pose is written into the Pinpoint, the perimeter
+      becomes the wall (the robot's footprint stays inside it), and the HIVE rails and FLOWERS from
+      <code>field/biobuzz_field.json</code> &mdash; the visualizer's own obstacles &mdash; become
+      keep-outs with the same clamp. <b>Border only</b>: a plain width &times; height in perimeter,
+      no obstacles &mdash; x and y are the robot centre's distance in inches from the two edges that
+      meet at the corner you call (0, 0), heading measured from the +x (width) edge. Check the
+      drawing below against the floor before driving.
+    </div>
+    <div class="row" style="margin-bottom:8px">
+      <span class="stat">odometry <b id="odoStat">--</b></span>
+      <label class="inline">x pod offset <input type="number" id="odoX" step="0.01" style="width:75px"></label>
+      <label class="inline"><input type="checkbox" id="odoXR"> rev</label>
+      <label class="inline">y pod offset <input type="number" id="odoY" step="0.01" style="width:75px"></label>
+      <label class="inline"><input type="checkbox" id="odoYR"> rev</label>
+      <button onclick="applyOdo()">Apply (resets pose)</button>
+      <button onclick="cmd('odoConfig', {restore: 1})">Restore Constants</button>
+    </div>
+    <div class="hint" style="margin-bottom:8px">
+      Pinpoint geometry in <code>Constants.java</code>'s terms: x pod offset = the FORWARD pod's
+      sideways distance from the robot centre (in, left +); y pod offset = the STRAFE pod's forward
+      distance (in, forward +). Starts at Constants.java; Generate constants exports whatever is
+      live. Applying resets the pose and clears the fence.
+    </div>
     <canvas id="fieldCanvas" width="360" height="360"
             style="background:#0c1015;border:1px solid #2b3542;border-radius:6px;display:block;
                    width:100%;max-width:480px"></canvas>
@@ -510,7 +552,7 @@
       <button onclick="cmd('reload')">Reload saved</button>
       <span class="hint">Calibration auto-saves to <code>FIRST/swerve_bringup_cal.txt</code> and survives OpMode restarts.</span>
     </div>
-    <textarea id="export" spellcheck="false" placeholder="Generate constants to paste into SwerveDrivetrainConstants.java"></textarea>
+    <textarea id="export" spellcheck="false" placeholder="Generate constants: Constants.java declarations. Splice them in with  python3 tools/swervetune/robot.py constants --write"></textarea>
   </section>
 </main>
 
@@ -1615,7 +1657,16 @@ function renderField() {
   document.getElementById('poseV').textContent = pose.ok
       ? Math.hypot(pose.vx || 0, pose.vy || 0).toFixed(1) : '--';
   var bs = document.getElementById('boxStat');
-  if (box.valid) {
+  renderOdo();
+  if (box.valid && box.kind === 'border') {
+    bs.textContent = 'border fence: ' + (box.maxX - box.minX).toFixed(1) + ' x '
+        + (box.maxY - box.minY).toFixed(1) + ' in, robot ' + box.robotL + ' x ' + box.robotW;
+  } else if (box.valid && box.kind === 'field') {
+    bs.textContent = 'field fence: ' + (box.maxX - box.minX).toFixed(0) + ' x '
+        + (box.maxY - box.minY).toFixed(0) + ' in, ' + (box.keepOuts || []).length
+        + ' keep-outs' + (box.keepOutClear == null ? ''
+            : ', clearance ' + Number(box.keepOutClear).toFixed(1) + ' in');
+  } else if (box.valid) {
     bs.textContent = 'box: ' + (box.maxX - box.minX).toFixed(0) + ' x '
         + (box.maxY - box.minY).toFixed(0) + ' in (hard limit armed)';
   } else if (box.marked0) {
@@ -1663,6 +1714,30 @@ function renderField() {
                  (box.maxY - box.minY) * scale, (box.maxX - box.minX) * scale);
   }
 
+  // Keep-outs (field fence): the obstacles themselves, plus a dashed ring at the distance the
+  // robot's centre is held off them - its half-diagonal - so "how close can it get" is visible.
+  if (box.valid && box.keepOuts) {
+    var rr = Math.hypot(box.robotL || 18, box.robotW || 18) / 2;
+    box.keepOuts.forEach(function (k) {
+      if (!k.pts || k.pts.length < 3) return;
+      g.beginPath();
+      g.moveTo(sx(k.pts[0][1]), sy(k.pts[0][0]));
+      for (var j = 1; j < k.pts.length; j++) g.lineTo(sx(k.pts[j][1]), sy(k.pts[j][0]));
+      g.closePath();
+      g.fillStyle = 'rgba(246,198,103,0.35)'; g.fill();
+      g.strokeStyle = '#b7791f'; g.lineWidth = 1.5; g.stroke();
+      g.save();
+      g.setLineDash([4, 4]); g.strokeStyle = 'rgba(183,121,31,0.6)'; g.lineWidth = 1;
+      var ring = offsetOutline(k.pts, rr);
+      g.beginPath();
+      g.moveTo(sx(ring[0][1]), sy(ring[0][0]));
+      for (var q = 1; q < ring.length; q++) g.lineTo(sx(ring[q][1]), sy(ring[q][0]));
+      g.closePath();
+      g.stroke();
+      g.restore();
+    });
+  }
+
   if (fieldTrail.length > 1) {
     g.strokeStyle = 'rgba(57,135,229,0.45)'; g.lineWidth = 1.5; g.beginPath();
     g.moveTo(sx(fieldTrail[0][1]), sy(fieldTrail[0][0]));
@@ -1689,6 +1764,96 @@ function renderField() {
     g.fillStyle = VIZ.muted; g.font = '13px sans-serif';
     g.fillText('no pose from the Pinpoint', 14, 20);
   }
+}
+
+// Outline of a convex polygon grown by r (field coords): each edge pushed out along its normal,
+// joined by arcs at the vertices - exactly where the fence holds the robot centre at zero margin.
+function offsetOutline(pts, r) {
+  var n = pts.length, area = 0, out = [];
+  for (var i = 0; i < n; i++) {
+    var a = pts[i], b = pts[(i + 1) % n];
+    area += a[0] * b[1] - b[0] * a[1];
+  }
+  var sgn = area > 0 ? 1 : -1;   // CCW: outward normal of edge (dx, dy) is (dy, -dx)
+  function normal(i) {
+    var a = pts[i], b = pts[(i + 1) % n];
+    var dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy) || 1;
+    return [sgn * dy / len, -sgn * dx / len];
+  }
+  for (var e = 0; e < n; e++) {
+    var p0 = pts[e], p1 = pts[(e + 1) % n], nm = normal(e), nn = normal((e + 1) % n);
+    out.push([p0[0] + nm[0] * r, p0[1] + nm[1] * r]);
+    out.push([p1[0] + nm[0] * r, p1[1] + nm[1] * r]);
+    var a0 = Math.atan2(nm[1], nm[0]), a1 = Math.atan2(nn[1], nn[0]);
+    var da = a1 - a0;
+    while (da > Math.PI) da -= 2 * Math.PI;
+    while (da < -Math.PI) da += 2 * Math.PI;
+    for (var t = 1; t <= 6; t++) {
+      var ang = a0 + da * t / 6;
+      out.push([p1[0] + Math.cos(ang) * r, p1[1] + Math.sin(ang) * r]);
+    }
+  }
+  return out;
+}
+
+function fenceModeChanged() {
+  var border = document.getElementById('ffMode').value === 'border';
+  document.getElementById('ffBorderDims').style.display = border ? '' : 'none';
+  document.getElementById('ffArm').textContent = border ? 'Arm border fence'
+                                                        : 'Arm BIOBUZZ field fence';
+}
+
+function armFieldFence() {
+  var v = function (id) { return document.getElementById(id).value; };
+  var border = v('ffMode') === 'border';
+  if (v('ffX') === '' || v('ffY') === '' || v('ffH') === '') {
+    alertMessage('Enter the robot\'s measured x, y and heading first.');
+    return;
+  }
+  var args = {x: v('ffX'), y: v('ffY'), headingDeg: v('ffH'), robotL: v('ffL'), robotW: v('ffW')};
+  if (border) {
+    if (v('ffBW') === '' || v('ffBH') === '') {
+      alertMessage('Enter the border width and height, inches.');
+      return;
+    }
+    args.width = v('ffBW');
+    args.height = v('ffBH');
+  }
+  cmd(border ? 'borderFence' : 'fieldFence', args);
+}
+
+var odoSeeded = false;
+
+function renderOdo() {
+  var o = state && state.odo;
+  if (!o) return;
+  document.getElementById('odoStat').textContent =
+      Number(o.xPodOffset).toFixed(3) + (o.xPodReversed ? ' R' : ' F') + ' / '
+      + Number(o.yPodOffset).toFixed(3) + (o.yPodReversed ? ' R' : ' F')
+      + (o.shipped ? ' (= Constants)' : ' (DIFFERS from Constants)');
+  document.getElementById('odoStat').style.color = o.shipped ? '' : 'var(--bad)';
+  if (!odoSeeded) {
+    document.getElementById('odoX').value = o.xPodOffset;
+    document.getElementById('odoY').value = o.yPodOffset;
+    document.getElementById('odoXR').checked = !!o.xPodReversed;
+    document.getElementById('odoYR').checked = !!o.yPodReversed;
+    odoSeeded = true;
+  }
+}
+
+function applyOdo() {
+  cmd('odoConfig', {
+    xPodOffset: document.getElementById('odoX').value,
+    yPodOffset: document.getElementById('odoY').value,
+    xPodReversed: document.getElementById('odoXR').checked,
+    yPodReversed: document.getElementById('odoYR').checked
+  });
+  odoSeeded = false;
+}
+
+function alertMessage(text) {
+  var m = document.getElementById('message');
+  if (m) m.textContent = text;
 }
 
 function poll() {

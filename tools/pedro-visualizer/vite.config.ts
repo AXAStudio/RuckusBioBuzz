@@ -124,46 +124,20 @@ function teamCodeConstantsReader(): Plugin {
           res.setHeader("Content-Type", "application/json");
 
           try {
-            const configPath = path.resolve(teamCodePackageDir, "config.jsonc");
-            if (!fs.existsSync(configPath)) {
-              res.statusCode = 404;
-              res.end(
-                JSON.stringify({
-                  error: `No config.jsonc at ${path.relative(repoRoot, configPath)}.`,
-                }),
-              );
-              return;
-            }
-
-            const config = fs.readFileSync(configPath, "utf8");
-            const match = /"drivetrain"\s*:\s*"([a-z]+)"/i.exec(config);
-            const drivetrain = match?.[1]?.toLowerCase();
-
-            if (drivetrain !== "swerve" && drivetrain !== "mecanum") {
-              res.statusCode = 400;
-              res.end(
-                JSON.stringify({
-                  error: `config.jsonc declares drivetrain "${drivetrain ?? ""}"; expected "swerve" or "mecanum".`,
-                }),
-              );
-              return;
-            }
-
-            const className =
-              drivetrain === "swerve"
-                ? "SwerveDrivetrainConstants"
-                : "MecanumDrivetrainConstants";
+            // One constants file, swerve only (config.jsonc and the mecanum file were
+            // removed 2026-10-01).
+            const drivetrain = "swerve";
             const sourcePath = path.resolve(
               teamCodePackageDir,
               "pedroPathing",
-              `${className}.java`,
+              "Constants.java",
             );
 
             if (!fs.existsSync(sourcePath)) {
               res.statusCode = 404;
               res.end(
                 JSON.stringify({
-                  error: `config.jsonc selects "${drivetrain}" but ${path.relative(repoRoot, sourcePath)} does not exist.`,
+                  error: `${path.relative(repoRoot, sourcePath)} does not exist.`,
                 }),
               );
               return;
@@ -285,6 +259,17 @@ function teamCodeAutoWriter(): Plugin {
 
 export default defineConfig({
   plugins: [svelte(), teamCodeAutoWriter(), teamCodeConstantsReader()],
+  server: {
+    fs: {
+      // The BIOBUZZ obstacles are imported from TeamCode's field/ package (shared with the
+      // robot), which is outside this package, so the dev server has to be allowed to serve it.
+      allow: [
+        visualizerDir,
+        path.resolve(repoRoot, "TeamCode", "src", "main", "java", "org", "firstinspires",
+          "ftc", "teamcode", "field"),
+      ],
+    },
+  },
   build: {
     outDir: "dist",
     // Increase chunk size warning limit to 1.2 MB to avoid noisy warnings

@@ -6,7 +6,7 @@ import com.pedropathing.revhub.drivetrains.CoaxialPod;
 import com.pedropathing.revhub.drivetrains.Swerve;
 import com.pedropathing.revhub.drivetrains.SwervePod;
 import org.firstinspires.ftc.teamcode.pedroPathing.PositionalPod;
-import org.firstinspires.ftc.teamcode.pedroPathing.SwerveDrivetrainConstants;
+import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 import com.pedropathing.revhub.drivetrains.SwerveConfig;
 import com.pedropathing.algorithm.ForesightConfig;
 import com.pedropathing.drivetrain.DrivePowers;
@@ -53,7 +53,7 @@ import java.util.Map;
  *
  * <p>The tool deliberately talks to raw {@link DcMotorEx}/{@link CRServo}/{@link AnalogInput}
  * devices for wiring work, so it functions even when the constants in
- * {@code SwerveDrivetrainConstants} are wrong or unknown. Once a pod is calibrated it is driven
+ * {@code Constants} are wrong or unknown. Once a pod is calibrated it is driven
  * through a real {@link CoaxialPod}, so PID tuning and kinematics behave exactly as they will in
  * competition code.
  *
@@ -391,7 +391,7 @@ public class SwerveBringUp extends OpMode {
      * <p>Divergence is legitimate - holding non-shipped gains is what a tuning tool is for - so
      * this reports rather than corrects. What is not legitimate is measuring at gains nobody
      * intended, which is exactly what happened when the calibration file sat at kD 0.010 while
-     * SwerveDrivetrainConstants said 0.022: every number taken through the tool in that window was
+     * Constants said 0.022: every number taken through the tool in that window was
      * at a configuration no one had chosen, and nothing said so.
      *
      * @return one description per differing pod and coefficient, empty when they agree
@@ -401,13 +401,13 @@ public class SwerveBringUp extends OpMode {
         for (int i = 0; i < POD_COUNT; i++) {
             PodCal c = cals[i];
             // Shipped gains are per-pod arrays (ss-indexed, same as this tool's pod index).
-            appendIfDifferent(out, i, "kP", c.kP, SwerveDrivetrainConstants.turnKPPerPod[i]);
-            appendIfDifferent(out, i, "kD", c.kD, SwerveDrivetrainConstants.turnKDPerPod[i]);
-            appendIfDifferent(out, i, "kS", c.kS, SwerveDrivetrainConstants.turnKSPerPod[i]);
+            appendIfDifferent(out, i, "kP", c.kP, Constants.turnKPPerPod[i]);
+            appendIfDifferent(out, i, "kD", c.kD, Constants.turnKDPerPod[i]);
+            appendIfDifferent(out, i, "kS", c.kS, Constants.turnKSPerPod[i]);
             appendIfDifferent(out, i, "kS band", c.kSBandDeg,
-                    SwerveDrivetrainConstants.turnKSBandDegPerPod[i]);
+                    Constants.turnKSBandDegPerPod[i]);
             appendIfDifferent(out, i, "cache", c.servoCaching,
-                    SwerveDrivetrainConstants.turnServoCaching);
+                    Constants.turnServoCaching);
             appendIfDifferent(out, i, "kF", c.kF, 0.0);
             appendIfDifferent(out, i, "kI", c.kI, 0.0);
 
@@ -417,7 +417,7 @@ public class SwerveBringUp extends OpMode {
             // Tolerance is deliberately loose: these are hand-captured and a tenth of a degree of
             // disagreement is not worth shouting about, but tens of degrees is.
             double zeroDeg = Math.toDegrees(c.angleOffsetRad);
-            double shippedZero = SwerveDrivetrainConstants.podZeroDeg[i];
+            double shippedZero = Constants.podZeroDeg[i];
             // Wrap-aware: 359 against 1 is two degrees apart, not 358.
             double zeroGap = Math.abs(((zeroDeg - shippedZero) % 360 + 540) % 360 - 180);
             if (zeroGap > 0.5) {
@@ -427,20 +427,31 @@ public class SwerveBringUp extends OpMode {
                         i, zeroDeg, shippedZero, zeroGap));
             }
             appendIfDifferentTol(out, i, "min V", c.analogMin,
-                    SwerveDrivetrainConstants.podMinV[i], 0.01, "V");
+                    Constants.podMinV[i], 0.01, "V");
             appendIfDifferentTol(out, i, "max V", c.analogMax,
-                    SwerveDrivetrainConstants.podMaxV[i], 0.01, "V");
+                    Constants.podMaxV[i], 0.01, "V");
 
             // Directions too. A flipped drive direction and a wrong zero produce the same
             // haywire drive, and on 2026-08-13 the tool held two direction flips the shipped
             // file knew nothing about - nothing compared them.
-            if (c.driveReversed() != SwerveDrivetrainConstants.podDriveReversed[i]) {
+            if (c.driveReversed() != Constants.podDriveReversed[i]) {
                 out.add(String.format(Locale.US,
                         "pod %d drive direction: tool %s, shipped %s - this corner will push the "
                                 + "wrong way under competition code",
                         i, c.driveReversed() ? "REVERSE" : "FORWARD",
-                        SwerveDrivetrainConstants.podDriveReversed[i] ? "REVERSE" : "FORWARD"));
+                        Constants.podDriveReversed[i] ? "REVERSE" : "FORWARD"));
             }
+        }
+        // Odometry geometry: a live odoConfig that never reached Constants.java means the pose -
+        // and so the fence and every follower run here - is not the one competition code sees.
+        if (!odometryShipped()) {
+            out.add(String.format(Locale.US, "odometry: tool x pod %.3f in %s / y pod %.3f in %s, "
+                            + "Constants.java %.3f %s / %.3f %s - poses here are NOT the ones "
+                            + "competition code will compute",
+                    odoXPodOffset, odoXPodReversed ? "REV" : "FWD",
+                    odoYPodOffset, odoYPodReversed ? "REV" : "FWD",
+                    Constants.pinpointXPodOffset, Constants.pinpointXPodReversed ? "REV" : "FWD",
+                    Constants.pinpointYPodOffset, Constants.pinpointYPodReversed ? "REV" : "FWD"));
         }
         return out;
     }
@@ -592,6 +603,32 @@ public class SwerveBringUp extends OpMode {
     private boolean boxMarked0;
     private boolean boxClampedNow;
 
+    /**
+     * Field fence (2026-10-01). A box armed by {@code fieldFence} is the FIELD - its rect is the
+     * physical perimeter, so the robot's footprint (heading-aware) has to stay inside it rather
+     * than its centre - plus the BIOBUZZ keep-outs from {@code field/biobuzz_field.json}, the
+     * same file the Pedro visualizer draws and checks paths against. A box marked by driving to
+     * two corners keeps the old meaning: a rect the robot CENTRE may occupy, no keep-outs.
+     */
+    private boolean boxBoundary;
+    /** "marked" (corners A/B), "field" (BIOBUZZ perimeter + keep-outs) or "border" (a W x H in
+     *  perimeter the operator defines, no keep-outs). */
+    private String boxKind = "marked";
+    private final List<FenceGeometry.Polygon> keepOuts = new ArrayList<>();
+    /** /state's keep-out list, built once when the fence is armed - not on every publish. */
+    private String keepOutsJson = "[]";
+    /** Robot footprint the field fence protects, inches. Defaults to the FTC 18 in maximum. */
+    private double fenceRobotL = org.firstinspires.ftc.teamcode.modules.zoneCheck.ROBOT_LENGTH;
+    private double fenceRobotW = org.firstinspires.ftc.teamcode.modules.zoneCheck.ROBOT_WIDTH;
+
+    private static final String FIELD_RESOURCE =
+            "/org/firstinspires/ftc/teamcode/field/biobuzz_field.json";
+
+    /** Keep-outs are checked against a circle of the footprint's half-diagonal: any heading. */
+    private double fenceRobotRadius() {
+        return Math.hypot(fenceRobotL, fenceRobotW) / 2;
+    }
+
     private static final File BOX_FILE = new File(AppUtil.FIRST_FOLDER, "swerve_field_box.txt");
 
     /** Wall margin: base plus a braking allowance per in/s of speed toward that wall. */
@@ -633,17 +670,21 @@ public class SwerveBringUp extends OpMode {
      * are checked BEFORE anything moves, robot-side, so no host mistake can repeat that.
      */
     private boolean pedroPointOk(double x, double y) {
+        // A field fence's rect is the perimeter; a path may turn the robot, so its footprint is
+        // taken at its worst heading (the half-diagonal) on top of the margin.
+        double inset = PEDRO_TARGET_MARGIN_IN + (boxBoundary ? fenceRobotRadius() : 0);
         return boxValid
-                && x >= boxMinX + PEDRO_TARGET_MARGIN_IN
-                && x <= boxMaxX - PEDRO_TARGET_MARGIN_IN
-                && y >= boxMinY + PEDRO_TARGET_MARGIN_IN
-                && y <= boxMaxY - PEDRO_TARGET_MARGIN_IN;
+                && x >= boxMinX + inset
+                && x <= boxMaxX - inset
+                && y >= boxMinY + inset
+                && y <= boxMaxY - inset
+                && keepOutClearance(x, y) >= PEDRO_TARGET_MARGIN_IN;
     }
 
     /** Heading PIDF under test. Units match FollowerConstants.headingPIDFCoefficients (radians). */
     // Seeded from what actually ships, so a heading session starts where the robot is rather than
     // where it used to be. These had been left at 1.75/0.003, the pre-tuning values, while
-    // SwerveDrivetrainConstants moved to 1.20/0.030 - so the tool opened on gains the robot had
+    // Constants moved to 1.20/0.030 - so the tool opened on gains the robot had
     // not used since 2026-08-11, and anything measured from that start would have been compared
     // against the wrong baseline. Not persisted, deliberately: the source of truth is
     // FollowerConstants.headingPIDFCoefficients, and a copy that outlived a session would just be
@@ -655,9 +696,72 @@ public class SwerveBringUp extends OpMode {
     // deg worst-case while translating with direction flips. kP above 1.2 bought no settle -
     // the swing is inertia-limited - and only overshoot. Keep in sync with
     // FollowerConstants.headingPIDFCoefficients, same as ever.
-    private double headingKp = 1.20;
+    private double headingKp = Constants.headingKP;
     private double headingKd = 0.080;
     private double headingKf = 0.0;
+
+    /**
+     * Follower gains as this tool last put them on the shared Foresight config: Constants at
+     * init, then pedroPidf. Foresight's controllers are opaque lambdas, so these are the only
+     * readable record of what the follower bench is actually running - and they are what export
+     * writes, never the tool's heading hold.
+     */
+    private double fHeadingKP = Constants.headingKP;
+    private double fFwdPrimKP = Constants.forwardTranslationalPrimaryKP;
+    private double fFwdSecKP = Constants.forwardTranslationalSecondaryKP;
+    private double fStrPrimKP = Constants.strafeTranslationalPrimaryKP;
+    private double fStrSecKP = Constants.strafeTranslationalSecondaryKP;
+    private double fTransKI = Constants.translationalKI;
+    private double fTransKD = Constants.translationalKD;
+    private double fFwdDecel = Constants.naturalForwardDeceleration;
+    private double fStrDecel = Constants.naturalStrafeDeceleration;
+
+    /**
+     * Writes the tracked follower gains onto the shared config. The quadratic brake coefficient
+     * follows a deceleration change while it is still the coast-down derivation 1/(2a) in
+     * Constants - so the bench brakes on the same model the splice will ship - and is left alone
+     * once a Foresight Tuner measurement has replaced it.
+     */
+    private void applyFollowerGains() {
+        ForesightConfig fc = Constants.foresightConfig;
+        fc.headingFeedback.set(com.pedropathing.controllers.Controller.proportional(fHeadingKP));
+        fc.forwardTranslational.set(Constants.translationalController(fFwdPrimKP, fFwdSecKP,
+                fTransKI, fTransKD, Constants.translationalSwitchIn));
+        fc.strafeTranslational.set(Constants.translationalController(fStrPrimKP, fStrSecKP,
+                fTransKI, fTransKD, Constants.translationalSwitchIn));
+        fc.naturalForwardDeceleration.set(fFwdDecel);
+        fc.naturalStrafeDeceleration.set(fStrDecel);
+        boolean fwdDerived = Constants.forwardBrakeQuadratic
+                == 1.0 / (2 * Constants.naturalForwardDeceleration);
+        boolean strDerived = Constants.strafeBrakeQuadratic
+                == 1.0 / (2 * Constants.naturalStrafeDeceleration);
+        fc.quadraticBrakeCoefficients.set(com.pedropathing.math.Matrix.diag(
+                fwdDerived ? 1.0 / (2 * fFwdDecel) : Constants.forwardBrakeQuadratic,
+                strDerived ? 1.0 / (2 * fStrDecel) : Constants.strafeBrakeQuadratic));
+    }
+
+    /** Pinpoint geometry as last written to the device - Constants at init, then odoConfig. */
+    private double odoXPodOffset = Constants.pinpointXPodOffset;
+    private double odoYPodOffset = Constants.pinpointYPodOffset;
+    private boolean odoXPodReversed = Constants.pinpointXPodReversed;
+    private boolean odoYPodReversed = Constants.pinpointYPodReversed;
+
+    /** Writes the tracked odometry geometry to the Pinpoint (does not touch the pose). */
+    private void applyOdometry() {
+        pinpoint.setOffsets(odoXPodOffset, odoYPodOffset, DistanceUnit.INCH);
+        pinpoint.setEncoderDirections(
+                odoXPodReversed ? GoBildaPinpointDriver.EncoderDirection.REVERSED
+                        : GoBildaPinpointDriver.EncoderDirection.FORWARD,
+                odoYPodReversed ? GoBildaPinpointDriver.EncoderDirection.REVERSED
+                        : GoBildaPinpointDriver.EncoderDirection.FORWARD);
+    }
+
+    private boolean odometryShipped() {
+        return odoXPodOffset == Constants.pinpointXPodOffset
+                && odoYPodOffset == Constants.pinpointYPodOffset
+                && odoXPodReversed == Constants.pinpointXPodReversed
+                && odoYPodReversed == Constants.pinpointYPodReversed;
+    }
 
     private double headingTargetRad;
     private boolean headingClosedLoop;
@@ -806,7 +910,8 @@ public class SwerveBringUp extends OpMode {
 
     @Override
     public void init() {
-        // Defaults mirror SwerveDrivetrainConstants: index 2 = LF, 1 = RF, 3 = LB, 0 = RB.
+        restoreShippedStatics();
+        // Defaults mirror Constants: index 2 = LF, 1 = RF, 3 = LB, 0 = RB.
         double dtLength = 146.420;
         double dtWidth = 154.240;
         cals[0] = new PodCal(0, "RB", -dtLength, -dtWidth);
@@ -842,14 +947,15 @@ public class SwerveBringUp extends OpMode {
         }
 
         try {
-            pinpoint = hardwareMap.get(GoBildaPinpointDriver.class, "pinpoint");
+            pinpoint = hardwareMap.get(GoBildaPinpointDriver.class,
+                    Constants.pinpointConfig.name.get());
             // Same configuration the competition localizer applies, referenced from the same
             // constants object so the two can never quietly disagree. Configuring does NOT
             // reset the pose - continuity across OpMode restarts is what makes a saved box
             // survive a redeploy. resetImu is the deliberate way to re-origin.
             // Mirrors PinpointLocalizer's constructor, minus its reset().
             com.pedropathing.revhub.localizers.PinpointConfig pc =
-                    SwerveDrivetrainConstants.pinpointConfig;
+                    Constants.pinpointConfig;
             pinpoint.setOffsets(pc.xPodOffset.get(), pc.yPodOffset.get(), pc.offsetUnits.get());
             if (pc.ticksPerUnit.get().isPresent()) {
                 pinpoint.setEncoderResolution(pc.ticksPerUnit.get().getAsDouble(),
@@ -904,7 +1010,62 @@ public class SwerveBringUp extends OpMode {
     public void stop() {
         allStop();
         restorePedroSpeedCap();
+        restoreShippedStatics();
         SwerveBench.INSTANCE.markStopped();
+    }
+
+    // Vendored defaults (third_party/.../Swerve.java and CoaxialPod.java). Keep in step with them.
+    private static final boolean VENDORED_EPSILON_TAPER = true;
+    private static final double VENDORED_DEMAND_SLEW_DEG_S = 214.0;
+    private static final double VENDORED_SCHED_FLOOR = 0.24;
+    private static final double VENDORED_SCHED_VEL_START_RAD_S = Math.toRadians(22);
+    private static final double VENDORED_SCHED_ERR_GATE_RAD = Math.toRadians(20);
+    private static final double VENDORED_SCHED_RAMP_DRIVE = 0.10;
+
+    /**
+     * Puts every process-wide setting this tool can change back to what the installed build
+     * ships: the Foresight gains on Constants.foresightConfig (pedroPidf), the mixer (setMixer)
+     * and the turn-gain schedule. They are statics, so without this they outlive the OpMode - an
+     * auto started after a tuning session, with no redeploy in between, would run on whatever
+     * the session left, and so would this tool's own pods=shipped acceptance run. Called at init
+     * (a previous run may have died without stop) and at stop.
+     */
+    private void restoreShippedStatics() {
+        fHeadingKP = Constants.headingKP;
+        fFwdPrimKP = Constants.forwardTranslationalPrimaryKP;
+        fFwdSecKP = Constants.forwardTranslationalSecondaryKP;
+        fStrPrimKP = Constants.strafeTranslationalPrimaryKP;
+        fStrSecKP = Constants.strafeTranslationalSecondaryKP;
+        fTransKI = Constants.translationalKI;
+        fTransKD = Constants.translationalKD;
+        fFwdDecel = Constants.naturalForwardDeceleration;
+        fStrDecel = Constants.naturalStrafeDeceleration;
+        applyFollowerGains();
+        Swerve.setEpsilonTaper(VENDORED_EPSILON_TAPER);
+        Swerve.setDemandSlewDegPerSec(VENDORED_DEMAND_SLEW_DEG_S);
+        CoaxialPod.setScheduleTuning(VENDORED_SCHED_FLOOR, VENDORED_SCHED_VEL_START_RAD_S,
+                VENDORED_SCHED_ERR_GATE_RAD);
+        CoaxialPod.setScheduleRamp(VENDORED_SCHED_RAMP_DRIVE);
+    }
+
+    private boolean followerGainsShipped() {
+        return fHeadingKP == Constants.headingKP
+                && fFwdPrimKP == Constants.forwardTranslationalPrimaryKP
+                && fFwdSecKP == Constants.forwardTranslationalSecondaryKP
+                && fStrPrimKP == Constants.strafeTranslationalPrimaryKP
+                && fStrSecKP == Constants.strafeTranslationalSecondaryKP
+                && fTransKI == Constants.translationalKI && fTransKD == Constants.translationalKD
+                && fFwdDecel == Constants.naturalForwardDeceleration
+                && fStrDecel == Constants.naturalStrafeDeceleration;
+    }
+
+    /** True while the mixer and schedule are exactly what ships. */
+    private boolean staticsShipped() {
+        double[] sch = CoaxialPod.getScheduleTuning();
+        return Swerve.getEpsilonTaper() == VENDORED_EPSILON_TAPER
+                && Swerve.getDemandSlewDegPerSec() == VENDORED_DEMAND_SLEW_DEG_S
+                && sch[0] == VENDORED_SCHED_FLOOR && sch[1] == VENDORED_SCHED_VEL_START_RAD_S
+                && sch[2] == VENDORED_SCHED_ERR_GATE_RAD;
     }
 
     /** Shared body so the dashboard is fully usable during init, before START is pressed. */
@@ -979,18 +1140,24 @@ public class SwerveBringUp extends OpMode {
             return;
         }
 
+        // While the follower drives, the pods that matter are ITS pods, and the tool's own
+        // mixer mirror (targetTheta) is stale - so tgt is blanked and err/pwr/flip/ctgt come
+        // from the follower's pods. That is what lets a Pedro run be scored on pod tracking.
+        boolean following = mode == Mode.FOLLOW && pedro != null && pedroPods != null;
+        SwervePod[] src = following ? pedroPods : pods;
         for (int i = 0; i < POD_COUNT; i++) {
             PodCal c = cals[i];
             recWheel[i] = Double.isNaN(volts[i])
                     ? Double.NaN
                     : Math.toDegrees(c.wheelThetaFromEncoder(c.zeroedAngleRad(volts[i])));
-            recTarget[i] = Double.isNaN(targetTheta[i])
+            recTarget[i] = following || Double.isNaN(targetTheta[i])
                     ? Double.NaN
                     : Math.toDegrees(normalizeTwoPi(targetTheta[i]));
 
             recCmdTarget[i] = Double.NaN;
-            if (podMoved[i] && pods != null && pods[i] instanceof CoaxialPod) {
-                CoaxialPod cp = (CoaxialPod) pods[i];
+            boolean moved = following || podMoved[i];
+            if (moved && src != null && src[i] instanceof CoaxialPod) {
+                CoaxialPod cp = (CoaxialPod) src[i];
                 recError[i] = Math.toDegrees(cp.getLastErrorRad());
                 recFlipped[i] = cp.wasLastMoveFlipped();
                 servoCmd[i] = cp.getLastTurnPower();
@@ -998,11 +1165,11 @@ public class SwerveBringUp extends OpMode {
                 double ct = cp.getLastTargetWheelRad();
                 recCmdTarget[i] = Double.isNaN(ct) ? Double.NaN
                         : Math.toDegrees(normalizeTwoPi(ct));
-            } else if (podMoved[i] && pods != null && pods[i] instanceof PositionalPod) {
+            } else if (moved && src != null && src[i] instanceof PositionalPod) {
                 // Same error convention so one scorer reads both. Turn power is NaN by
                 // construction - a positional pod has none - and everything downstream that keys
                 // on it is meaningless here, which is why criterion 8 moved to holding current.
-                PositionalPod pp = (PositionalPod) pods[i];
+                PositionalPod pp = (PositionalPod) src[i];
                 recError[i] = Math.toDegrees(pp.getLastErrorRad());
                 recFlipped[i] = pp.wasLastMoveFlipped();
                 servoCmd[i] = pp.getLastTurnPower();
@@ -1019,7 +1186,37 @@ public class SwerveBringUp extends OpMode {
                 poseOk ? poseXIn : Double.NaN,
                 poseOk ? poseYIn : Double.NaN,
                 // Post-fence, post-field-rotation robot frame: what actually drove the pods.
-                appliedForward, appliedStrafe, appliedTurn);
+                appliedForward, appliedStrafe, appliedTurn,
+                following ? followerSample() : null);
+    }
+
+    private final double[] followSample = new double[PodRecorder.FOLLOW_COLS];
+
+    /**
+     * {fterr in, fherr deg, closest-point x, y, path heading deg, target velocity in/s, busy}
+     * from Foresight, the numbers a Pedro validation is scored on. NaN where unavailable.
+     */
+    private double[] followerSample() {
+        java.util.Arrays.fill(followSample, Double.NaN);
+        try {
+            com.pedropathing.algorithm.Algorithm a = pedro.algorithm();
+            if (a instanceof com.pedropathing.algorithm.Foresight) {
+                com.pedropathing.algorithm.Foresight f = (com.pedropathing.algorithm.Foresight) a;
+                followSample[0] = f.translationalError();
+                followSample[1] = Math.toDegrees(f.headingError());
+                followSample[5] = f.targetVelocity();
+            }
+            if (pedro.following()) {
+                com.pedropathing.math.Pose cp = pedro.closestPose();
+                followSample[2] = cp.x();
+                followSample[3] = cp.y();
+                followSample[4] = Math.toDegrees(cp.heading());
+            }
+            followSample[6] = pedro.isBusy() ? 1 : 0;
+        } catch (RuntimeException e) {
+            // A follower between jobs can have no closest point; leave the row NaN.
+        }
+        return followSample;
     }
 
     // ---------------------------------------------------------------- hardware
@@ -1316,6 +1513,20 @@ public class SwerveBringUp extends OpMode {
             w = new FileWriter(BOX_FILE, false);
             w.write("# Field bounding box, inches, Pinpoint frame. minX|minY|maxX|maxY\n");
             w.write(boxMinX + "|" + boxMinY + "|" + boxMaxX + "|" + boxMaxY + "\n");
+            if (boxBoundary) {
+                // Field fence: the rect is the perimeter, and the keep-outs that were armed with
+                // it travel with it, so a reload enforces exactly what the operator verified.
+                w.write("# field/border fence: rect is the perimeter. robot|lengthIn|widthIn\n");
+                w.write("kind|" + boxKind + "\n");
+                w.write("robot|" + fenceRobotL + "|" + fenceRobotW + "\n");
+                for (FenceGeometry.Polygon k : keepOuts) {
+                    StringBuilder pts = new StringBuilder();
+                    for (int i = 0; i < k.xs.length; i++) {
+                        pts.append(i == 0 ? "" : ";").append(k.xs[i]).append(',').append(k.ys[i]);
+                    }
+                    w.write("keepout|" + k.name.replace('|', '/') + "|" + pts + "\n");
+                }
+            }
             // Frame witness: where the robot stood when this box was written. A box is only a
             // fence if the frame it was marked in is still the frame the Pinpoint is reporting,
             // and nothing else on the hub records which frame that was.
@@ -1338,12 +1549,34 @@ public class SwerveBringUp extends OpMode {
         try {
             r = new BufferedReader(new FileReader(BOX_FILE));
             String line;
+            boxBoundary = false;
+            boxKind = "marked";
+            keepOuts.clear();
             while ((line = r.readLine()) != null) {
                 if (line.startsWith("#") || line.trim().isEmpty()) {
                     continue;
                 }
                 String[] p = line.split("\\|");
-                if (p.length >= 4 && "witness".equals(p[0])) {
+                if (p.length >= 2 && "kind".equals(p[0])) {
+                    boxKind = p[1].trim();
+                } else if (p.length >= 3 && "robot".equals(p[0])) {
+                    fenceRobotL = Double.parseDouble(p[1]);
+                    fenceRobotW = Double.parseDouble(p[2]);
+                    boxBoundary = true;
+                    if ("marked".equals(boxKind)) {
+                        boxKind = "field";   // a file written before the kind line existed
+                    }
+                } else if (p.length >= 3 && "keepout".equals(p[0])) {
+                    String[] pts = p[2].split(";");
+                    double[] xs = new double[pts.length];
+                    double[] ys = new double[pts.length];
+                    for (int i = 0; i < pts.length; i++) {
+                        String[] xy = pts[i].split(",");
+                        xs[i] = Double.parseDouble(xy[0]);
+                        ys[i] = Double.parseDouble(xy[1]);
+                    }
+                    keepOuts.add(new FenceGeometry.Polygon(p[1], xs, ys));
+                } else if (p.length >= 4 && "witness".equals(p[0])) {
                     boxWitnessX = Double.parseDouble(p[1]);
                     boxWitnessY = Double.parseDouble(p[2]);
                     boxWitnessHeadingRad = Double.parseDouble(p[3]);
@@ -1357,11 +1590,126 @@ public class SwerveBringUp extends OpMode {
                     boxNeedsFrameCheck = true;
                 }
             }
-        } catch (IOException | NumberFormatException e) {
+        } catch (IOException | RuntimeException e) {
+            // A half-read fence is worse than none: a perimeter without its keep-outs would
+            // happily steer into a HIVE rail.
             boxValid = false;
+            boxBoundary = false;
+            boxKind = "marked";
+            keepOuts.clear();
         } finally {
             closeQuietly(r);
         }
+        keepOutsJson = buildKeepOutsJson();
+    }
+
+    /** Back to a plain marked box: centre-in-rect, no keep-outs. */
+    private void setMarkedFence() {
+        boxBoundary = false;
+        boxKind = "marked";
+        keepOuts.clear();
+        keepOutsJson = "[]";
+    }
+
+    private String buildKeepOutsJson() {
+        StringBuilder sb = new StringBuilder("[");
+        for (int k = 0; k < keepOuts.size(); k++) {
+            FenceGeometry.Polygon poly = keepOuts.get(k);
+            sb.append(k == 0 ? "" : ",").append("{\"name\":\"").append(esc(poly.name))
+                    .append("\",\"pts\":[");
+            for (int i = 0; i < poly.xs.length; i++) {
+                sb.append(i == 0 ? "" : ",").append('[').append(fmt(poly.xs[i])).append(',')
+                        .append(fmt(poly.ys[i])).append(']');
+            }
+            sb.append("]}");
+        }
+        return sb.append(']').toString();
+    }
+
+    /**
+     * The BIOBUZZ field from {@code field/biobuzz_field.json}, bundled into the APK through
+     * TeamCode's resources srcDir: {size, keep-outs}. The same file the visualizer imports, so
+     * the fence and the path editor can never disagree about where a rail is.
+     */
+    private double loadFieldKeepOuts(List<FenceGeometry.Polygon> out) throws IOException {
+        java.io.InputStream in = SwerveBringUp.class.getResourceAsStream(FIELD_RESOURCE);
+        if (in == null) {
+            throw new IOException(FIELD_RESOURCE + " is not on the classpath");
+        }
+        try {
+            java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream();
+            byte[] chunk = new byte[4096];
+            int n;
+            while ((n = in.read(chunk)) != -1) {
+                buf.write(chunk, 0, n);
+            }
+            org.json.JSONObject field = new org.json.JSONObject(buf.toString("UTF-8"));
+            org.json.JSONArray obs = field.getJSONArray("obstacles");
+            for (int i = 0; i < obs.length(); i++) {
+                org.json.JSONObject o = obs.getJSONObject(i);
+                org.json.JSONArray vs = o.getJSONArray("vertices");
+                double[] xs = new double[vs.length()];
+                double[] ys = new double[vs.length()];
+                for (int j = 0; j < vs.length(); j++) {
+                    xs[j] = vs.getJSONObject(j).getDouble("x");
+                    ys[j] = vs.getJSONObject(j).getDouble("y");
+                }
+                out.add(new FenceGeometry.Polygon(o.optString("name", o.optString("id")), xs, ys));
+            }
+            return field.getDouble("size");
+        } catch (org.json.JSONException e) {
+            throw new IOException("bad " + FIELD_RESOURCE + ": " + e.getMessage(), e);
+        } finally {
+            in.close();
+        }
+    }
+
+    /** Walls the robot CENTRE must stay inside: {minX, minY, maxX, maxY}. */
+    private double[] centreBounds(double heading) {
+        if (!boxBoundary) {
+            return new double[] {boxMinX, boxMinY, boxMaxX, boxMaxY};
+        }
+        double rx = FenceGeometry.reachX(fenceRobotL, fenceRobotW, heading);
+        double ry = FenceGeometry.reachY(fenceRobotL, fenceRobotW, heading);
+        return new double[] {boxMinX + rx, boxMinY + ry, boxMaxX - rx, boxMaxY - ry};
+    }
+
+    /** Clearance from the robot circle to the nearest keep-out, inches (infinite with none). */
+    private double keepOutClearance(double x, double y) {
+        return keepOuts.isEmpty() ? Double.POSITIVE_INFINITY
+                : FenceGeometry.clearance(keepOuts, x, y) - fenceRobotRadius();
+    }
+
+    /**
+     * Keep-out check for a follower path, as Bezier control points (a line is two). Returns
+     * null when clear, else a refusal naming the obstacle.
+     */
+    private String pedroPathRefusal(double[][] cps) {
+        if (keepOuts.isEmpty()) {
+            return null;
+        }
+        double clear = FenceGeometry.bezierClearance(keepOuts, cps, 96) - fenceRobotRadius();
+        if (clear >= PEDRO_TARGET_MARGIN_IN) {
+            return null;
+        }
+        double worstX = cps[0][0];
+        double worstY = cps[0][1];
+        double worst = Double.POSITIVE_INFINITY;
+        for (int s = 0; s <= 96; s++) {
+            double[] pt = FenceGeometry.bezier(cps, s / 96.0);
+            double c = FenceGeometry.clearance(keepOuts, pt[0], pt[1]);
+            if (c < worst) {
+                worst = c;
+                worstX = pt[0];
+                worstY = pt[1];
+            }
+        }
+        FenceGeometry.Polygon near = FenceGeometry.nearest(keepOuts, worstX, worstY);
+        return String.format(Locale.US,
+                "REFUSED: the path passes %.1f in from %s near (%.1f, %.1f) - the robot (%.1f in "
+                        + "half-diagonal) needs %.0f in of margin. Nothing moved.",
+                clear, near == null ? "a keep-out" : near.name, worstX, worstY,
+                fenceRobotRadius(), PEDRO_TARGET_MARGIN_IN);
     }
 
     /**
@@ -1386,14 +1734,7 @@ public class SwerveBringUp extends OpMode {
      * the hard margin. Smoothstep, so both the value and its slope are continuous at each end.
      */
     private static double outwardScale(double slackIn) {
-        if (slackIn <= 0) {
-            return 0.0;
-        }
-        if (slackIn >= BOX_TAPER_IN) {
-            return 1.0;
-        }
-        double u = slackIn / BOX_TAPER_IN;
-        return u * u * (3.0 - 2.0 * u);
+        return FenceGeometry.taper(slackIn, BOX_TAPER_IN);
     }
 
     private double[] applyBoxLimit(double forward, double strafe) {
@@ -1413,6 +1754,8 @@ public class SwerveBringUp extends OpMode {
         double vx = forward * ch - strafe * sh;
         double vy = forward * sh + strafe * ch;
 
+        double[] cb = centreBounds(headingRad);
+        double cMinX = cb[0], cMinY = cb[1], cMaxX = cb[2], cMaxY = cb[3];
         double hiX = BOX_MARGIN_BASE_IN + Math.max(0, poseVxIn) * BOX_MARGIN_LOOKAHEAD_S;
         double loX = BOX_MARGIN_BASE_IN + Math.max(0, -poseVxIn) * BOX_MARGIN_LOOKAHEAD_S;
         double hiY = BOX_MARGIN_BASE_IN + Math.max(0, poseVyIn) * BOX_MARGIN_LOOKAHEAD_S;
@@ -1425,25 +1768,39 @@ public class SwerveBringUp extends OpMode {
         // advancing, unclamp, clamp. The taper keeps the fence hard at the wall (the factor
         // reaches 0 at exactly the same place) and makes the approach continuous.
         boolean clamped = false;
-        double fx = outwardScale(boxMaxX - hiX - poseXIn);
+        double fx = outwardScale(cMaxX - hiX - poseXIn);
         if (vx > 0 && fx < 1.0) {
             vx *= fx;
             clamped = true;
         }
-        double fxLo = outwardScale(poseXIn - (boxMinX + loX));
+        double fxLo = outwardScale(poseXIn - (cMinX + loX));
         if (vx < 0 && fxLo < 1.0) {
             vx *= fxLo;
             clamped = true;
         }
-        double fy = outwardScale(boxMaxY - hiY - poseYIn);
+        double fy = outwardScale(cMaxY - hiY - poseYIn);
         if (vy > 0 && fy < 1.0) {
             vy *= fy;
             clamped = true;
         }
-        double fyLo = outwardScale(poseYIn - (boxMinY + loY));
+        double fyLo = outwardScale(poseYIn - (cMinY + loY));
         if (vy < 0 && fyLo < 1.0) {
             vy *= fyLo;
             clamped = true;
+        }
+        // Keep-outs: the same taper and margin, along each obstacle's own normal instead of a
+        // field axis, against the robot's half-diagonal circle. Applied after the walls so a
+        // rail near a wall cannot be escaped by the wall clamp re-adding what it removed - each
+        // clamp only ever shrinks the component pointing at its own obstacle.
+        for (FenceGeometry.Polygon k : keepOuts) {
+            double[] kv = FenceGeometry.clampKeepOut(k, poseXIn, poseYIn, vx, vy,
+                    poseVxIn, poseVyIn, fenceRobotRadius(), BOX_MARGIN_BASE_IN,
+                    BOX_MARGIN_LOOKAHEAD_S, BOX_TAPER_IN);
+            if (kv[2] != 0) {
+                vx = kv[0];
+                vy = kv[1];
+                clamped = true;
+            }
         }
         boxClampedNow = clamped;
         if (!clamped) {
@@ -2590,12 +2947,45 @@ public class SwerveBringUp extends OpMode {
 
     // ---------------------------------------------------------------- pedro follower bench
 
-    private void ensurePedro() {
-        if (pedro == null) {
-            pedro = SwerveDrivetrainConstants.createFollower(hardwareMap);
-            pedro.setPose(new com.pedropathing.math.Pose(poseXIn, poseYIn, headingRad));
-            pedro.update();
+    /**
+     * Which pods the follower bench drives.
+     *
+     * <p>{@code shipped}: {@link Constants#createFollower} as it stands in the installed build -
+     * the acceptance test, because it is byte-for-byte what an auto runs. {@code live}: the same
+     * Follower, Foresight config and shipped SwerveConfig, but the four pods built from this
+     * tool's live calibration ({@link PodCal#toSwervePod}) - so pod gains, zeros and ranges
+     * tuned here are exercised by the REAL path follower before anyone exports or deploys them.
+     * The tool's own drive and step tests run a different control law above the pods (its own
+     * mixer config, its own heading hold); only the follower validates what a match does.
+     */
+    private boolean pedroLivePods;
+
+    /** The follower's pods, by servo number, so the recorder can log them while following. */
+    private SwervePod[] pedroPods;
+
+    private void buildPedro(boolean livePods) {
+        if (pedro != null) {
+            pedroBreak();
+            pedro = null;
         }
+        pedroPods = new SwervePod[POD_COUNT];
+        if (livePods) {
+            for (int i = 0; i < POD_COUNT; i++) {
+                pedroPods[i] = cals[i].toSwervePod(hardwareMap);
+            }
+            // Same pod order as Constants.createSwerve: leftFront ss2, rightFront ss1,
+            // leftBack ss3, rightBack ss0.
+            pedro = new com.pedropathing.follower.Follower(Constants.createLocalizer(hardwareMap),
+                    new Swerve(hardwareMap, Constants.swerveConfig, pedroPods[2], pedroPods[1],
+                            pedroPods[3], pedroPods[0]),
+                    new com.pedropathing.algorithm.Foresight(Constants.foresightConfig));
+        } else {
+            pedro = Constants.createFollower(hardwareMap);
+            System.arraycopy(Constants.builtPods, 0, pedroPods, 0, POD_COUNT);
+        }
+        pedroLivePods = livePods;
+        pedro.setPose(new com.pedropathing.math.Pose(poseXIn, poseYIn, headingRad));
+        pedro.update();
     }
 
     /**
@@ -2618,7 +3008,7 @@ public class SwerveBringUp extends OpMode {
     private double pedroSavedMaxPathSpeed = Double.NaN;
 
     private void setPedroSpeedCap(double fraction) {
-        ForesightConfig fc = SwerveDrivetrainConstants.foresightConfig;
+        ForesightConfig fc = Constants.foresightConfig;
         if (Double.isNaN(pedroSavedMaxPathSpeed)) {
             pedroSavedMaxPathSpeed = fc.maxPathSpeed.get();
         }
@@ -2627,7 +3017,7 @@ public class SwerveBringUp extends OpMode {
 
     private void restorePedroSpeedCap() {
         if (!Double.isNaN(pedroSavedMaxPathSpeed)) {
-            SwerveDrivetrainConstants.foresightConfig.maxPathSpeed.set(pedroSavedMaxPathSpeed);
+            Constants.foresightConfig.maxPathSpeed.set(pedroSavedMaxPathSpeed);
             pedroSavedMaxPathSpeed = Double.NaN;
         }
     }
@@ -2659,15 +3049,23 @@ public class SwerveBringUp extends OpMode {
             message = "Pose unreadable while following - broken off and stopped.";
             return;
         }
-        if (boxValid && (poseXIn < boxMinX || poseXIn > boxMaxX
-                || poseYIn < boxMinY || poseYIn > boxMaxY)) {
+        double[] cb = boxValid ? centreBounds(headingRad) : null;
+        if (boxValid && (poseXIn < cb[0] || poseXIn > cb[2]
+                || poseYIn < cb[1] || poseYIn > cb[3]
+                || keepOutClearance(poseXIn, poseYIn) < 0)) {
             if (!pedroBreach) {
                 pedroBreach = true;
                 pedroBreachTimer.reset();
-                double hx = Math.max(boxMinX + PEDRO_TARGET_MARGIN_IN,
-                        Math.min(boxMaxX - PEDRO_TARGET_MARGIN_IN, poseXIn));
-                double hy = Math.max(boxMinY + PEDRO_TARGET_MARGIN_IN,
-                        Math.min(boxMaxY - PEDRO_TARGET_MARGIN_IN, poseYIn));
+                double hx = Math.max(cb[0] + PEDRO_TARGET_MARGIN_IN,
+                        Math.min(cb[2] - PEDRO_TARGET_MARGIN_IN, poseXIn));
+                double hy = Math.max(cb[1] + PEDRO_TARGET_MARGIN_IN,
+                        Math.min(cb[3] - PEDRO_TARGET_MARGIN_IN, poseYIn));
+                if (!keepOuts.isEmpty()) {
+                    double[] out = FenceGeometry.pushOut(keepOuts, hx, hy,
+                            fenceRobotRadius() + PEDRO_TARGET_MARGIN_IN);
+                    hx = out[0];
+                    hy = out[1];
+                }
                 pedro.hold(new com.pedropathing.math.Pose(hx, hy, headingRad));
                 pedroJob = "BREACH-recovery";
                 message = "Follower hit the fence - braking back inside.";
@@ -2939,15 +3337,17 @@ public class SwerveBringUp extends OpMode {
                 boolean bad = false;
                 for (String segText : segTexts) {
                     String[] ptTexts = segText.split(";");
-                    if (ptTexts.length != 4) {
-                        message = "pedroChain: each segment needs 4 control points, got "
+                    // 2 points is a line; more is a Bezier of that degree - the visualizer's
+                    // paths are usually degree 3-4, and pathdesign.py's are cubic.
+                    if (ptTexts.length < 2 || ptTexts.length > 12) {
+                        message = "pedroChain: each segment needs 2-12 control points, got "
                                 + ptTexts.length;
                         bad = true;
                         break;
                     }
                     com.pedropathing.math.Pose[] cps =
-                            new com.pedropathing.math.Pose[4];
-                    for (int i = 0; i < 4; i++) {
+                            new com.pedropathing.math.Pose[ptTexts.length];
+                    for (int i = 0; i < ptTexts.length; i++) {
                         String[] xy = ptTexts[i].split(",");
                         double px = Double.parseDouble(xy[0]);
                         double py = Double.parseDouble(xy[1]);
@@ -2964,6 +3364,16 @@ public class SwerveBringUp extends OpMode {
                     if (bad) {
                         break;
                     }
+                    double[][] segPts = new double[cps.length][];
+                    for (int i = 0; i < cps.length; i++) {
+                        segPts[i] = new double[] {cps[i].x(), cps[i].y()};
+                    }
+                    String segRefusal = pedroPathRefusal(segPts);
+                    if (segRefusal != null) {
+                        message = "Segment " + (segs.size() + 1) + ": " + segRefusal;
+                        bad = true;
+                        break;
+                    }
                     segs.add(cps);
                 }
                 if (bad) {
@@ -2973,10 +3383,26 @@ public class SwerveBringUp extends OpMode {
                         new com.pedropathing.paths.Path[segs.size()];
                 for (int i = 0; i < segs.size(); i++) {
                     com.pedropathing.math.Pose[] c = segs.get(i);
-                    com.pedropathing.paths.Path seg =
-                            com.pedropathing.api.Paths.curve(c[0], c[1], c[2], c[3]);
+                    com.pedropathing.paths.Path seg = c.length == 2
+                            ? com.pedropathing.api.Paths.line(c[0], c[1])
+                            : com.pedropathing.api.Paths.curve(c);
                     String head = i < headTexts.length ? headTexts[i] : "tangent";
-                    if (head.startsWith("constant")) {
+                    if (head.startsWith("param")) {
+                        // param:startDeg:endDeg:curve - the visualizer's own interpolation, on
+                        // the curve parameter t shaped by t^curve, exactly as an exported auto's
+                        // headingInterpolator does. Pedro's linear() interpolates on distance
+                        // instead, so a visualizer path run with linear is a different path.
+                        String[] parts = head.split(":");
+                        final double h0 = Math.toRadians(Double.parseDouble(parts[1]));
+                        double h1 = Math.toRadians(Double.parseDouble(parts[2]));
+                        final double shape = Math.max(0.25, Math.min(4.0,
+                                parts.length > 3 ? Double.parseDouble(parts[3]) : 1.0));
+                        final double dH = Angle.normalizeSigned(h1 - h0);
+                        seg = seg.heading((curve, t) -> Angle.normalizeSigned(
+                                h0 + dH * Math.pow(Math.max(0, Math.min(1, t)), shape)));
+                    } else if (head.startsWith("reverseTangent")) {
+                        seg = seg.heading(com.pedropathing.paths.interpolator.Interpolator.tangent.reverse());
+                    } else if (head.startsWith("constant")) {
                         double deg = head.contains(":")
                                 ? Double.parseDouble(head.substring(head.indexOf(':') + 1))
                                 : Math.toDegrees(headingRad);
@@ -3376,18 +3802,28 @@ public class SwerveBringUp extends OpMode {
                     break;
                 }
                 act = "all";
+                String podsArg = cmd.get("pods") == null ? "shipped" : cmd.get("pods");
+                if (!"shipped".equals(podsArg) && !"live".equals(podsArg)) {
+                    message = "pedroStart pods= must be shipped or live.";
+                    break;
+                }
                 pedroBreach = false;
                 try {
-                    ensurePedro();
+                    // Always a fresh follower: a live-pod build has to pick up every setPidf
+                    // since the last one, and no controller state survives between runs.
+                    buildPedro("live".equals(podsArg));
                 } catch (RuntimeException e) {
                     pedro = null;
+                    pedroPods = null;
                     message = "Follower build failed: " + e.getMessage();
                     break;
                 }
                 setMode(Mode.FOLLOW);
                 pedro.hold(pedro.pose());
                 pedroJob = "hold";
-                message = "Pedro follower active: " + act + ".";
+                message = "Pedro follower active: " + act + ", pods=" + podsArg
+                        + (pedroLivePods ? " (this tool's live calibration)."
+                                : " (Constants.java as installed).");
                 break;
             }
             case "pedroLine": {
@@ -3403,9 +3839,15 @@ public class SwerveBringUp extends OpMode {
                         cur.x() + dx, cur.y() + dy, cur.heading());
                 if (!pedroPointOk(tgt.x(), tgt.y())) {
                     message = String.format(Locale.US,
-                            "REFUSED: line target (%.1f, %.1f) is outside the box minus %.0f in "
-                                    + "margin. Nothing moved.",
+                            "REFUSED: line target (%.1f, %.1f) is outside the fence minus %.0f "
+                                    + "in margin. Nothing moved.",
                             tgt.x(), tgt.y(), PEDRO_TARGET_MARGIN_IN);
+                    break;
+                }
+                String lineRefusal = pedroPathRefusal(
+                        new double[][] {{cur.x(), cur.y()}, {tgt.x(), tgt.y()}});
+                if (lineRefusal != null) {
+                    message = lineRefusal;
                     break;
                 }
                 com.pedropathing.paths.Path p =
@@ -3423,19 +3865,23 @@ public class SwerveBringUp extends OpMode {
                 }
                 double dx = doubleArg(cmd, "dx", 0);
                 double dy = doubleArg(cmd, "dy", 0);
+                // dh: a heading change in degrees, held at the target point - Foresight's own
+                // heading controller doing the turn, which is what validates headingKP.
+                double dh = Math.toRadians(doubleArg(cmd, "dh", 0));
                 com.pedropathing.math.Pose cur = pedro.pose();
                 double hxT = cur.x() + dx;
                 double hyT = cur.y() + dy;
                 if (!pedroPointOk(hxT, hyT)) {
                     message = String.format(Locale.US,
-                            "REFUSED: hold point (%.1f, %.1f) is outside the box minus %.0f in "
-                                    + "margin. Nothing moved.",
+                            "REFUSED: hold point (%.1f, %.1f) is outside the fence minus %.0f "
+                                    + "in margin. Nothing moved.",
                             hxT, hyT, PEDRO_TARGET_MARGIN_IN);
                     break;
                 }
-                pedro.hold(new com.pedropathing.math.Pose(hxT, hyT, cur.heading()));
+                pedro.hold(new com.pedropathing.math.Pose(hxT, hyT, cur.heading() + dh));
                 pedroJob = "hold";
-                message = String.format(Locale.US, "Holding %+.1f, %+.1f from here.", dx, dy);
+                message = String.format(Locale.US, "Holding %+.1f, %+.1f, %+.1f deg from here.",
+                        dx, dy, Math.toDegrees(dh));
                 break;
             }
             case "pedroCurve": {
@@ -3467,6 +3913,12 @@ public class SwerveBringUp extends OpMode {
                             c1.x(), c1.y(), c2.x(), c2.y(), PEDRO_TARGET_MARGIN_IN);
                     break;
                 }
+                String curveRefusal = pedroPathRefusal(new double[][] {
+                        {cur.x(), cur.y()}, {c1.x(), c1.y()}, {c2.x(), c2.y()}});
+                if (curveRefusal != null) {
+                    message = curveRefusal;
+                    break;
+                }
                 com.pedropathing.paths.Path p =
                         com.pedropathing.api.Paths.curve(cur, c1, c2).constant(h);
                 setPedroSpeedCap(Math.max(0.1, Math.min(1.0, power)));
@@ -3476,43 +3928,45 @@ public class SwerveBringUp extends OpMode {
                 break;
             }
             case "pedroPidf": {
-                // Mutate the shared config, then throw the follower away: the next
-                // pedroStart rebuilds from clean state, so no stale internal copy survives.
-                // Pedro 3 keeps part of this command: the translational PID (applied to both
-                // axes, as 2.1.2's single translational PIDF was) and the coast-down
-                // decelerations. The drive PIDF, translational F and centripetal scaling have no
-                // Foresight counterpart and are reported back as ignored.
-                ForesightConfig fc = SwerveDrivetrainConstants.foresightConfig;
+                // Follower gains, set on the shared Foresight config and then the follower is
+                // thrown away - the next pedroStart rebuilds from clean state, so no stale
+                // internal copy survives. These are tuned THROUGH Pedro, which is the point: the
+                // tool's own heading hold (setHeadingPidf) is a different control law and its
+                // gains do not transfer to Foresight.
+                //   hp                   Foresight heading kP (P only)
+                //   tp                   all four translational kP (primary = secondary)
+                //   tfp tfs tsp tss      forward/strafe primary/secondary kP individually
+                //   ti td                translational kI, kD (all four controllers)
+                //   fzpa lzpa            natural forward/strafe deceleration, in/s^2
+                ForesightConfig fc = Constants.foresightConfig;
                 List<String> ignored = new ArrayList<>();
                 for (String k : new String[] {"tf", "dp", "di", "dd", "dt", "df", "cent"}) {
                     if (cmd.get(k) != null) {
                         ignored.add(k);
                     }
                 }
-                if (cmd.get("tp") != null || cmd.get("ti") != null || cmd.get("td") != null) {
-                    com.pedropathing.controllers.Controller current = fc.forwardTranslational.get();
-                    com.pedropathing.controllers.PIDController base =
-                            current instanceof com.pedropathing.controllers.PIDController
-                                    ? (com.pedropathing.controllers.PIDController) current
-                                    : new com.pedropathing.controllers.PIDController(0, 0, 0);
-                    double tp = doubleArg(cmd, "tp", base.kP);
-                    double ti = doubleArg(cmd, "ti", base.kI);
-                    double td = doubleArg(cmd, "td", base.kD);
-                    fc.forwardTranslational.set(
-                            new com.pedropathing.controllers.PIDController(tp, ti, td));
-                    fc.strafeTranslational.set(
-                            new com.pedropathing.controllers.PIDController(tp, ti, td));
+                fHeadingKP = doubleArg(cmd, "hp", fHeadingKP);
+                double tpAll = doubleArg(cmd, "tp", Double.NaN);
+                if (!Double.isNaN(tpAll)) {
+                    fFwdPrimKP = fFwdSecKP = fStrPrimKP = fStrSecKP = tpAll;
                 }
+                fFwdPrimKP = doubleArg(cmd, "tfp", fFwdPrimKP);
+                fFwdSecKP = doubleArg(cmd, "tfs", fFwdSecKP);
+                fStrPrimKP = doubleArg(cmd, "tsp", fStrPrimKP);
+                fStrSecKP = doubleArg(cmd, "tss", fStrSecKP);
+                fTransKI = doubleArg(cmd, "ti", fTransKI);
+                fTransKD = doubleArg(cmd, "td", fTransKD);
                 // 2.1.2's zero-power accelerations were negative; Foresight takes the same
                 // coast-down as a positive deceleration.
                 double fzpa = Math.abs(doubleArg(cmd, "fzpa", 0));
                 if (fzpa > 0) {
-                    fc.naturalForwardDeceleration.set(fzpa);
+                    fFwdDecel = fzpa;
                 }
                 double lzpa = Math.abs(doubleArg(cmd, "lzpa", 0));
                 if (lzpa > 0) {
-                    fc.naturalStrafeDeceleration.set(lzpa);
+                    fStrDecel = lzpa;
                 }
+                applyFollowerGains();
                 if (pedro != null) {
                     pedroBreak();
                     pedro = null;
@@ -3520,10 +3974,29 @@ public class SwerveBringUp extends OpMode {
                 if (mode == Mode.FOLLOW) {
                     setMode(Mode.IDLE);
                 }
-                message = "Follower gains updated; follower discarded - pedroStart to rebuild."
+                message = String.format(Locale.US, "Follower gains: heading kP %.3f, "
+                                + "translational fwd %.3f/%.3f strafe %.3f/%.3f (primary/secondary)"
+                                + " kI %.4f kD %.4f, decel %.1f/%.1f. Follower discarded - "
+                                + "pedroStart to rebuild.",
+                        fHeadingKP, fFwdPrimKP, fFwdSecKP, fStrPrimKP, fStrSecKP, fTransKI,
+                        fTransKD, fFwdDecel, fStrDecel)
                         + (ignored.isEmpty() ? "" : " IGNORED, no Pedro 3 equivalent: " + ignored);
                 break;
             }
+            case "pedroReset":
+                // Back to exactly what is installed: Foresight gains from Constants, mixer and
+                // schedule at the vendored defaults. pedrocheck.py sends it before every A/B arm
+                // so no arm inherits the previous one's pedroPidf.
+                restoreShippedStatics();
+                if (pedro != null) {
+                    pedroBreak();
+                    pedro = null;
+                }
+                if (mode == Mode.FOLLOW) {
+                    setMode(Mode.IDLE);
+                }
+                message = "Follower gains, mixer and schedule reset to the installed build.";
+                break;
             case "pedroStop":
                 setMode(Mode.IDLE);
                 message = "Follower stopped.";
@@ -3548,39 +4021,52 @@ public class SwerveBringUp extends OpMode {
                 break;
             }
             case "odoConfig": {
-                // Live Pinpoint reconfiguration for calibrating the odometry-pod geometry:
-                // directions and offsets can be iterated without a reflash, then the winning
-                // values get baked into SwerveDrivetrainConstants.pinpointConfig. Resets
-                // the pose (config and pose frame are inseparable) and so also clears the box.
+                // Live Pinpoint geometry, in Constants.java's own terms so a value moves from
+                // here to the TUNED block unchanged (export carries it):
+                //   xPodOffset   pinpointXPodOffset - the FORWARD (x) pod's sideways distance
+                //                from the robot centre, inches, left positive
+                //   yPodOffset   pinpointYPodOffset - the STRAFE (y) pod's forward distance
+                //                from the robot centre, inches, forward positive
+                //   xPodReversed / yPodReversed   true|false
+                //   restore=1    back to Constants.java as installed
+                // Anything not given keeps its live value. Legacy 2.x names still work:
+                // fy = xPodOffset, sx = yPodOffset, fdir/sdir = forward|reversed.
+                // Config and pose frame are inseparable, so this resets the pose and clears
+                // the fence.
                 if (pinpoint == null) {
                     message = "No pinpoint device.";
                     break;
                 }
                 try {
-                    double fy = doubleArg(cmd, "fy", Double.NaN);   // forward pod Y, inches
-                    double sx = doubleArg(cmd, "sx", Double.NaN);   // strafe pod X, inches
-                    if (!Double.isNaN(fy) && !Double.isNaN(sx)) {
-                        pinpoint.setOffsets(fy, sx,
-                                org.firstinspires.ftc.robotcore.external.navigation
-                                        .DistanceUnit.INCH);
+                    if (cmd.get("restore") != null) {
+                        odoXPodOffset = Constants.pinpointXPodOffset;
+                        odoYPodOffset = Constants.pinpointYPodOffset;
+                        odoXPodReversed = Constants.pinpointXPodReversed;
+                        odoYPodReversed = Constants.pinpointYPodReversed;
                     }
-                    String fdir = cmd.get("fdir");
-                    String sdir = cmd.get("sdir");
-                    if (fdir != null && sdir != null) {
-                        pinpoint.setEncoderDirections(
-                                "reversed".equalsIgnoreCase(fdir)
-                                        ? GoBildaPinpointDriver.EncoderDirection.REVERSED
-                                        : GoBildaPinpointDriver.EncoderDirection.FORWARD,
-                                "reversed".equalsIgnoreCase(sdir)
-                                        ? GoBildaPinpointDriver.EncoderDirection.REVERSED
-                                        : GoBildaPinpointDriver.EncoderDirection.FORWARD);
-                    }
+                    odoXPodOffset = doubleArg(cmd, "xPodOffset",
+                            doubleArg(cmd, "fy", odoXPodOffset));
+                    odoYPodOffset = doubleArg(cmd, "yPodOffset",
+                            doubleArg(cmd, "sx", odoYPodOffset));
+                    odoXPodReversed = boolArg(cmd, "xPodReversed", cmd.get("fdir") == null
+                            ? odoXPodReversed : "reversed".equalsIgnoreCase(cmd.get("fdir")));
+                    odoYPodReversed = boolArg(cmd, "yPodReversed", cmd.get("sdir") == null
+                            ? odoYPodReversed : "reversed".equalsIgnoreCase(cmd.get("sdir")));
+                    applyOdometry();
                     allStop();
                     pinpoint.resetPosAndIMU();
                     boxValid = false;
                     boxMarked0 = false;
-                    message = "Pinpoint reconfigured and pose reset - keep the robot still a "
-                            + "moment. Box cleared with the old frame.";
+                    if (BOX_FILE.exists()) {
+                        BOX_FILE.delete();
+                    }
+                    message = String.format(Locale.US, "Pinpoint: x pod offset %.3f in %s, y pod "
+                                    + "offset %.3f in %s%s. Pose reset - keep the robot still a "
+                                    + "moment. Fence cleared with the old frame.",
+                            odoXPodOffset, odoXPodReversed ? "REVERSED" : "FORWARD",
+                            odoYPodOffset, odoYPodReversed ? "REVERSED" : "FORWARD",
+                            odometryShipped() ? " (= Constants.java)" : " (DIFFERS from "
+                                    + "Constants.java)");
                 } catch (RuntimeException e) {
                     message = "odoConfig failed: " + e.getMessage();
                 }
@@ -3614,6 +4100,7 @@ public class SwerveBringUp extends OpMode {
                         boxValid = false;
                     } else {
                         boxValid = true;
+                        setMarkedFence();
                         saveBox();
                         message = String.format(Locale.US,
                                 "Box saved: x %.1f..%.1f, y %.1f..%.1f (%.0f x %.0f in). Hard "
@@ -3650,6 +4137,7 @@ public class SwerveBringUp extends OpMode {
                 boxValid = true;
                 boxMarked0 = false;
                 boxNeedsFrameCheck = false;
+                setMarkedFence();
                 saveBox();
                 message = String.format(Locale.US,
                         "Box armed from coordinates: %.2f x %.2f in. VERIFY IT AGAINST THE MAT "
@@ -3658,9 +4146,129 @@ public class SwerveBringUp extends OpMode {
                 break;
             }
 
+            case "fieldFence":
+            case "borderFence": {
+                // Arms a PERIMETER fence - the rect is the physical wall and the robot's
+                // footprint (heading-aware) must stay inside it - from a pose the operator
+                // MEASURED and reports. The pose is written into the Pinpoint, so the fence and
+                // the robot agree by construction.
+                //
+                // fieldFence: the BIOBUZZ field, 0..141.5 in (or minX/minY/maxX/maxY inside it),
+                //   plus every keep-out in field/biobuzz_field.json. Pose in the visualizer's
+                //   frame: x = 0 the red wall, y = 0 the audience wall.
+                // borderFence: just a border, width x height inches, no keep-outs - any floor
+                //   with walls or tape. Origin at the corner the operator picks; x runs along
+                //   the width, y along the height, so the pose is "inches out from the x = 0
+                //   edge, inches out from the y = 0 edge, heading from +x".
+                //
+                // Like boxSet, it trusts what it is given. The operator confirms the drawn
+                // fence matches the floor before anything moves.
+                boolean border = "borderFence".equals(action);
+                if (pinpoint == null) {
+                    message = "No pinpoint device.";
+                    break;
+                }
+                double fx = doubleArg(cmd, "x", Double.NaN);
+                double fy = doubleArg(cmd, "y", Double.NaN);
+                double fh = doubleArg(cmd, "headingDeg", Double.NaN);
+                if (Double.isNaN(fx) || Double.isNaN(fy) || Double.isNaN(fh)) {
+                    message = action + " needs the robot's measured pose: x, y (inches from the "
+                            + (border ? "x = 0 and y = 0 edges of the border"
+                                    : "red wall and the audience wall")
+                            + ") and headingDeg.";
+                    break;
+                }
+                List<FenceGeometry.Polygon> loaded = new ArrayList<>();
+                double rx0, ry0, rx1, ry1;
+                if (border) {
+                    double bw = doubleArg(cmd, "width", Double.NaN);
+                    double bh = doubleArg(cmd, "height", Double.NaN);
+                    if (!(bw > 0) || !(bh > 0)) {
+                        message = "borderFence needs width and height, inches.";
+                        break;
+                    }
+                    rx0 = 0;
+                    ry0 = 0;
+                    rx1 = bw;
+                    ry1 = bh;
+                } else {
+                    double size;
+                    try {
+                        size = loadFieldKeepOuts(loaded);
+                    } catch (IOException | RuntimeException e) {
+                        message = "fieldFence: could not load the field: " + e.getMessage();
+                        break;
+                    }
+                    rx0 = doubleArg(cmd, "minX", 0);
+                    ry0 = doubleArg(cmd, "minY", 0);
+                    rx1 = doubleArg(cmd, "maxX", size);
+                    ry1 = doubleArg(cmd, "maxY", size);
+                    if (Math.min(rx0, rx1) < 0 || Math.min(ry0, ry1) < 0
+                            || Math.max(rx0, rx1) > size || Math.max(ry0, ry1) > size) {
+                        message = String.format(Locale.US, "fieldFence: region must lie inside "
+                                + "the %.1f in field.", size);
+                        break;
+                    }
+                }
+                double rl = doubleArg(cmd, "robotL", fenceRobotL);
+                double rw = doubleArg(cmd, "robotW", fenceRobotW);
+                if (rl <= 0 || rw <= 0) {
+                    message = action + ": the robot size must be positive.";
+                    break;
+                }
+                if (Math.abs(rx1 - rx0) - Math.max(rl, rw) < 12
+                        || Math.abs(ry1 - ry0) - Math.max(rl, rw) < 12) {
+                    message = action + ": the area leaves under 12 in of travel each way for the "
+                            + "robot's footprint. Not armed.";
+                    break;
+                }
+                if (pedro != null) {
+                    // The follower carries the old frame; a fresh one is built on pedroStart.
+                    pedroBreak();
+                    pedro = null;
+                }
+                setMode(Mode.IDLE);
+                allStop();
+                pinpoint.setPosition(new Pose2D(DistanceUnit.INCH, fx, fy, AngleUnit.DEGREES, fh));
+                pinpoint.update();
+                poseXIn = fx;
+                poseYIn = fy;
+                headingRad = Math.toRadians(fh);
+                boxMinX = Math.min(rx0, rx1);
+                boxMaxX = Math.max(rx0, rx1);
+                boxMinY = Math.min(ry0, ry1);
+                boxMaxY = Math.max(ry0, ry1);
+                fenceRobotL = rl;
+                fenceRobotW = rw;
+                boxBoundary = true;
+                boxKind = border ? "border" : "field";
+                keepOuts.clear();
+                keepOuts.addAll(loaded);
+                keepOutsJson = buildKeepOutsJson();
+                boxValid = true;
+                boxMarked0 = false;
+                boxNeedsFrameCheck = false;
+                saveBox();
+                double[] cb = centreBounds(headingRad);
+                boolean startInside = fx >= cb[0] && fx <= cb[2] && fy >= cb[1] && fy <= cb[3];
+                double startClear = keepOutClearance(fx, fy);
+                message = String.format(Locale.US,
+                        "%s fence armed: x %.1f..%.1f, y %.1f..%.1f, %d keep-outs, robot %.1f x "
+                                + "%.1f in. Pose set to (%.1f, %.1f) at %.1f deg.%s%s VERIFY the "
+                                + "drawn fence against the floor before driving.",
+                        border ? "Border" : "Field", boxMinX, boxMaxX, boxMinY, boxMaxY,
+                        keepOuts.size(), rl, rw, fx, fy, fh,
+                        startInside ? "" : " START POSE IS PAST A WALL'S FOOTPRINT LIMIT - only "
+                                + "inward motion will pass.",
+                        startClear >= 0 ? "" : " START POSE OVERLAPS A KEEP-OUT - only motion "
+                                + "away from it will pass.");
+                break;
+            }
+
             case "boxClear":
                 boxValid = false;
                 boxMarked0 = false;
+                setMarkedFence();
                 if (BOX_FILE.exists() && !BOX_FILE.delete()) {
                     message = "Box disarmed, but the file on the hub would not delete.";
                 } else {
@@ -3706,8 +4314,9 @@ public class SwerveBringUp extends OpMode {
                 }
                 break;
             case "export":
-                exportText = SwerveExport.generate(orderedForExport());
-                message = "Constants generated.";
+                exportText = SwerveExport.generate(cals, liveForExport());
+                message = "Constants generated - Constants.java declarations; splice with "
+                        + "robot.py constants --write.";
                 break;
             case "save":
                 saveCalibration();
@@ -3731,17 +4340,33 @@ public class SwerveBringUp extends OpMode {
     }
 
     /** Pedro's factory order: leftFront, rightFront, leftBack, rightBack. */
-    private PodCal[] orderedForExport() {
-        PodCal lf = findByLabel("LF");
-        PodCal rf = findByLabel("RF");
-        PodCal lb = findByLabel("LB");
-        PodCal rb = findByLabel("RB");
-        return new PodCal[] {
-                lf != null ? lf : cals[2],
-                rf != null ? rf : cals[1],
-                lb != null ? lb : cals[3],
-                rb != null ? rb : cals[0]
-        };
+    /**
+     * The non-pod half of an export: the heading gains this tool holds, the follower gains as
+     * pedroPidf left them on the shared Foresight config, and the Pinpoint geometry as odoConfig
+     * last wrote it.
+     */
+    private SwerveExport.Live liveForExport() {
+        SwerveExport.Live live = new SwerveExport.Live();
+        live.label = recorder.label();
+        live.headingKP = fHeadingKP;
+        live.toolHeadingHoldKP = headingKp;
+        live.toolHeadingHoldKD = headingKd;
+        live.forwardTranslationalPrimaryKP = fFwdPrimKP;
+        live.forwardTranslationalSecondaryKP = fFwdSecKP;
+        live.strafeTranslationalPrimaryKP = fStrPrimKP;
+        live.strafeTranslationalSecondaryKP = fStrSecKP;
+        live.translationalKI = fTransKI;
+        live.translationalKD = fTransKD;
+        live.naturalForwardDeceleration = fFwdDecel;
+        live.naturalStrafeDeceleration = fStrDecel;
+        live.epsilonTaper = Swerve.getEpsilonTaper();
+        live.demandSlewDegPerSec = Swerve.getDemandSlewDegPerSec();
+        live.schedule = CoaxialPod.getScheduleTuning();
+        live.pinpointXPodOffset = odoXPodOffset;
+        live.pinpointYPodOffset = odoYPodOffset;
+        live.pinpointXPodReversed = odoXPodReversed;
+        live.pinpointYPodReversed = odoYPodReversed;
+        return live;
     }
 
     private PodCal findByLabel(String label) {
@@ -4025,7 +4650,14 @@ public class SwerveBringUp extends OpMode {
                 .append(",\"vy\":").append(fmt(poseVyIn))
                 .append('}');
         sb.append(",\"pedro\":{\"active\":").append(mode == Mode.FOLLOW)
-                .append(",\"job\":\"").append(esc(pedroJob)).append('"');
+                .append(",\"job\":\"").append(esc(pedroJob)).append('"')
+                .append(",\"pods\":\"").append(pedro == null ? "none"
+                        : pedroLivePods ? "live" : "shipped").append('"')
+                // Is the bench running exactly what is installed? Follower gains untouched by
+                // pedroPidf AND mixer/schedule at the vendored defaults. A pods=shipped run with
+                // this false is not an acceptance run.
+                .append(",\"gainsShipped\":").append(followerGainsShipped())
+                .append(",\"staticsShipped\":").append(staticsShipped());
         if (pedro != null) {
             try {
                 com.pedropathing.math.Pose pp = pedro.pose();
@@ -4049,6 +4681,18 @@ public class SwerveBringUp extends OpMode {
                 .append(",\"maxY\":").append(fmt(boxMaxY))
                 .append(",\"marked0\":").append(boxMarked0)
                 .append(",\"clamped\":").append(boxClampedNow)
+                .append(",\"kind\":\"").append(boxKind).append('"')
+                .append(",\"robotL\":").append(fmt(fenceRobotL))
+                .append(",\"robotW\":").append(fmt(fenceRobotW))
+                .append(",\"keepOutClear\":").append(keepOuts.isEmpty() || !poseOk ? "null"
+                        : fmt(keepOutClearance(poseXIn, poseYIn)))
+                .append(",\"keepOuts\":").append(keepOutsJson)
+                .append('}');
+        sb.append(",\"odo\":{\"xPodOffset\":").append(fmt(odoXPodOffset))
+                .append(",\"yPodOffset\":").append(fmt(odoYPodOffset))
+                .append(",\"xPodReversed\":").append(odoXPodReversed)
+                .append(",\"yPodReversed\":").append(odoYPodReversed)
+                .append(",\"shipped\":").append(odometryShipped())
                 .append('}');
         sb.append(",\"message\":\"").append(esc(message)).append('"');
         sb.append(",\"phase\":").append(fmt(phaseTimer.seconds()));
@@ -4125,21 +4769,21 @@ public class SwerveBringUp extends OpMode {
         sb.append(']');
 
         // Scalars kept for old readers; the perPod arrays are what the guard actually compares.
-        sb.append(",\"shipped\":{\"kp\":").append(fmt(SwerveDrivetrainConstants.turnKP))
-                .append(",\"kd\":").append(fmt(SwerveDrivetrainConstants.turnKD))
-                .append(",\"ks\":").append(fmt(SwerveDrivetrainConstants.turnKS))
-                .append(",\"ksband\":").append(fmt(SwerveDrivetrainConstants.turnKSBandDeg))
-                .append(",\"cache\":").append(fmt(SwerveDrivetrainConstants.turnServoCaching));
+        sb.append(",\"shipped\":{\"kp\":").append(fmt(Constants.turnKP))
+                .append(",\"kd\":").append(fmt(Constants.turnKD))
+                .append(",\"ks\":").append(fmt(Constants.turnKS))
+                .append(",\"ksband\":").append(fmt(Constants.turnKSBandDeg))
+                .append(",\"cache\":").append(fmt(Constants.turnServoCaching));
         sb.append(",\"perPod\":[");
         for (int i = 0; i < POD_COUNT; i++) {
             if (i > 0) {
                 sb.append(',');
             }
-            sb.append("{\"kp\":").append(fmt(SwerveDrivetrainConstants.turnKPPerPod[i]))
-                    .append(",\"kd\":").append(fmt(SwerveDrivetrainConstants.turnKDPerPod[i]))
-                    .append(",\"ks\":").append(fmt(SwerveDrivetrainConstants.turnKSPerPod[i]))
+            sb.append("{\"kp\":").append(fmt(Constants.turnKPPerPod[i]))
+                    .append(",\"kd\":").append(fmt(Constants.turnKDPerPod[i]))
+                    .append(",\"ks\":").append(fmt(Constants.turnKSPerPod[i]))
                     .append(",\"ksband\":")
-                    .append(fmt(SwerveDrivetrainConstants.turnKSBandDegPerPod[i]))
+                    .append(fmt(Constants.turnKSBandDegPerPod[i]))
                     .append('}');
         }
         sb.append("]}");

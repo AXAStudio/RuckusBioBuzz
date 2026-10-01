@@ -16,9 +16,9 @@ the upstream 2.x docs.
 | `translationalPIDFCoefficients`, `headingPIDFCoefficients`, `drivePIDFCoefficients` | `ForesightConfig`: `forwardTranslational`, `strafeTranslational`, `headingFeedback`, `coast`, `brake` |
 | `FollowerBuilder` | `new Follower(localizer, drivetrain, new Foresight(config))` |
 
-All of this is the same for swerve and mecanum — `Constants.createFollower`
-picks the drivetrain from `config.jsonc`'s `"drivetrain"` and every OpMode uses
-the same `Follower` calls.
+Every OpMode builds the follower with `Constants.createFollower` - one
+constants file, swerve only (the mecanum file and `config.jsonc` were removed
+2026-10-01).
 
 Units: inches, radians, **heading CCW-positive**. `DrivePowers.turn` is also
 CCW-positive (the `Swerve` mixer carries a `RUCKUS PATCH` so this holds on
@@ -78,7 +78,7 @@ which is only "forward" when the heading is 0.
 Gotchas:
 - `follower.update()` must run every loop — `hold` only sets the target.
 - **Swerve refuses to drive Foresight on placeholder constants.** Call
-  `SwerveDrivetrainConstants.requireForesightMeasured()` before `hold`/`follow`
+  `Constants.requireForesightMeasured()` before `hold`/`follow`
   (the autos already do). `FORESIGHT_MEASURED` is currently `false`, so on the
   swerve build `hold` is not usable until the Foresight Tuner has been run.
 - **Don't poll `isBusy()` for "arrived" after a fresh `hold`.** `busy` is only
@@ -171,7 +171,7 @@ import com.pedropathing.utils.Angle;
 import com.pedropathing.utils.Utils;
 
 // Starting gains = the heading values measured through the bring-up tool
-// (kP 1.20, kD 0.080, 2026-08-13 — see SwerveDrivetrainConstants / HeadingHold).
+// (kP 1.20, kD 0.080, 2026-08-13 — see Constants / HeadingHold).
 // Error is in RADIANS, output is turn power.
 private final PIDFController aimPid = new PIDFController(new PIDFCoefficients(1.20, 0, 0.080, 0));
 
@@ -239,7 +239,7 @@ If the robot can stop to shoot, `hold` is the least code — Foresight's
 keep it planted:
 
 ```java
-SwerveDrivetrainConstants.requireForesightMeasured();       // throws until Foresight is tuned
+Constants.requireForesightMeasured();       // throws until Foresight is tuned
 follower.hold(follower.pose().withHeading(aimer.aim()[1]));  // re-issue each loop to track a moving lead
 ```
 
@@ -262,16 +262,15 @@ re-latches x/y to wherever the robot drifted to.
 
 ## 5. Where the gains actually live
 
-- `pedroPathing/SwerveDrivetrainConstants.java` → `foresightConfig`:
-  `headingFeedback` = `Controller.proportional(1.20)`,
+- `pedroPathing/Constants.java` → `foresightConfig`, fed from the TUNED VALUES
+  block at the top of the file (`headingKP`, `translationalKP/KI/KD`, the
+  decelerations): `headingFeedback` = `Controller.proportional(1.20)`,
   `forward/strafeTranslational` = `Controller.pid(0.26, 0, 0.025)` (carried from
   2.x), `coast`/`brake` = `Controller.proportionalFeedforward(1/73.9)`
   (**unmeasured**), plus the braking-model coefficients. The comment block above
   it lists which values are measured, carried, derived, or placeholder.
-- `pedroPathing/MecanumDrivetrainConstants.java` → its own `ForesightConfig`
-  (heading P 0.87, translational PID 0.093 / 0 / 0.013).
-- `pedroPathing/Constants.java` picks between them from `config.jsonc`'s
-  `"drivetrain"`, so tuning one doesn't touch the other.
+- A Swerve Bring-Up session writes these back with
+  `tools/swervetune/robot.py constants --write` (ROBOT_CONTROL.md §4).
 - **There is no `drivePIDFCoefficients` anymore.** Along-path speed is handled
   by Foresight's `coast` / `brake` controllers and the braking model.
 - The swerve **pod** turn PIDF (`turnKPPerPod` etc.) is a different loop

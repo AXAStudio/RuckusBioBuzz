@@ -11,6 +11,15 @@ API with those rules built in, so the same checks run every time.
     python robot.py pull LABEL            fetch the recorder CSV into runs/ and print true loop rate
     python robot.py stop                  zero the drive and put the OpMode in IDLE (OpMode keeps running)
     python robot.py estop                 STOP the OpMode through FTC Dashboard (kills it; operator restarts)
+    python robot.py constants [--write] [--from FILE]
+                                          export the tool's tuning as Constants.java declarations and
+                                          splice them in by name (dry run without --write)
+    python robot.py pinpoint FILE [--write]
+                                          import Pedro's Pinpoint Tuner output (offsets and
+                                          directions) into the TUNED VALUES block
+    python robot.py foresight FILE [--write]
+                                          import Pedro's Foresight Tuner output (results list or
+                                          code block, pasted into FILE) into the TUNED VALUES block
 
 Diagnostic tooling (tools/swervetune). It reads and commands the existing API only and changes
 nothing the OpMode measures.
@@ -21,6 +30,8 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
+import re
 import sys
 import time
 
@@ -37,6 +48,15 @@ MOTION = {
 
 # Actions that move the pose frame and so destroy the safe-area box (CLAUDE.md rule 6).
 CLEARS_BOX = {"resetImu", "odoConfig", "boxClear"}
+
+# Actions that WRITE a pose into the Pinpoint and arm a fence in it. The pose must be one the
+# operator measured on the real field and reported - a session never invents where the robot is.
+REFRAMES = {"fieldFence", "borderFence", "setPose"}
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+CONSTANTS_JAVA = os.path.normpath(os.path.join(
+    HERE, "..", "..", "TeamCode", "src", "main", "java", "org", "firstinspires", "ftc",
+    "teamcode", "pedroPathing", "Constants.java"))
 
 # The OpMode's drive watchdog is 400 ms (SwerveBringUp.DRIVE_WATCHDOG_MS). 75 ms matches
 # boxdrive.py and leaves room for five missed packets before it trips.
@@ -94,13 +114,34 @@ def summarize(st: dict) -> str:
     ]
     if b.get("valid"):
         lines.append(
-            f"box ARMED x {b.get('minX')}..{b.get('maxX')} y {b.get('minY')}..{b.get('maxY')} "
-            f"({_span(b, 'X')} x {_span(b, 'Y')} in) clamped={b.get('clamped')}"
+            f"box ARMED ({b.get('kind', 'marked')}) x {b.get('minX')}..{b.get('maxX')} "
+            f"y {b.get('minY')}..{b.get('maxY')} ({_span(b, 'X')} x {_span(b, 'Y')} in) "
+            f"clamped={b.get('clamped')}"
         )
+        if b.get("kind") in ("field", "border"):
+            names = ", ".join(k.get("name", "?") for k in b.get("keepOuts", []))
+            lines.append(
+                f"{b.get('kind')} fence: robot {b.get('robotL')} x {b.get('robotW')} in, "
+                f"keep-out clearance {b.get('keepOutClear')} in, keep-outs: {names or 'none'}"
+            )
     else:
         lines.append(f"box NOT ARMED (marked0={b.get('marked0')})")
     if p.get("ok") and b.get("valid"):
         lines.append(f"inside box: {_inside(p, b)}")
+    o = st.get("odo", {})
+    if o:
+        lines.append(
+            f"odometry x pod {o.get('xPodOffset')} in {'REV' if o.get('xPodReversed') else 'FWD'}"
+            f", y pod {o.get('yPodOffset')} in {'REV' if o.get('yPodReversed') else 'FWD'}  "
+            f"{'= Constants.java' if o.get('shipped') else 'DIFFERS from Constants.java'}"
+        )
+    pe = st.get("pedro", {})
+    if pe:
+        lines.append(
+            f"pedro active={pe.get('active')} job={pe.get('job')} pods={pe.get('pods')} "
+            f"busy={pe.get('busy')} gainsShipped={pe.get('gainsShipped')} "
+            f"staticsShipped={pe.get('staticsShipped')}"
+        )
     lines.append(
         f"rec recording={r.get('recording')} runId={r.get('runId')} samples={r.get('samples')} "
         f"overflowed={r.get('overflowed')} label={r.get('label')!r}"
@@ -125,11 +166,14 @@ def _span(b: dict, axis: str) -> str:
 
 
 def _inside(p: dict, b: dict) -> bool:
+    """Centre inside the rect, and - on a field fence - the robot clear of every keep-out."""
     try:
-        return (float(b["minX"]) <= float(p["x"]) <= float(b["maxX"])
-                and float(b["minY"]) <= float(p["y"]) <= float(b["maxY"]))
+        inside = (float(b["minX"]) <= float(p["x"]) <= float(b["maxX"])
+                  and float(b["minY"]) <= float(p["y"]) <= float(b["maxY"]))
     except (KeyError, TypeError, ValueError):
         return False
+    clear = b.get("keepOutClear")
+    return inside and (clear is None or float(clear) >= 0)
 
 
 def gates(need_box: bool) -> tuple[int, dict | None, str]:
@@ -149,7 +193,8 @@ def gates(need_box: bool) -> tuple[int, dict | None, str]:
     if need_box and not st.get("box", {}).get("valid"):
         return EXIT_NO_BOX, st, "Safe-area box is NOT armed. Operator must re-mark corners A and B."
     if need_box and not _inside(st["pose"], st["box"]):
-        return EXIT_NO_BOX, st, "Pose is OUTSIDE the armed box - the frame or the box is wrong."
+        return EXIT_NO_BOX, st, ("Pose is OUTSIDE the armed box or overlapping a keep-out - the "
+                                 "frame or the fence is wrong.")
     return EXIT_OK, st, "all gates pass"
 
 
@@ -185,6 +230,13 @@ def cmd_cmd(a) -> int:
     if a.action == "drive":
         print("Use `robot.py drive` - a one-shot drive command trips the 400 ms watchdog and "
               "leaves nobody holding the stop.")
+        return EXIT_REFUSED
+    if a.action in REFRAMES and not a.pose_from_operator:
+        print(f"{a.action} writes x/y/headingDeg into the Pinpoint. Those must be the robot's "
+              "real pose as the OPERATOR measured and reported it (fieldFence: x = 0 red wall, "
+              "y = 0 audience wall; borderFence: inches from the border's x = 0 and y = 0 edges). "
+              "Re-run with --pose-from-operator once they have, and ask them to confirm the "
+              "dashboard's drawn fence matches the floor before motion.")
         return EXIT_REFUSED
     if a.action in CLEARS_BOX and not a.clears_box_ok:
         print(f"{a.action} clears the safe-area box (new pose frame). Re-run with --clears-box-ok "
@@ -352,6 +404,272 @@ def cmd_estop(_a) -> int:
         return EXIT_UNREACHABLE
 
 
+# ---- constants export ----------------------------------------------------------------
+
+# One declaration per name, in the TUNED VALUES block. The value runs to the first ';' - none of
+# the tuned values (numbers, booleans, quoted encoder names) can contain one.
+_DECL = re.compile(r"^public static final ([\w\[\]]+) (\w+) = ([^;]*);\s*$")
+
+
+def parse_export(text: str) -> tuple[list[tuple[str, str, str]], list[str]]:
+    """(type, name, value) per declaration line, and the WARNINGS comment lines."""
+    decls, warnings, in_warn = [], [], False
+    for line in text.splitlines():
+        m = _DECL.match(line.strip())
+        if m:
+            decls.append((m.group(1), m.group(2), m.group(3).strip()))
+            continue
+        if line.startswith("// WARNINGS"):
+            in_warn = True
+        elif in_warn and line.startswith("//"):
+            warnings.append(line[2:].strip())
+    return decls, warnings
+
+
+def splice(source: str, decls: list[tuple[str, str, str]]) -> tuple[str, list[str], list[str]]:
+    """Replaces each declaration's initialiser by name. Returns (new source, changes, missing).
+
+    A name must occur exactly once as `public static final <type> <name> = ...;` - anything else
+    is reported as missing rather than guessed at, so a refactor of Constants.java can never make
+    the splice land on the wrong line.
+    """
+    changes, missing = [], []
+    for typ, name, value in decls:
+        pat = re.compile(r"(public static final " + re.escape(typ) + r" " + re.escape(name)
+                         + r" = )([^;]*)(;)")
+        hits = pat.findall(source)
+        if len(hits) != 1:
+            missing.append(f"{typ} {name} ({len(hits)} matches)")
+            continue
+        old = hits[0][1].strip()
+        if old != value:
+            changes.append(f"{name}: {old}  ->  {value}")
+            source = pat.sub(lambda m: m.group(1) + value + m.group(3), source, count=1)
+    return source, changes, missing
+
+
+def cmd_constants(a) -> int:
+    if a.src:
+        with open(a.src, encoding="utf-8") as f:
+            text = f.read()
+        label = os.path.basename(a.src)
+    else:
+        try:
+            st = state()
+            if not st.get("live"):
+                print("Swerve Bring-Up is not running (live=false) - nothing to export.")
+                return EXIT_NOT_LIVE
+            before = st.get("message", "")
+            send("export")
+            ok, msg = outcome("export", before)
+            text = state().get("export", "")
+        except BenchError as e:
+            print(f"transport failure: {e}")
+            return EXIT_UNREACHABLE
+        if not ok or not text.strip():
+            print(f"export failed: {msg}")
+            return EXIT_REFUSED
+        os.makedirs(os.path.join(HERE, "runs"), exist_ok=True)
+        stamp = time.strftime("%Y%m%d_%H%M%S")
+        saved = os.path.join(HERE, "runs", f"constants_{stamp}.java")
+        with open(saved, "w", encoding="utf-8") as f:
+            f.write(text)
+        label = os.path.relpath(saved, os.path.join(HERE, "..", ".."))
+        print(f"export saved to {label}")
+
+    decls, warnings = parse_export(text)
+    if not decls:
+        print("The export holds no declarations - is the robot running a build from before "
+              "2026-10-01 (old pod-factory export)?")
+        return EXIT_REFUSED
+    with open(a.target, encoding="utf-8") as f:
+        source = f.read()
+    new_source, changes, missing = splice(source, decls)
+
+    print(f"{len(decls)} declarations from {label}; {len(changes)} differ from Constants.java:")
+    for c in changes:
+        print(f"  {c}")
+    for m in missing:
+        print(f"  NOT FOUND in Constants.java, skipped: {m}")
+    for w in warnings:
+        print(f"  WARNING: {w}")
+    if missing:
+        print("Refusing to write: a declaration the export names is not in Constants.java's "
+              "TUNED VALUES block exactly once. Fix the file (or the exporter), then re-run.")
+        return EXIT_REFUSED
+    if not changes:
+        print("Constants.java already matches the tool. Nothing to write.")
+        return EXIT_OK
+    if not a.write:
+        print("Dry run. Re-run with --write to apply, then build, commit with the evidence "
+              "(CLAUDE.md rule 11), and say these are SHIPPED changes.")
+        return EXIT_OK
+    with open(a.target, "w", encoding="utf-8") as f:
+        f.write(new_source)
+    print(f"Wrote {os.path.relpath(a.target)}. SHIPPED code changed: build "
+          "(./gradlew :TeamCode:assembleDebug), then commit with the evidence for each value.")
+    return EXIT_OK
+
+
+# ---- Foresight Tuner import ------------------------------------------------------------
+
+# Pedro's ForesightTuner result() names -> Constants.java TUNED VALUES names.
+FORESIGHT_RESULTS = {
+    "maxAchievableForwardVelocity": "maxAchievableForwardVelocity",
+    "maxAchievableStrafeVelocity": "maxAchievableStrafeVelocity",
+    "naturalForwardDeceleration": "naturalForwardDeceleration",
+    "naturalStrafeDeceleration": "naturalStrafeDeceleration",
+    "headingBrakingLinearCoefficient": "headingBrakeLinear",
+    "headingBrakingQuadraticCoefficient": "headingBrakeQuadratic",
+    "heading kP": "headingKP",
+    "forwardBrakingLinearCoefficient": "forwardBrakeLinear",
+    "forwardBrakingQuadraticCoefficient": "forwardBrakeQuadratic",
+    "strafeBrakingLinearCoefficient": "strafeBrakeLinear",
+    "strafeBrakingQuadraticCoefficient": "strafeBrakeQuadratic",
+    "forwardTranslational Primary kP": "forwardTranslationalPrimaryKP",
+    "forwardTranslational Secondary kP": "forwardTranslationalSecondaryKP",
+    "strafeTranslational Primary kP": "strafeTranslationalPrimaryKP",
+    "strafeTranslational Secondary kP": "strafeTranslationalSecondaryKP",
+    "coast kV": "coastKV",
+    "brake kV": "brakeKV",
+}
+
+_NUM = r"(-?\d+(?:\.\d*)?(?:[eE][-+]?\d+)?)"
+
+
+def parse_foresight(text: str) -> dict[str, float]:
+    """Reads the tuner's results list ("name: value") and/or its generated code block."""
+    out: dict[str, float] = {}
+    for key, name in FORESIGHT_RESULTS.items():
+        m = re.search(re.escape(key) + r"\s*[:=\t ]\s*" + _NUM, text)
+        if m:
+            out[name] = float(m.group(1))
+    # The code block the tuner prints (ForesightTuner.java's code(...)).
+    code = {
+        "forwardTranslationalPrimaryKP": r"primaryTranslationalForward\s*=\s*Controller\.proportional\(" + _NUM,
+        "forwardTranslationalSecondaryKP": r"secondaryTranslationalForward\s*=\s*Controller\.proportional\(" + _NUM,
+        "strafeTranslationalPrimaryKP": r"primaryTranslationalLateral\s*=\s*Controller\.proportional\(" + _NUM,
+        "strafeTranslationalSecondaryKP": r"secondaryTranslationalLateral\s*=\s*Controller\.proportional\(" + _NUM,
+        "coastKV": r"c\.coast\.set\(Controller\.proportionalFeedforward\(" + _NUM,
+        "brakeKV": r"c\.brake\.set\(Controller\.proportionalFeedforward\(" + _NUM,
+        "headingKP": r"c\.headingFeedback\.set\(Controller\.proportional\(" + _NUM,
+        "maxAchievableForwardVelocity": r"c\.maxAchievableForwardVelocity\.set\(" + _NUM,
+        "maxAchievableStrafeVelocity": r"c\.maxAchievableStrafeVelocity\.set\(" + _NUM,
+        "naturalForwardDeceleration": r"c\.naturalForwardDeceleration\.set\(" + _NUM,
+        "naturalStrafeDeceleration": r"c\.naturalStrafeDeceleration\.set\(" + _NUM,
+    }
+    for name, pat in code.items():
+        m = re.search(pat, text)
+        if m and name not in out:
+            out[name] = float(m.group(1))
+    pairs = {
+        ("headingBrakeLinear", "headingBrakeQuadratic"):
+            r"headingBrakeCoefficients\.set\(Vector2D\.cartesian\(" + _NUM + r"\s*,\s*" + _NUM,
+        ("forwardBrakeLinear", "strafeBrakeLinear"):
+            r"linearBrakeCoefficients\.set\(Matrix\.diag\(" + _NUM + r"\s*,\s*" + _NUM,
+        ("forwardBrakeQuadratic", "strafeBrakeQuadratic"):
+            r"quadraticBrakeCoefficients\.set\(Matrix\.diag\(" + _NUM + r"\s*,\s*" + _NUM,
+    }
+    for (a, b), pat in pairs.items():
+        m = re.search(pat, text)
+        if m:
+            out.setdefault(a, float(m.group(1)))
+            out.setdefault(b, float(m.group(2)))
+    return out
+
+
+def _java_double(v: float) -> str:
+    s = repr(float(v))
+    return s if ("." in s or "e" in s or "E" in s or "inf" in s or "nan" in s) else s + ".0"
+
+
+def parse_pinpoint(text: str) -> dict[str, str]:
+    """Pinpoint Tuner results list ("xPodOffset: -5.37") or its code block -> TUNED decl values."""
+    out: dict[str, str] = {}
+    for key, name in (("xPodOffset", "pinpointXPodOffset"), ("yPodOffset", "pinpointYPodOffset")):
+        m = (re.search(r"c\." + key + r"\.set\(\s*" + _NUM, text)
+             or re.search(r"\b" + key + r"\s*[:=\t ]\s*" + _NUM, text))
+        if m:
+            out[name] = _java_double(float(m.group(1)))
+    for key, name in (("xPodDirection", "pinpointXPodReversed"),
+                      ("yPodDirection", "pinpointYPodReversed")):
+        m = re.search(r"\b" + key + r"\b[^\n]*?\b(REVERSED|FORWARD)\b", text)
+        if m:
+            out[name] = "true" if m.group(1) == "REVERSED" else "false"
+    return out
+
+
+def cmd_pinpoint(a) -> int:
+    with open(a.file, encoding="utf-8") as f:
+        text = f.read()
+    vals = parse_pinpoint(text)
+    if len(vals) != 4:
+        print(f"Found {len(vals)}/4 Pinpoint Tuner values ({', '.join(vals) or 'none'}). Paste "
+              "the tuner's results list or its code block.")
+        return EXIT_REFUSED
+    decls = [("double" if n.endswith("Offset") else "boolean", n, v) for n, v in vals.items()]
+    with open(a.target, encoding="utf-8") as f:
+        source = f.read()
+    new_source, changes, missing = splice(source, decls)
+    print(f"Pinpoint Tuner -> Constants.java: {len(changes)} change(s)")
+    for c in changes:
+        print(f"  {c}")
+    if missing:
+        print("NOT FOUND in Constants.java: " + ", ".join(missing))
+        return EXIT_REFUSED
+    print("Validate before trusting it: paired +/-45 deg rotations (orbit <= 0.6 in per 45 deg) "
+          "and a taped line, through odoConfig on the bench (TUNING_TASK.md stage 2).")
+    if not a.write or not changes:
+        print("Dry run." if changes else "Nothing to write.")
+        return EXIT_OK
+    with open(a.target, "w", encoding="utf-8") as f:
+        f.write(new_source)
+    print(f"Wrote {os.path.relpath(a.target)}. SHIPPED code changed.")
+    return EXIT_OK
+
+
+def cmd_foresight(a) -> int:
+    with open(a.file, encoding="utf-8") as f:
+        text = f.read()
+    vals = parse_foresight(text)
+    missing = [n for n in FORESIGHT_RESULTS.values() if n not in vals]
+    if missing and not a.partial:
+        print(f"Found {len(vals)}/17 Foresight Tuner values; missing: {', '.join(missing)}. "
+              "Paste the tuner's whole results list or code block, or pass --partial to import "
+              "only what is there.")
+        return EXIT_REFUSED
+    bad = [n for n, v in vals.items() if not math.isfinite(v)
+           or (n.startswith(("maxAchievable", "natural")) and v <= 0)]
+    if bad:
+        print(f"REFUSED: non-physical values: {', '.join(f'{n}={vals[n]}' for n in bad)}")
+        return EXIT_REFUSED
+    decls = [("double", n, _java_double(v)) for n, v in vals.items()]
+    # The tuner identifies P-only translational controllers. Its kP were fitted with no I or D,
+    # so carrying the 2.x kD under them would ship a combination nobody measured.
+    if any(n.startswith(("forwardTranslational", "strafeTranslational")) for n in vals):
+        decls += [("double", "translationalKI", "0.0"), ("double", "translationalKD", "0.0")]
+    with open(a.target, encoding="utf-8") as f:
+        source = f.read()
+    new_source, changes, missing_decl = splice(source, decls)
+    print(f"{len(decls)} values from {a.file}; {len(changes)} differ from Constants.java:")
+    for c in changes:
+        print(f"  {c}")
+    for m in missing_decl:
+        print(f"  NOT FOUND in Constants.java: {m}")
+    if missing_decl:
+        return EXIT_REFUSED
+    print("NOTE: the Foresight Tuner is identification, not validation. Next: build, deploy, "
+          "then pedrocheck.py suite --pods shipped (TUNING_TASK.md stage 6). FORESIGHT_MEASURED "
+          "stays false until that passes.")
+    if not a.write or not changes:
+        print("Dry run." if changes else "Nothing to write.")
+        return EXIT_OK
+    with open(a.target, "w", encoding="utf-8") as f:
+        f.write(new_source)
+    print(f"Wrote {os.path.relpath(a.target)}. SHIPPED code changed.")
+    return EXIT_OK
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawTextHelpFormatter)
     sub = ap.add_subparsers(dest="sub", required=True)
@@ -363,6 +681,7 @@ def main() -> int:
     p.add_argument("action")
     p.add_argument("params", nargs="*")
     p.add_argument("--clears-box-ok", action="store_true")
+    p.add_argument("--pose-from-operator", action="store_true")
     p.set_defaults(fn=cmd_cmd)
     p = sub.add_parser("drive")
     p.add_argument("--f", type=float, default=0.0, help="forward, robot frame, [-1, 1]")
@@ -380,6 +699,23 @@ def main() -> int:
     p.set_defaults(fn=cmd_pull)
     sub.add_parser("stop").set_defaults(fn=cmd_stop)
     sub.add_parser("estop").set_defaults(fn=cmd_estop)
+    p = sub.add_parser("constants")
+    p.add_argument("--write", action="store_true", help="apply the splice (default: dry run)")
+    p.add_argument("--from", dest="src", default=None,
+                   help="splice a saved export instead of asking the robot")
+    p.add_argument("--target", default=CONSTANTS_JAVA, help=argparse.SUPPRESS)
+    p.set_defaults(fn=cmd_constants)
+    p = sub.add_parser("pinpoint")
+    p.add_argument("file", help="text file holding the Pinpoint Tuner's results or code block")
+    p.add_argument("--write", action="store_true")
+    p.add_argument("--target", default=CONSTANTS_JAVA, help=argparse.SUPPRESS)
+    p.set_defaults(fn=cmd_pinpoint)
+    p = sub.add_parser("foresight")
+    p.add_argument("file", help="text file holding the Foresight Tuner's results or code block")
+    p.add_argument("--write", action="store_true")
+    p.add_argument("--partial", action="store_true")
+    p.add_argument("--target", default=CONSTANTS_JAVA, help=argparse.SUPPRESS)
+    p.set_defaults(fn=cmd_foresight)
     a = ap.parse_args()
     return a.fn(a)
 

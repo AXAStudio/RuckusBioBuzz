@@ -21,7 +21,7 @@ import java.util.Locale;
  * Mutable calibration state for a single coaxial swerve pod.
  *
  * <p>Every field here corresponds to a constructor argument of {@link CoaxialPod} in
- * {@code SwerveDrivetrainConstants}. The bring-up tool discovers these values at runtime; once
+ * {@code Constants}. The bring-up tool discovers these values at runtime; once
  * they look right you export them back into source with
  * {@link SwerveExport#generate}.
  */
@@ -70,7 +70,7 @@ public class PodCal {
     public double analogMin = 0.0;
     public double analogMax = 3.3;
 
-    /** Turn-servo PIDF, in the same units {@code SwerveDrivetrainConstants} uses (per-radian). */
+    /** Turn-servo PIDF, in the same units {@code Constants} uses (per-radian). */
     public double kP = 0.0055 * 180 / Math.PI;
     public double kD = 0.00015 * 180 / Math.PI;
     public double kF = 0.013;

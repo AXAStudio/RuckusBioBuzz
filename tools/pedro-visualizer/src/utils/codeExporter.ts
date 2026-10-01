@@ -1606,7 +1606,6 @@ ${pollenImports}
 
 import org.firstinspires.ftc.teamcode.helpers.PoseStorage;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
-import org.firstinspires.ftc.teamcode.pedroPathing.SwerveDrivetrainConstants;
 
 @Config
 @Autonomous(name = "${autoClassName}", group = "Auto")
@@ -1634,7 +1633,7 @@ ${pollenDeclarations}
     public void init() {
         // Pedro 3 follows paths with Foresight, whose braking model and gains must be measured
         // on the robot first. Refuse to build a path-following OpMode on placeholders.
-        SwerveDrivetrainConstants.requireForesightMeasured();
+        Constants.requireForesightMeasured();
 
         follower = Constants.createFollower(hardwareMap);
         follower.setPose(${pointStepExpression(startPoint, "START_STEP")});

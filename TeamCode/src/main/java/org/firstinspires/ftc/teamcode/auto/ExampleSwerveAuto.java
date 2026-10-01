@@ -13,7 +13,6 @@ import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 
 import org.firstinspires.ftc.teamcode.helpers.PoseStorage;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
-import org.firstinspires.ftc.teamcode.pedroPathing.SwerveDrivetrainConstants;
 
 @Autonomous(name = "ExampleSwerveAuto", group = "Auto")
 public class ExampleSwerveAuto extends OpMode {
@@ -42,7 +41,7 @@ public class ExampleSwerveAuto extends OpMode {
     public void init() {
         // Pedro 3 follows paths with Foresight, whose braking model and gains have not been
         // measured on this robot yet. Refuse to build a path-following OpMode on placeholders.
-        SwerveDrivetrainConstants.requireForesightMeasured();
+        Constants.requireForesightMeasured();
 
         follower = Constants.createFollower(hardwareMap);
         follower.setPose(START_STEP.toPose());

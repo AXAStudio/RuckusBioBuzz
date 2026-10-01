@@ -65,8 +65,8 @@ the HTTP server, and needs me to restart `Swerve Bring-Up` on the Driver Station
 Ship every experimental change behind a **runtime toggle** drained through the
 existing queued-command path (`setPidf`, `setPublishHz`, `pidStep` prove the
 mechanism works), so one install yields A/B/C arms with no reflash. Note
-`config.jsonc` is compiled in and read at OpMode init, so editing it still
-costs a deploy. A knob that can only be exercised by reflashing is a last
+`pedroPathing/Constants.java` is compiled in, so editing it still costs a
+deploy. A knob that can only be exercised by reflashing is a last
 resort; say why.
 
 **"One change, one test" binds at trial granularity, not deploy granularity.**
