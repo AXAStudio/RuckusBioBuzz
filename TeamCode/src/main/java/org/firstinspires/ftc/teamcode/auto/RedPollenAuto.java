@@ -17,7 +17,6 @@ import java.util.List;
 import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
 import org.firstinspires.ftc.teamcode.helpers.PoseStorage;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
-import org.firstinspires.ftc.teamcode.pedroPathing.SwerveDrivetrainConstants;
 import org.firstinspires.ftc.teamcode.pipelines.PollenDetectionPipeline;
 import org.firstinspires.ftc.vision.VisionPortal;
 
@@ -203,7 +202,7 @@ public class RedPollenAuto extends OpMode {
   public void init() {
     // Pedro 3 follows paths with Foresight, whose braking model and gains must be measured
     // on the robot first. Refuse to build a path-following OpMode on placeholders.
-    SwerveDrivetrainConstants.requireForesightMeasured();
+    Constants.requireForesightMeasured();
 
     follower = Constants.createFollower(hardwareMap);
     follower.setPose(START_STEP.toPose());

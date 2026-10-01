@@ -4,8 +4,6 @@ import com.acmerobotics.dashboard.FtcDashboard;
 import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
 import com.pedropathing.drivetrain.DrivePowers;
-import com.pedropathing.drivetrain.Drivetrain;
-import com.pedropathing.follower.Follower;
 import com.pedropathing.revhub.drivetrains.Swerve;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
@@ -36,8 +34,8 @@ import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
  *
  * <p>This OpMode calls {@link Swerve#applyDrive} straight from the sticks instead, which is the
  * same path the bring-up dashboard's kinematics test uses - the one that already behaves correctly.
- * Pods and constants are identical: the drivetrain is taken from a real Follower built by
- * {@link Constants}, so nothing about the calibration changes.
+ * Pods and constants are identical: the drivetrain is {@link Constants#createSwerve}, the same
+ * factory the Follower uses, so nothing about the calibration changes. No localizer is built.
  *
  * <p>Once the odometry pods are installed and verified, go back to {@code DriveTeleOp}, which uses
  * the Follower and gains field-centric driving and path following.
@@ -68,16 +66,7 @@ public class SwerveDirectTeleOp extends OpMode {
 
     @Override
     public void init() {
-        Follower follower = Constants.createFollower(hardwareMap);
-        Drivetrain drivetrain = follower.drivetrain;
-
-        if (!(drivetrain instanceof Swerve)) {
-            throw new IllegalStateException("Expected a swerve drivetrain, but config.jsonc "
-                    + "selected " + drivetrain.getClass().getSimpleName()
-                    + ". Set \"drivetrain\" to \"swerve\".");
-        }
-
-        swerve = (Swerve) drivetrain;
+        swerve = Constants.createSwerve(hardwareMap);
         telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
     }
 

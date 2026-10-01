@@ -46,7 +46,7 @@ POD_SLEW_DEG_S = 214.0
 # open-loop: the PID has already saturated and tracking error is set by the plant, not the gains.
 SLEW_BUDGET = 0.25
 
-# Pod centre distance from robot centre, from SwerveDrivetrainConstants dtLength/dtWidth (mm).
+# Pod centre distance from robot centre, from Constants dtLength/dtWidth (mm).
 POD_RADIUS_IN = math.hypot(146.420, 154.240) / 25.4
 
 # Criterion 9's allowance, kept as clearance so a path that tracks badly is still legal.

@@ -165,8 +165,10 @@ robot stops within 400 ms.
 
 ### 7. Export
 
-**Generate constants** produces a paste-ready block for `SwerveDrivetrainConstants.java` matching
-the existing file's style and imports. The generated source is verified to compile.
+**Generate constants** renders everything the tool holds as one declaration per line, each
+matching a declaration in the TUNED VALUES block at the top of `pedroPathing/Constants.java`.
+`python3 tools/swervetune/robot.py constants --write` splices them in by name, leaving the file's
+provenance comments alone; anything Constants.java cannot express comes back as a WARNING line.
 
 ## Where the hardware configuration lives
 
@@ -189,7 +191,7 @@ old ports.
 
 Calibration auto-saves to `FIRST/swerve_bringup_cal.txt` on the hub and reloads when the OpMode
 restarts, so an interrupted session is not lost. Note this is the *tool's* state — it does not
-change robot behavior until you export the constants into `SwerveDrivetrainConstants.java`.
+change robot behavior until you export the constants into `pedroPathing/Constants.java`.
 
 Everything in `PodCal` round-trips through that file, and `PodCal.roundTripGaps()` proves it by
 reflection at every init, listing any field that does not survive in `state.errors`. That guard
@@ -201,7 +203,7 @@ costs a guarded walk to both mechanical limits to obtain and was being discarded
 
 | state | why it does not persist |
 | --- | --- |
-| heading kP/kD/kF | the source of truth is `SwerveDrivetrainConstants.foresightConfig.headingFeedback`; a saved copy would be a second place to disagree. Seeded from the shipped values at startup |
+| heading kP/kD/kF | the source of truth is `Constants.headingKP` (Foresight's `headingFeedback`); a saved copy would be a second place to disagree. Seeded from the shipped values at startup |
 | `xLock`, `headingHold` | diagnostic view toggles, not calibration |
 | servo PWM range and enable | controller-side settings the Robot Controller resets on restart. If you set a non-default PWM range, **re-apply it after every restart** — it silently reverts, and a measurement taken afterwards is not the one you set up |
 
@@ -214,7 +216,8 @@ costs a guarded walk to both mechanical limits to obtain and was being discarded
 | `dashboard.html` | The UI, bundled into the APK as a classpath resource |
 | `PodCal.java` | Per-pod calibration, and conversion to a real `CoaxialPod` |
 | `SwerveBench.java` | Thread-safe hand-off between the OpMode and web threads |
-| `SwerveExport.java` | Renders calibration back into Java source |
+| `SwerveExport.java` | Renders the tool's tuning as `Constants.java` TUNED VALUES declarations |
+| `FenceGeometry.java` | Pure-Java keep-out geometry for the field fence; host check in `tools/swervetune/FenceGeometryCheck.java` |
 
 Wiring work is done against raw `DcMotorEx` / `CRServo` / `AnalogInput` devices so the tool still
 functions when the constants are wrong or unknown — which is the situation it exists to fix.

@@ -11,7 +11,7 @@ file in the same commit.
 
 Everything here is **diagnostic tooling** (`diagnostics/swerve/`, `tools/swervetune/`). Driving
 through the bring-up OpMode uses the *tool's* saved gains (`/sdcard/FIRST/swerve_bringup_cal.txt`
-on the hub), not `SwerveDrivetrainConstants`. `DriveTeleOp` has no HTTP path, and nothing here
+on the hub), not `pedroPathing/Constants.java`. `DriveTeleOp` has no HTTP path, and nothing here
 controls it.
 
 ---
@@ -167,6 +167,49 @@ drift measurement.
 
 Then run `robot.py check`; it must exit 0.
 
+#### 3.4.1 The BIOBUZZ field fence (on a real field, instead of marking corners)
+
+On a full BIOBUZZ field the fence comes from the field itself, not from two marked corners:
+
+- **Rect** = the perimeter (0..141.5 in both ways), or a sub-region the operator names. Its
+  meaning changes: it is the **wall**, and the robot's footprint (heading-aware, 18 × 18 in by
+  default) must stay inside it, not just its centre.
+- **Keep-outs** = every obstacle in `TeamCode/.../field/biobuzz_field.json` - the two HIVE base
+  rails and the four FLOWERS. That file is the visualizer's obstacle source too
+  (`tools/pedro-visualizer/src/config/defaults.ts` imports it), so the fence and every path drawn
+  in the visualizer agree by construction. Edit obstacles there and nowhere else.
+- Keep-outs get the same clamp as the walls - 4 in + 0.30 s × speed toward it, 6 in smoothstep
+  taper - along the obstacle's own normal, against a circle of the robot's half-diagonal (any
+  heading). Only the component pointing at the obstacle is removed; the robot slides past.
+- Follower commands (`pedroLine`, `pedroCurve`, `pedroChain`, `pedroHold`) are refused if the
+  sampled path brings the robot within 6 in of a keep-out. A Bezier's control-point hull bounds
+  it against a box but not against a rail in the middle, so curves are sampled, not hull-checked.
+- The pose frame becomes the **visualizer's**: x = 0 the red wall, y = 0 the audience wall,
+  inches. `fieldFence` writes the robot's measured field pose into the Pinpoint.
+
+**Arming procedure:**
+1. Operator places the robot and **measures** its field pose (tile seams are 23.58 in apart), and
+   reports x, y, heading. You do not estimate it.
+2. `python robot.py cmd fieldFence x=… y=… headingDeg=… --pose-from-operator`
+   (optional `minX= minY= maxX= maxY=` for a sub-region, `robotL= robotW=` for the real footprint).
+   Or the FIELD panel's **Arm BIOBUZZ field fence**.
+3. Operator confirms the dashboard drawing - rails, FLOWERS, robot - matches the real field.
+4. `robot.py check` must exit 0. It now also fails if the robot overlaps a keep-out.
+
+The witness/frame checks, the odometry-jump discard and rule 6 apply unchanged: `resetImu`,
+`odoConfig` and `boxClear` clear a field fence exactly as they clear a marked box.
+
+#### 3.4.2 Border fence (any floor, no obstacles)
+
+`borderFence width=W height=H x=… y=… headingDeg=… [robotL robotW]` (or the FIELD panel's
+fence selector → **Border only**). A plain W × H in perimeter with the same wall semantics as the
+field fence (the robot's footprint stays inside, heading-aware) and no keep-outs. The operator
+picks a corner as (0, 0): x runs along the width edge, y along the height edge, and the pose is
+the robot centre's measured distance from those two edges plus its heading from +x. `robot.py`
+requires `--pose-from-operator`. `/state` `box.kind` is `border`. `pedrocheck.py path` refuses a
+border fence (`.pp` paths are in BIOBUZZ field coordinates); `pedrocheck.py suite` runs on any
+fence.
+
 ### 3.5 Smoke test before any real run
 
 After "ready":
@@ -216,9 +259,11 @@ retry:
 | `nudge` / `spinServo` | `pod`, `dir` | Jog the selected pod |
 | `headingGoto` / `headingStep` | `deg` | Relative robot rotation, held |
 | `wireScan`, `sweep`, `pulseMotor`, `autoTune` | — | Bring-up routines. **On blocks, strapped** |
-| `pedroStart` | `activate=all` | Needs pose **and** an armed box, or it refuses |
-| `pedroLine` / `pedroHold` / `pedroCurve` | `dx dy power` / `dx dy` / `d power` | Refused if any target or control point is within 6 in of the box edge |
-| `pedroChain` | `pts=x,y;x,y;x,y;x,y\|…` `head=tangent\|constant:deg\|linear:a:b` `power` | Every control point is bounds-checked |
+| `pedroStart` | `activate=all` `pods=shipped\|live` | Needs pose **and** an armed box. Always builds a fresh follower. `shipped` (default) = `Constants.createFollower` as installed; `live` = same follower and shipped `SwerveConfig`, pods from the tool's live calibration |
+| `pedroLine` / `pedroHold` / `pedroCurve` | `dx dy power` / `dx dy dh` / `d power` | Refused if any target or control point is within 6 in of the box edge, or the path comes within 6 in of a keep-out. `dh` = heading change, deg, done by Foresight |
+| `pedroChain` | `pts=x,y;…\|…` (2-12 points per segment) `head=tangent\|reverseTangent\|constant:deg\|linear:a:b\|param:a:b:curve` `power` | `param` = the visualizer's / exported auto's t^curve interpolation (Pedro's `linear` is on distance and differs) |
+| `pedroPidf` | `hp` `tp` `tfp tfs tsp tss` `ti td` `fzpa lzpa` | Foresight gains on the shared config; discards the follower. `hp` is Foresight's heading kP - NOT `setHeadingPidf` |
+| `pedroReset` | - | follower gains, mixer and schedule back to the installed build (also done at OpMode init and stop) |
 | `pedroStop` | — | → IDLE |
 
 **Stop and idle:** `stop` (all servos and motors off → IDLE), `pidHold` (release the pod).
@@ -237,7 +282,13 @@ current one:
 | `select` | `pod` |
 | `focRef` | capture field-forward |
 
-**Recorder:** `recStart label=…`, `recStop`.
+**Recorder:** `recStart label=…`, `recStop`. Since 2026-10-01 every row ends with follower
+columns `fterr,fherr,fcx,fcy,fch,fvel,fbusy` (empty outside FOLLOW), and in FOLLOW the pod
+`err/pwr/flip/ctgt` columns come from the FOLLOWER's pods (`tgt` is blank there).
+
+**Validating through Pedro: `tools/swervetune/pedrocheck.py`** (`suite`, `path`, `report`) - see
+`TUNING_TASK.md`. The tool's own step/heading/drive tests are search tools; acceptance is
+`pedrocheck.py --pods shipped` on the installed build.
 
 **Pose and box.** These **destroy or rewrite the fence**; `robot.py cmd` makes you pass
 `--clears-box-ok`:
@@ -245,26 +296,44 @@ current one:
 | Action | Effect |
 |---|---|
 | `resetImu` | Pinpoint pose + IMU reset. **Clears the box** |
-| `odoConfig` | reconfigures the Pinpoint and resets the pose. **Clears the box** |
+| `odoConfig` | `xPodOffset yPodOffset` (in) `xPodReversed yPodReversed` (true/false), or `restore=1` - Pinpoint geometry in Constants.java's terms; unspecified values keep their live value (legacy `fy sx fdir sdir` still accepted). Resets the pose. **Clears the box**. Live values in `/state` `odo{…,shipped}`; any difference from Constants.java is also an `errors[]` entry, and `export` carries them |
 | `boxClear` | disarms the box |
 | `boxMark` `corner=0\|1` | operator-side action, normally done from the FIELD panel |
 | `boxSet minX minY maxX maxY` / `setPose x y headingDeg` | recovery only. Nothing verifies them against the mat, so the operator must confirm |
+| `fieldFence x y headingDeg [minX minY maxX maxY robotL robotW]` | writes the pose and arms the BIOBUZZ field fence (§3.4.1). `robot.py` requires `--pose-from-operator` (also for `setPose`) |
+| `borderFence width height x y headingDeg [robotL robotW]` | writes the pose and arms a plain border fence (§3.4.2) |
 
 **Calibration.** These write the hub cal file. Only do them on purpose, and say so: `zeroPod`,
 `zeroAll`, `zeroTrim deg`, `setEncoderReversed`, `setDriveReversed`, `setServoReversed`,
 `setLabel`, `setRange`, `save`, `reload`, `export`.
+
+**The output of a tuning session is `Constants.java`.** `export` renders everything the tool
+holds - per-pod turn gains, zeros, analog ranges, drive directions, encoder names, servo caching,
+pulse settings, heading kP, translational PID, coast-down decelerations, Pinpoint offsets and
+directions - as one declaration per line, each matching a declaration in the TUNED VALUES block
+at the top of `pedroPathing/Constants.java`. Then:
+
+    python robot.py constants            # export, save to runs/constants_<ts>.java, show the diff
+    python robot.py constants --write    # splice by name; provenance comments are untouched
+
+Anything the tool holds that Constants.java cannot express (a non-zero kI, per-pod pulse
+settings, a pod relabelled to a different corner, heading kD) comes back as a WARNING and is not
+written. `--write` changes **shipped** code: build, then commit each value with its evidence.
+`--from FILE` re-splices a saved export without the robot.
 
 ### `/state` fields you will actually use
 
 `live`, `started`, `mode` (IDLE / DRIVE / PID / FOLLOW / …), `busy`, `voltage`, `message`,
 `errors[]`, `xLock`,
 `heading{ok,deg,targetDeg,hold,…}`, `pose{ok,x,y,vx,vy}` (inches, in/s),
-`box{valid,minX,minY,maxX,maxY,marked0,clamped}`,
+`box{valid,minX,minY,maxX,maxY,marked0,clamped,kind,robotL,robotW,keepOutClear,keepOuts[]}`
+(`kind` is `marked` or `field`; `keepOutClear` is the robot circle's clearance to the nearest
+keep-out, in, `null` with none),
 `pedro{active,job,busy,x,y,h,terr}`, `rec{recording,runId,samples,overflowed,label}`,
 `timing{encoders,heading,mode,publish,telemetry,publishHz,pub{…}}`,
 `pods[]{i,label,hasEnc,volts,wheelDeg,tgtDeg,cmdPower,kp,kd,ks,…}`.
 
-The `errors[]` entries about **gain divergence** from `SwerveDrivetrainConstants` are
+The `errors[]` entries about **gain divergence** from `Constants` are
 deliberate, not faults.
 
 ---
@@ -356,7 +425,7 @@ Escalation ladder, fastest safe option first:
 
 1. `./gradlew :TeamCode:assembleDebug` must pass. Commit.
 2. Batch: a deploy is expensive, so put experiments behind runtime `/cmd` toggles so one install
-   carries many A/B arms. `config.jsonc` is compiled in, so changing it costs a deploy.
+   carries many A/B arms. Anything in `Constants.java` is compiled in, so changing it costs a deploy.
 3. OPS REQUEST: install commit `<sha>` → start and START `Swerve Bring-Up` → reply "ready" + volts
    + surface. Say what you will work on while you wait, and then work on it.
 4. On "ready":

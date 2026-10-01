@@ -13,7 +13,7 @@ import org.firstinspires.ftc.teamcode.pedroPathing.procedures.Tests;
  * robot controller. The procedures in {@code procedures/} are the Pedro Quickstart's
  * ({@code pedro3} branch, f96afa6), unmodified apart from the package.
  *
- * <p>These drive the SWERVE drivetrain from {@link SwerveDrivetrainConstants}. None of them know
+ * <p>These drive the SWERVE drivetrain from {@link Constants}. None of them know
  * about the bring-up tool's safe-area box - it does not exist outside SwerveBringUp - and their
  * default distances are 48 in forward and sideways (36 in for braking). The practice area is
  * 51 x 46 in. Lower the distance inputs to fit, or run on a full field.
@@ -23,8 +23,8 @@ import org.firstinspires.ftc.teamcode.pedroPathing.procedures.Tests;
 public class Tuning {
     @Tuner(name = "Foresight Tuner")
     public static Procedure foresightTuner() {
-        return new ForesightTuner(SwerveDrivetrainConstants::createLocalizer,
-                SwerveDrivetrainConstants::createSwerve);
+        return new ForesightTuner(Constants::createLocalizer,
+                Constants::createSwerve);
     }
 
     @Tuner(name = "Pinpoint Tuner")
@@ -35,10 +35,10 @@ public class Tuning {
     /** Hold/line/curve tests follow paths, so they go through the same guard as the autos. */
     @Tuner(name = "Tests")
     public static Procedure tests() {
-        return new Tests(SwerveDrivetrainConstants::createSwerve,
-                SwerveDrivetrainConstants::createLocalizer, () -> {
-                    SwerveDrivetrainConstants.requireForesightMeasured();
-                    return new Foresight(SwerveDrivetrainConstants.foresightConfig);
+        return new Tests(Constants::createSwerve,
+                Constants::createLocalizer, () -> {
+                    Constants.requireForesightMeasured();
+                    return new Foresight(Constants.foresightConfig);
                 });
     }
 }

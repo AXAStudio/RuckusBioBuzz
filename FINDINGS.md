@@ -516,3 +516,70 @@ kV and heading brake are placeholders. `SwerveDrivetrainConstants.requireForesig
 stops the autos and the tuner's path tests until the Foresight Tuner has been run. Criterion 9
 needs that first. Note the tuner's default drive distances (48 in) exceed the 46 in side of the
 practice area and ignore the bring-up safe-area box.
+
+## 2026-10-01 — constants consolidation, BIOBUZZ field fence, Constants export (rule 9 declaration)
+
+No data has been taken with any of this. Declared before first use.
+
+**Shipped (`pedroPathing/`) — values unchanged, structure changed.** `SwerveDrivetrainConstants`,
+`MecanumDrivetrainConstants` and the `config.jsonc` selector are folded into one swerve-only
+`Constants.java`. Every tuned value moved into a TUNED VALUES block at the top as one declaration
+each; the configs read those names. Checked identical by hand against the old file: heading P
+1.20, translational 0.26/0/0.025, decelerations 40/40 (now two names; the old single constant fed
+both), Pinpoint -5.376/-3.912 REVERSED/FORWARD, per-pod arrays, caching 0.01, pulse
+6.0°/0.6°/0.035/20 ms/20°/s/0.10 s, encoder names se1/se0/se3/se2. `SwerveDirectTeleOp` now
+builds only the swerve (`createSwerve`) instead of a whole Follower, so it no longer constructs a
+`PinpointLocalizer` - one fewer thing that can re-origin the Pinpoint.
+
+**Bring-up tool (diagnostic) — what changes for measurement:**
+1. A marked box (corners A/B, `boxSet`) behaves exactly as before: centre-in-rect, same margins,
+   same taper; `outwardScale` now delegates to `FenceGeometry.taper`, the identical smoothstep.
+2. New `fieldFence` mode adds keep-out clamps and a heading-aware perimeter. Any azimuth sample
+   taken while `box.clamped=true` under a field fence is suspect for the same reason as before,
+   and now also near the HIVE rails and FLOWERS, not only near walls.
+3. `/state` `box` gains `kind`, `robotL`, `robotW`, `keepOutClear`, `keepOuts[]`. The keep-out
+   JSON is built once at arming; the per-publish cost is a string append plus one clearance
+   computation over 6 polygons. Estimated well under 0.1 ms - NOT measured; check `msPublish`
+   against the 1.6 ms baseline on the first session.
+4. Tool heading kP is now seeded from `Constants.headingKP` (same 1.20).
+5. `export` emits `Constants.java` declarations (was a pod-factory block that no longer matched
+   the file). `robot.py constants` splices them by name.
+
+Fence geometry checked on the host: `tools/swervetune/FenceGeometryCheck.java`, 353 assertions
+against the real BIOBUZZ rail and FLOWER shapes (normals, inside/outside, taper continuity, a
+hull-clear curve that still crosses a rail, push-out). Not yet run on the robot.
+
+## 2026-10-01 (later) — Pedro-validation flow (rule 9 declaration)
+
+No data taken yet. What changes in the bring-up tool (diagnostic) and how it alters measurement:
+
+1. **Recorder:** 7 follower columns appended at the END of every row (`fterr,fherr,fcx,fcy,fch,
+   fvel,fbusy`); every existing column keeps its position, so archived CSVs and scorers are
+   unaffected. In FOLLOW, pod `err/pwr/flip/ctgt` now come from the follower's pods (previously
+   NaN) and `tgt` is blanked (it was the tool's stale mixer mirror). Outside FOLLOW: unchanged.
+2. **Statics reset at init, stop and `pedroReset`:** Foresight gains on `Constants.foresightConfig`,
+   the mixer (`setMixer`) and the turn-gain schedule go back to the installed build. Before this,
+   a `setMixer`/`pedroPidf` survived an OpMode restart (and leaked into any auto run in the same
+   app process). Any A/B that relied on a toggle persisting across a restart no longer does.
+3. **Follower bench:** `pedroStart` always builds a fresh follower; `pods=live` builds it on the
+   tool's calibration. Heading kP for Foresight is now set by `pedroPidf hp`, and export takes
+   Foresight's heading kP from there - previously it would have exported the tool's heading-HOLD
+   kP, a different control law. Existing comment in Constants already noted the tool's kD 0.080
+   was "not yet re-validated" on path following - this is the mechanism that validates it.
+
+Shipped (`pedroPathing/Constants.java`): TUNED block now carries all 17 Foresight Tuner values by
+name; translational is the tuner's primary/secondary shape, built as ONE PID while the two are
+equal (they are: 0.26/0.26), so the installed behaviour is unchanged. Checked by hand: heading 1.20,
+translational 0.26/0/0.025 single PID, coast/brake kV 1/73.9, velocities 73.9, decel 40/40,
+quadratic brake 1/(2*40), linear and heading brake 0.
+
+## 2026-10-01 (later still) — border fence, odometry in Constants terms (rule 9 declaration)
+
+Diagnostic only, no data taken. `borderFence` arms a W x H perimeter with the field fence's
+semantics and no keep-outs (`box.kind = border`, persisted as a `kind|` line; files written before
+it load as `field` if they carry a `robot|` line). `odoConfig` now takes Constants.java's names and
+keeps unspecified values (previously offsets applied only as a pair and directions only as a pair),
+and it now deletes the hub box file like `resetImu` does - before, a reloaded box after `odoConfig`
+was caught only by the origin/witness check. Odometry differences from Constants.java appear in
+`errors[]` and `/state` `odo`. The bring-up tool and DashboardDriveTeleOp now take the Pinpoint's
+device name from `Constants.pinpointConfig` (was a literal "pinpoint"; same value today).

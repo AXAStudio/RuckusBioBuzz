@@ -20,7 +20,7 @@ import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.Pose2D;
 import org.firstinspires.ftc.robotcore.internal.system.AppUtil;
-import org.firstinspires.ftc.teamcode.pedroPathing.SwerveDrivetrainConstants;
+import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -36,7 +36,7 @@ import java.util.Locale;
  * <p><b>Diagnostic, not shipped.</b> It reads the bring-up tool's on-hub calibration
  * ({@code swerve_bringup_cal.txt}) and safe-area box ({@code swerve_field_box.txt}), so it
  * drives the pods with whatever gains, zeros and directions the dashboard last saved - not
- * {@code SwerveDrivetrainConstants}. Every per-pod edit (setPidf, zeros, directions, range)
+ * {@code Constants}. Every per-pod edit (setPidf, zeros, directions, range)
  * saves the file immediately. Not saved anywhere, so not seen here: the heading PIDF
  * (setHeadingPidf - this class uses the 1.20 / 0.080 defaults), the gain-schedule tuning, the
  * mixer taper/slew, the PWM range and live odoConfig.
@@ -189,9 +189,10 @@ public class DashboardDriveTeleOp extends OpMode {
         }
 
         try {
-            pinpoint = hardwareMap.get(GoBildaPinpointDriver.class, "pinpoint");
+            pinpoint = hardwareMap.get(GoBildaPinpointDriver.class,
+                    Constants.pinpointConfig.name.get());
             com.pedropathing.revhub.localizers.PinpointConfig pc =
-                    SwerveDrivetrainConstants.pinpointConfig;
+                    Constants.pinpointConfig;
             pinpoint.setOffsets(pc.xPodOffset.get(), pc.yPodOffset.get(), pc.offsetUnits.get());
             if (pc.ticksPerUnit.get().isPresent()) {
                 pinpoint.setEncoderResolution(pc.ticksPerUnit.get().getAsDouble(),

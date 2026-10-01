@@ -10,12 +10,13 @@
  *
  * Two things matter as much as what is read. Some of those numbers are
  * placeholders until the Foresight Tuner has been run, and the file says so:
- * `SwerveDrivetrainConstants.FORESIGHT_MEASURED`, and constants named
+ * `Constants.FORESIGHT_MEASURED`, and constants named
  * `PLACEHOLDER_*`. A placeholder is never offered as a measurement. And some
  * settings Pedro simply has no number for; those stay visibly hand-tuned.
  */
 
-export type Drivetrain = "swerve" | "mecanum";
+/** Swerve only since 2026-10-01: TeamCode has one constants file, `pedroPathing/Constants.java`. */
+export type Drivetrain = "swerve";
 
 /** A value read from the constants file, and where it came from. */
 export interface ImportedConstant {
@@ -88,13 +89,6 @@ export function stripComments(source: string): string {
     .replace(/(^|[^:])\/\/[^\n]*/g, "$1");
 }
 
-/** Which drivetrain `config.jsonc` selects. */
-export function readDrivetrain(configJsonc: string): Drivetrain | null {
-  const match = /"drivetrain"\s*:\s*"([a-z]+)"/i.exec(stripComments(configJsonc));
-  const value = match?.[1]?.toLowerCase();
-  return value === "swerve" || value === "mecanum" ? value : null;
-}
-
 /** A `c.<field>.set(<argument>)` read out of a config lambda. */
 export interface ConfigSetting {
   /** The argument exactly as written. */
@@ -123,8 +117,19 @@ export function readConfigSetting(source: string, field: string): ConfigSetting 
   return {
     expression,
     value: resolveNumber(code, expression),
-    placeholder: /\bPLACEHOLDER/i.test(expression),
+    // Follow the name chain: Constants.java keeps each tuned value as a named declaration, so
+    // `maxAchievableForwardVelocity` can itself be `= PLACEHOLDER_MAX_VELOCITY`.
+    placeholder: resolvesThroughPlaceholder(code, expression),
   };
+}
+
+function resolvesThroughPlaceholder(code: string, expression: string, depth = 0): boolean {
+  if (/\bPLACEHOLDER/i.test(expression)) return true;
+  if (depth > 3 || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(expression)) return false;
+  const declaration = new RegExp(
+    `static\\s+final\\s+double\\s+${expression}\\s*=\\s*([^;]+);`,
+  ).exec(code);
+  return declaration ? resolvesThroughPlaceholder(code, declaration[1].trim(), depth + 1) : false;
 }
 
 function resolveNumber(code: string, expression: string, depth = 0): number | null {
@@ -199,12 +204,7 @@ export function parseTeamCodeConstants(
     values.push({ setting, label, value: round(Math.abs(read.value)), source: source_, unit, ...extra });
   };
 
-  take("maxVelocity", "Max velocity", "maxAchievableForwardVelocity", "in/s", {
-    note:
-      drivetrain === "mecanum"
-        ? "Forward speed. A mecanum is slower sideways, and this tool profiles one speed, so the paths are timed as if driven forward."
-        : undefined,
-  });
+  take("maxVelocity", "Max velocity", "maxAchievableForwardVelocity", "in/s");
 
   take("maxDeceleration", "Max deceleration", "naturalForwardDeceleration", "in/s²", {
     floor: true,
