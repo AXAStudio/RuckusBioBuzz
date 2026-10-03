@@ -3,7 +3,9 @@ package org.firstinspires.ftc.teamcode.tele;
 import static org.firstinspires.ftc.teamcode.systems.intake.intakeState.INTAKE;
 import static org.firstinspires.ftc.teamcode.systems.intake.intakeState.STOP;
 
+import com.acmerobotics.dashboard.FtcDashboard;
 import com.acmerobotics.dashboard.config.Config;
+import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.math.Pose;
 import com.qualcomm.hardware.lynx.LynxModule;
@@ -37,6 +39,7 @@ public class TeleOp extends OpMode {
 
     @Override
     public void init() {
+        telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
         hubs = hardwareMap.getAll(LynxModule.class);
         for (LynxModule hub : hubs) {
             hub.setBulkCachingMode(LynxModule.BulkCachingMode.MANUAL);
@@ -92,8 +95,10 @@ public class TeleOp extends OpMode {
         telemetry.addData("heading (deg)", Math.toDegrees(pose.heading()));
         telemetry.addData("shooting", shooting);
         telemetry.addData("in zone", shooter.inZone());
-        telemetry.addData("pollen vel / target", "%.0f / %.0f", shooter.pollenVelocity(), shooter.pollenTarget());
-        telemetry.addData("nectar vel / target", "%.0f / %.0f", shooter.nectarVelocity(), shooter.nectarTarget());
+        telemetry.addData("pollen velocity", shooter.pollenVelocity());
+        telemetry.addData("pollen target", shooter.pollenTarget());
+        telemetry.addData("nectar velocity", shooter.nectarVelocity());
+        telemetry.addData("nectar target", shooter.nectarTarget());
         telemetry.addData("aimed pollen / nectar", shooter.pollenAimed() + " / " + shooter.nectarAimed());
         telemetry.addData("ready", shooter.ready());
         telemetry.update();

@@ -1,6 +1,7 @@
 package org.firstinspires.ftc.teamcode.systems;
 
 import com.acmerobotics.dashboard.config.Config;
+import com.pedropathing.control.PIDFCoefficients;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
@@ -18,12 +19,17 @@ public class shooter {
     public static boolean POLLEN_FLYWHEEL_REVERSED = false;
     public static boolean NECTAR_FLYWHEEL_REVERSED = false;
     public static double AT_SPEED_FRACTION = 0.05;
+    public static PIDFCoefficients POLLEN_PIDF = new PIDFCoefficients(500, 0, 0, 11.7);
+    public static PIDFCoefficients NECTAR_PIDF = new PIDFCoefficients(500, 0, 0, 11.7);
 
     public static double POLLEN_TURRET_CENTER = 0.5;
     public static double NECTAR_TURRET_CENTER = 0.5;
     public static boolean POLLEN_TURRET_REVERSED = false;
     public static boolean NECTAR_TURRET_REVERSED = false;
-    public static double TURRET_RANGE_DEG = 355;
+    // {servo deg, turret deg}: the servo turning [0] degrees turns the turret [1] degrees.
+    public static double[] POLLEN_TURRET_GEAR_RATIO = {355, 370};
+    public static double[] NECTAR_TURRET_GEAR_RATIO = {355, 370};
+    public static double SERVO_RANGE_DEG = 355; // Axon Max MK1
     public static double UNWIND_HYSTERESIS_DEG = 10;
     public static double UNWIND_SETTLE_S = 1.0;
 
@@ -59,6 +65,8 @@ public class shooter {
             flywheel.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
             flywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
         }
+        setVelocityPidf(pollenFlywheel, POLLEN_PIDF);
+        setVelocityPidf(nectarFlywheel, NECTAR_PIDF);
     }
 
     public void setAlliance(Alliance alliance) {
@@ -77,9 +85,9 @@ public class shooter {
         nectarAimed = false;
         if (shooting && inZone) {
             pollenAimed = pollenTurret.track(aiming.aimPollen()[1],
-                POLLEN_TURRET_CENTER, POLLEN_TURRET_REVERSED);
+                POLLEN_TURRET_CENTER, POLLEN_TURRET_REVERSED, POLLEN_TURRET_GEAR_RATIO);
             nectarAimed = nectarTurret.track(aiming.aimNecter()[1],
-                NECTAR_TURRET_CENTER, NECTAR_TURRET_REVERSED);
+                NECTAR_TURRET_CENTER, NECTAR_TURRET_REVERSED, NECTAR_TURRET_GEAR_RATIO);
         } else {
             pollenTurret.center(POLLEN_TURRET_CENTER);
             nectarTurret.center(NECTAR_TURRET_CENTER);
@@ -92,6 +100,11 @@ public class shooter {
 
         pollenVelocity = pollenFlywheel.getVelocity();
         nectarVelocity = nectarFlywheel.getVelocity();
+    }
+
+    private static void setVelocityPidf(DcMotorEx flywheel, PIDFCoefficients pidf) {
+        flywheel.setPIDFCoefficients(DcMotor.RunMode.RUN_USING_ENCODER,
+            new com.qualcomm.robotcore.hardware.PIDFCoefficients(pidf.P, pidf.I, pidf.D, pidf.F));
     }
 
     public boolean ready() {
@@ -125,10 +138,11 @@ public class shooter {
             this.servo = servo;
         }
 
-        boolean track(double theta, double center, boolean reversed) {
-            double turn = 360.0 / TURRET_RANGE_DEG;
+        boolean track(double theta, double center, boolean reversed, double[] gearRatio) {
+            double range = SERVO_RANGE_DEG * gearRatio[1] / gearRatio[0];
+            double turn = 360.0 / range;
             double last = Double.isNaN(position) ? center : position;
-            double base = center + (reversed ? -1 : 1) * Math.toDegrees(theta) / TURRET_RANGE_DEG;
+            double base = center + (reversed ? -1 : 1) * Math.toDegrees(theta) / range;
             double follow = base + Math.round((last - base) / turn) * turn;
             double overshoot = Math.max(-follow, follow - 1);
 
@@ -136,7 +150,7 @@ public class shooter {
             if (overshoot <= 0) {
                 position = follow;
                 aimed = true;
-            } else if (overshoot <= UNWIND_HYSTERESIS_DEG / TURRET_RANGE_DEG) {
+            } else if (overshoot <= UNWIND_HYSTERESIS_DEG / range) {
                 position = clamp(follow);
             } else {
                 double unwound = follow - Math.signum(follow - 0.5) * turn;
