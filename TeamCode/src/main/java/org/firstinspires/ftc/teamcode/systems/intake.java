@@ -1,12 +1,8 @@
-package org.firstinspires.ftc.teamcode.modules;
+package org.firstinspires.ftc.teamcode.systems;
 
-
-import static org.firstinspires.ftc.teamcode.modules.intake.intakeState.INTAKE;
 
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.HardwareMap;
-
-import org.firstinspires.ftc.teamcode.helpers.Alliance;
 
 public class intake {
     private DcMotor intakeLeft, intakeRight;

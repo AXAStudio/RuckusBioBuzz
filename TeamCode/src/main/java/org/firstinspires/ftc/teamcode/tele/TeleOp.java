@@ -1,16 +1,14 @@
 package org.firstinspires.ftc.teamcode.tele;
 
-import static org.firstinspires.ftc.teamcode.modules.intake.intakeState.INTAKE;
-import static org.firstinspires.ftc.teamcode.modules.intake.intakeState.STOP;
+import static org.firstinspires.ftc.teamcode.systems.intake.intakeState.INTAKE;
+import static org.firstinspires.ftc.teamcode.systems.intake.intakeState.STOP;
 
 import com.acmerobotics.dashboard.config.Config;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.math.Pose;
 import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
-import org.firstinspires.ftc.teamcode.modules.intake;
-import com.qualcomm.robotcore.hardware.DcMotor;
-import com.qualcomm.robotcore.hardware.DcMotorSimple;
+import org.firstinspires.ftc.teamcode.systems.intake;
 
 import java.util.List;
 
