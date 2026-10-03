@@ -1,5 +1,8 @@
 package org.firstinspires.ftc.teamcode.tele;
 
+import static org.firstinspires.ftc.teamcode.modules.intake.intakeState.INTAKE;
+import static org.firstinspires.ftc.teamcode.modules.intake.intakeState.STOP;
+
 import com.acmerobotics.dashboard.config.Config;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.math.Pose;
@@ -77,11 +80,12 @@ public class TeleOp extends OpMode {
 
         boolean shooting = gamepad2.right_bumper;
         shooter.update(shooting);
+        intake.update();
 
         if ((shooting && shooter.ready()) || gamepad1.left_bumper) {
-            intake.runIntake();
+            intake.setState(INTAKE);
         } else {
-            intake.stopIntake();
+            intake.setState(STOP);
         }
 
         telemetry.addData("alliance", alliance);
