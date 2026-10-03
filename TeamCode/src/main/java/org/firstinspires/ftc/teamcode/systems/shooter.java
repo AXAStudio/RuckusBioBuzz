@@ -90,11 +90,13 @@ public class shooter {
 
         pollenVelocity = pollenFlywheel.getVelocity();
         nectarVelocity = nectarFlywheel.getVelocity();
-
+        boolean readyShoot = inZone && pollenAimed && nectarAimed
+                && atSpeed(pollenVelocity, pollenTarget);
+        boolean unwinding = pollenTurret.unwinding() && !nectarTurret.unwinding();
         switch(state){
             case RESET:
                 //hold the servos where the unwind sent them
-                if (!pollenTurret.unwinding() && !nectarTurret.unwinding()) state = states.TRACK;
+                if (!unwinding) state = states.TRACK;
                 break;
             case TRACK:
             case SHOOT:
@@ -107,9 +109,8 @@ public class shooter {
                     pollenTurret.center(POLLEN_TURRET_CENTER);
                     nectarTurret.center(NECTAR_TURRET_CENTER);
                 }
-                if (pollenTurret.unwinding() || nectarTurret.unwinding()) state = states.RESET;
-                else if (inZone && pollenAimed && nectarAimed
-                    && atSpeed(pollenVelocity, pollenTarget) && atSpeed(nectarVelocity, nectarTarget)) state = states.SHOOT;// is the flywheel at speed?
+                if (unwinding) state = states.RESET;
+                else if (readyShoot) state = states.SHOOT;// is the flywheel at speed?
                 else state = states.TRACK;
                 break;
         }
