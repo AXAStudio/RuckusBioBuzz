@@ -9,7 +9,7 @@ public class intake {
     HardwareMap hardwareMap;
     private intakeState currentState = intakeState.STOP;
     public enum intakeState {
-        INTAKE, STOP
+        INTAKE, STOP, REJECT
     }
     public intake(HardwareMap hardwareMap) {
         this.hardwareMap = hardwareMap;
@@ -27,12 +27,16 @@ public class intake {
 
     public void update() {
         if (currentState == intakeState.INTAKE) {
-            intakeLeft.setPower(1.0);
-            intakeRight.setPower(1.0);
+            intakeLeft.setPower(1);
+            intakeRight.setPower(1);
         } else if (currentState == intakeState.STOP) {
-            intakeLeft.setPower(0.0);
-            intakeRight.setPower(0.0);
+            intakeLeft.setPower(0);
+            intakeRight.setPower(0);
+        }else if (currentState == intakeState.REJECT) {
+            intakeLeft.setPower(-1);
+            intakeRight.setPower(-1);
         }
+
 
     }
 

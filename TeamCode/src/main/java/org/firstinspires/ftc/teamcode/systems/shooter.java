@@ -51,6 +51,10 @@ public class shooter {
     private double nectarTarget;
     private double pollenVelocity;
     private double nectarVelocity;
+    private enum states {
+            RESET, TRACK, SHOOT
+    }
+    states state = states.TRACK;
 
     public shooter(HardwareMap hardwareMap, predictiveAiming predictor) {
         this.predictor = predictor;
@@ -67,6 +71,7 @@ public class shooter {
         }
         setVelocityPidf(pollenFlywheel, POLLEN_PIDF);
         setVelocityPidf(nectarFlywheel, NECTAR_PIDF);
+
     }
 
     public void setAlliance(Alliance alliance) {
@@ -74,13 +79,20 @@ public class shooter {
         regression = new shootingRegression(aiming);
     }
 
-    public void update(boolean shooting) {
-        this.shooting = shooting;
+    public void update() {
         pollenFlywheel.setDirection(POLLEN_FLYWHEEL_REVERSED ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD);
         nectarFlywheel.setDirection(NECTAR_FLYWHEEL_REVERSED ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD);
 
         inZone = zone.predictedInZone();
-
+        //Reset, track, shoot
+        switch(state){
+            case RESET:
+                break;
+            case TRACK:
+                break;
+            case SHOOT:
+                break;
+        }
         pollenAimed = false;
         nectarAimed = false;
         if (shooting && inZone) {
@@ -145,8 +157,8 @@ public class shooter {
             double base = center + (reversed ? -1 : 1) * Math.toDegrees(theta) / range;
             double follow = base + Math.round((last - base) / turn) * turn;
             double overshoot = Math.max(-follow, follow - 1);
-
             boolean aimed = false;
+
             if (overshoot <= 0) {
                 position = follow;
                 aimed = true;

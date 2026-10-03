@@ -1,7 +1,6 @@
 package org.firstinspires.ftc.teamcode.tele;
 
-import static org.firstinspires.ftc.teamcode.systems.intake.intakeState.INTAKE;
-import static org.firstinspires.ftc.teamcode.systems.intake.intakeState.STOP;
+import static org.firstinspires.ftc.teamcode.systems.intake.intakeState;
 
 import com.acmerobotics.dashboard.FtcDashboard;
 import com.acmerobotics.dashboard.config.Config;
@@ -69,6 +68,8 @@ public class TeleOp extends OpMode {
 
     @Override
     public void loop() {
+        Pose pose = follower.pose();
+        FieldView.publish(pose, predictor.predictPose());
         for (LynxModule hub : hubs) {
             hub.clearBulkCache();
         }
@@ -76,24 +77,21 @@ public class TeleOp extends OpMode {
         follower.manual(-gamepad1.left_stick_y, -gamepad1.left_stick_x, -gamepad1.right_stick_x);
         follower.update();
 
-        Pose pose = follower.pose();
-        FieldView.publish(pose, predictor.predictPose());
 
-        boolean shooting = gamepad2.right_bumper;
-        shooter.update(shooting);
-        intake.update();
-
-        if ((shooting && shooter.ready()) || gamepad1.left_bumper) {
-            intake.setState(INTAKE);
-        } else {
-            intake.setState(STOP);
+        if ((shooter.ready()) || gamepad1.right_bumper) {
+            intake.setState(intakeState.INTAKE);
+        } else if(gamepad1.left_bumper) {
+            intake.setState(intakeState.REJECT);
+        }else{
+            intake.setState(intakeState.STOP);
         }
+        shooter.update();
+        intake.update();
 
         telemetry.addData("alliance", alliance);
         telemetry.addData("x", pose.x());
         telemetry.addData("y", pose.y());
         telemetry.addData("heading (deg)", Math.toDegrees(pose.heading()));
-        telemetry.addData("shooting", shooting);
         telemetry.addData("in zone", shooter.inZone());
         telemetry.addData("pollen velocity", shooter.pollenVelocity());
         telemetry.addData("pollen target", shooter.pollenTarget());
