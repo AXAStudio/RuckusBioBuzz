@@ -144,7 +144,7 @@ public final class SwerveConfigWriter {
     }
 
     /** Resource name of the configuration bundled in the APK, under res/xml. */
-    public static final String BUILT_IN_RESOURCE = "swerve_bringup";
+    public static final String BUILT_IN_RESOURCE = "ruckusbiobuzz";
 
     /**
      * Activates the configuration shipped inside the APK under {@code res/xml}.

@@ -45,8 +45,9 @@ contradicts the code, the code wins — fix this file in the same commit.**
   `SERVO_CURRENT` channel — but it is a **rail total for all four servos** and
   is sampled on the **5 Hz** idle path, far too slow to catch a 0.37 s rise.
   One trace: mean 10 mA, max 341 mA (unreliable).
-- Hub port map / config names are **not documented anywhere yet.** If you need
-  them, read the OpMode `hardwareMap` lookups — do not invent them.
+- Hub port map / config names live in `TeamCode/src/main/res/xml/ruckusbiobuzz.xml`
+  (the built-in config, renamed from `swerve_bringup.xml` 2026-10-03). Names there
+  must match the `hardwareMap` lookups — check both, do not invent them.
 
 ## 3. Code map
 

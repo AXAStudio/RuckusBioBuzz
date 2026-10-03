@@ -174,7 +174,7 @@ provenance comments alone; anything Constants.java cannot express comes back as 
 
 There are two copies, and they serve different purposes.
 
-**`TeamCode/src/main/res/xml/swerve_bringup.xml` — the baseline, shipped in the APK.**
+**`TeamCode/src/main/res/xml/ruckusbiobuzz.xml` — the baseline, shipped in the APK.**
 The SDK discovers any `res/xml` file rooted at `<Robot type="FirstInspires-FTC">` and offers it as a
 read-only configuration. That makes it the recovery path: it is version controlled with the code,
 reinstalls with the app, and cannot be lost by wiping the hub. Activate it with **Use built-in
@@ -184,7 +184,7 @@ config** on the dashboard, then restart. Read-only is the point — it is the kn
 Created by **Write & activate** when you need to change ports. It lives only on that hub.
 
 If you change ports in the dashboard and want the change to stick for the team, copy the XML back
-into `res/xml/swerve_bringup.xml` and commit it. Otherwise the next person to flash a hub gets the
+into `res/xml/ruckusbiobuzz.xml` and commit it. Otherwise the next person to flash a hub gets the
 old ports.
 
 ## Persistence

@@ -190,7 +190,7 @@ default position, roughly mid-travel. Soft Start limits how hard. Hands clear, r
    positions strictly inside 0 and 1. Do not proceed otherwise.
 4. `seam.py --pod 0`. If clearance is poor: re-clock, re-zero, re-calibrate, repeat from 2.
 5. `bandgate.py --save 0` — records where this flash put the band.
-6. **Flash back to CR.** Restore `swerve_bringup.xml`, restart.
+6. **Flash back to CR.** Restore `ruckusbiobuzz.xml`, restart.
 7. CR baseline: `ploose.py --pod 0` and `crit8_current.py 0`.
 8. Flash to Servo Mode again, same settings. Positional config, restart, re-calibrate.
 9. **Hard gate: `bandgate.py --check 0`.** Endpoints must match the first flash within **2.0°**
@@ -209,7 +209,7 @@ disturbed, so no remove-and-refit control run is needed.
 **Port type must change too.** A servo reflashed to Servo Mode needs its port redeclared: the SDK
 builds a different device class per port type and asking for a `Servo` on a CR port throws.
 Activate `swerve_positional_p0.xml` (`GET /swerve/config?builtin=swerve_positional_p0`) and restart
-the robot. `swerve_bringup.xml` goes back when the A/B is done.
+the robot. `ruckusbiobuzz.xml` goes back when the A/B is done.
 
 ## What to measure
 

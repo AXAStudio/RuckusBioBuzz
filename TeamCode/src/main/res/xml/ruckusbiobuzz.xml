@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+    Full robot hardware configuration, shipped inside the APK.
+
+    The SDK discovers any res/xml file whose root is <Robot type="FirstInspires-FTC"> and offers it
+    as a read-only configuration, so this survives a wiped hub and is version controlled with the
+    code it belongs to. Activate it from the Swerve Bring-Up dashboard ("Use built-in config") or
+    pick it in the Driver Station config list if you have one.
+
+    Read-only is deliberate: this is the known-good baseline to fall back to. To experiment with
+    ports, use "Write & activate" on the dashboard, which creates an editable copy on the hub.
+    That editable copy is swerve-only; it does not carry the mechanism devices below.
+
+    Names must match the hardwareMap.get() calls in code.
+
+    Control Hub (module 173):
+      sm0-sm3            drive motors        motor ports 0-3
+      ss0-ss3            turn servos         servo ports 0-3   (needs the servo power module)
+      nectarTurretServo  nectar turret       servo port 4      (systems/shooter)
+      pollenTurretServo  pollen turret       servo port 5      (systems/shooter)
+      se0-se3            Axon absolute enc.  analog ports 0-3  (spliced two per analog port)
+      pinpoint           goBILDA Pinpoint    I2C bus 0
+
+    Expansion Hub (module 2, the factory default address - check it if the hub was re-addressed):
+      intakeLeft         intake              motor port 0      (systems/intake)
+      intakeRight        intake              motor port 1      (systems/intake)
+      nectarTurret       nectar flywheel     motor port 2      (systems/shooter)
+      pollenTurret       pollen flywheel     motor port 3      (systems/shooter)
+      scoopula           flower intake drop  servo port 0      (not in code yet)
+      turretGate         turret gate         servo port 1      (not in code yet)
+-->
+<Robot type="FirstInspires-FTC">
+    <LynxUsbDevice name="Control Hub Portal" serialNumber="(embedded)" parentModuleAddress="173">
+        <LynxModule name="Control Hub" port="173">
+            <Motor name="sm0" port="0" />
+            <Motor name="sm1" port="1" />
+            <Motor name="sm2" port="2" />
+            <Motor name="sm3" port="3" />
+            <ContinuousRotationServo name="ss0" port="0" />
+            <ContinuousRotationServo name="ss1" port="1" />
+            <ContinuousRotationServo name="ss2" port="2" />
+            <ContinuousRotationServo name="ss3" port="3" />
+            <Servo name="nectarTurretServo" port="4" />
+            <Servo name="pollenTurretServo" port="5" />
+            <AnalogInput name="se0" port="0" />
+            <AnalogInput name="se1" port="1" />
+            <AnalogInput name="se2" port="2" />
+            <AnalogInput name="se3" port="3" />
+            <goBILDAPinpoint name="pinpoint" port="0" bus="0" />
+        </LynxModule>
+        <LynxModule name="Expansion Hub 2" port="2">
+            <Motor name="intakeLeft" port="0" />
+            <Motor name="intakeRight" port="1" />
+            <Motor name="nectarTurret" port="2" />
+            <Motor name="pollenTurret" port="3" />
+            <Servo name="scoopula" port="0" />
+            <Servo name="turretGate" port="1" />
+        </LynxModule>
+    </LynxUsbDevice>
+</Robot>
