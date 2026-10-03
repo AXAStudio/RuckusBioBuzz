@@ -33,9 +33,6 @@ public class TeleOp extends OpMode {
     private Alliance alliance = Alliance.RED;
     private intake intake;
 
-
-
-
     @Override
     public void init() {
         telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
@@ -77,7 +74,6 @@ public class TeleOp extends OpMode {
         follower.manual(-gamepad1.left_stick_y, -gamepad1.left_stick_x, -gamepad1.right_stick_x);
         follower.update();
 
-
         if ((shooter.ready()) || gamepad1.right_bumper) {
             intake.setState(intakeState.INTAKE);
         } else if(gamepad1.left_bumper) {
@@ -85,6 +81,8 @@ public class TeleOp extends OpMode {
         }else{
             intake.setState(intakeState.STOP);
         }
+
+        shooter.setShooting(gamepad1.right_trigger > 0.5);
         shooter.update();
         intake.update();
 

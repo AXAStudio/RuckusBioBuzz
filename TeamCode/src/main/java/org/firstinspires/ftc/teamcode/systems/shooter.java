@@ -26,7 +26,6 @@ public class shooter {
     public static double NECTAR_TURRET_CENTER = 0.5;
     public static boolean POLLEN_TURRET_REVERSED = false;
     public static boolean NECTAR_TURRET_REVERSED = false;
-    // {servo deg, turret deg}: the servo turning [0] degrees turns the turret [1] degrees.
     public static double[] POLLEN_TURRET_GEAR_RATIO = {355, 370};
     public static double[] NECTAR_TURRET_GEAR_RATIO = {355, 370};
     public static double SERVO_RANGE_DEG = 355; // Axon Max MK1
@@ -65,10 +64,8 @@ public class shooter {
         pollenTurret = new Turret(hardwareMap.get(Servo.class, "pollenTurretServo"));
         nectarTurret = new Turret(hardwareMap.get(Servo.class, "nectarTurretServo"));
 
-        for (DcMotorEx flywheel : new DcMotorEx[]{pollenFlywheel, nectarFlywheel}) {
-            flywheel.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
-            flywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
-        }
+        pollenFlywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
+        nectarFlywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
         setVelocityPidf(pollenFlywheel, POLLEN_PIDF);
         setVelocityPidf(nectarFlywheel, NECTAR_PIDF);
 
@@ -84,26 +81,8 @@ public class shooter {
         nectarFlywheel.setDirection(NECTAR_FLYWHEEL_REVERSED ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD);
 
         inZone = zone.predictedInZone();
-        //Reset, track, shoot
-        switch(state){
-            case RESET:
-                break;
-            case TRACK:
-                break;
-            case SHOOT:
-                break;
-        }
         pollenAimed = false;
         nectarAimed = false;
-        if (shooting && inZone) {
-            pollenAimed = pollenTurret.track(aiming.aimPollen()[1],
-                POLLEN_TURRET_CENTER, POLLEN_TURRET_REVERSED, POLLEN_TURRET_GEAR_RATIO);
-            nectarAimed = nectarTurret.track(aiming.aimNecter()[1],
-                NECTAR_TURRET_CENTER, NECTAR_TURRET_REVERSED, NECTAR_TURRET_GEAR_RATIO);
-        } else {
-            pollenTurret.center(POLLEN_TURRET_CENTER);
-            nectarTurret.center(NECTAR_TURRET_CENTER);
-        }
 
         pollenTarget = shooting ? regression.shooterspeedpollen() : 0;
         nectarTarget = shooting ? regression.shooterspeednectar() : 0;
@@ -112,6 +91,29 @@ public class shooter {
 
         pollenVelocity = pollenFlywheel.getVelocity();
         nectarVelocity = nectarFlywheel.getVelocity();
+
+        switch(state){
+            case RESET:
+                //hold the servos where the unwind sent them
+                if (!pollenTurret.unwinding() && !nectarTurret.unwinding()) state = states.TRACK;
+                break;
+            case TRACK:
+            case SHOOT:
+                if (shooting && inZone) {
+                    pollenAimed = pollenTurret.track(aiming.aimPollen()[1],
+                        POLLEN_TURRET_CENTER, POLLEN_TURRET_REVERSED, POLLEN_TURRET_GEAR_RATIO);
+                    nectarAimed = nectarTurret.track(aiming.aimNecter()[1],
+                        NECTAR_TURRET_CENTER, NECTAR_TURRET_REVERSED, NECTAR_TURRET_GEAR_RATIO);
+                } else {
+                    pollenTurret.center(POLLEN_TURRET_CENTER);
+                    nectarTurret.center(NECTAR_TURRET_CENTER);
+                }
+                if (pollenTurret.unwinding() || nectarTurret.unwinding()) state = states.RESET;
+                else if (shooting && inZone && pollenAimed && nectarAimed
+                    && atSpeed(pollenVelocity, pollenTarget) && atSpeed(nectarVelocity, nectarTarget)) state = states.SHOOT;// is the flywheel at speed?
+                else state = states.TRACK;
+                break;
+        }
     }
 
     private static void setVelocityPidf(DcMotorEx flywheel, PIDFCoefficients pidf) {
@@ -119,9 +121,12 @@ public class shooter {
             new com.qualcomm.robotcore.hardware.PIDFCoefficients(pidf.P, pidf.I, pidf.D, pidf.F));
     }
 
+    public void setShooting(boolean shooting) {
+        this.shooting = shooting;
+    }
+
     public boolean ready() {
-        return shooting && inZone && pollenAimed && nectarAimed
-            && atSpeed(pollenVelocity, pollenTarget) && atSpeed(nectarVelocity, nectarTarget);
+        return state == states.SHOOT;
     }
 
     public void stop() {
@@ -151,12 +156,12 @@ public class shooter {
         }
 
         boolean track(double theta, double center, boolean reversed, double[] gearRatio) {
-            double range = SERVO_RANGE_DEG * gearRatio[1] / gearRatio[0];
-            double turn = 360.0 / range;
-            double last = Double.isNaN(position) ? center : position;
-            double base = center + (reversed ? -1 : 1) * Math.toDegrees(theta) / range;
-            double follow = base + Math.round((last - base) / turn) * turn;
-            double overshoot = Math.max(-follow, follow - 1);
+            double range = SERVO_RANGE_DEG * gearRatio[1] / gearRatio[0]; //turret degrees across the full servo travel 0-1
+            double turn = 360.0 / range; //one full turret revolution in servo position units
+            double last = Double.isNaN(position) ? center : position; //last commanded position or center on the first call
+            double base = center + (reversed ? -1 : 1) * Math.toDegrees(theta) / range; //servo position that points at theta
+            double follow = base + Math.round((last - base) / turn) * turn; //same aim shifted by whole turns to the copy closest to last
+            double overshoot = Math.max(-follow, follow - 1); //how far follow is past 0 or 1 and <= 0 means it is reachable
             boolean aimed = false;
 
             if (overshoot <= 0) {
@@ -175,6 +180,10 @@ public class shooter {
             }
             servo.setPosition(position);
             return aimed && System.nanoTime() >= settleUntilNanos;
+        }
+
+        boolean unwinding() {
+            return System.nanoTime() < settleUntilNanos;
         }
 
         void center(double center) {
