@@ -42,7 +42,6 @@ public class shooter {
     private final Turret pollenTurret;
     private final Turret nectarTurret;
 
-    private boolean shooting;
     private boolean inZone;
     private boolean pollenAimed;
     private boolean nectarAimed;
@@ -84,8 +83,8 @@ public class shooter {
         pollenAimed = false;
         nectarAimed = false;
 
-        pollenTarget = shooting ? regression.shooterspeedpollen() : 0;
-        nectarTarget = shooting ? regression.shooterspeednectar() : 0;
+        pollenTarget = inZone ? regression.shooterspeedpollen() : 0;
+        nectarTarget = inZone ? regression.shooterspeednectar() : 0;
         pollenFlywheel.setVelocity(pollenTarget);
         nectarFlywheel.setVelocity(nectarTarget);
 
@@ -99,7 +98,7 @@ public class shooter {
                 break;
             case TRACK:
             case SHOOT:
-                if (shooting && inZone) {
+                if (inZone) {
                     pollenAimed = pollenTurret.track(aiming.aimPollen()[1],
                         POLLEN_TURRET_CENTER, POLLEN_TURRET_REVERSED, POLLEN_TURRET_GEAR_RATIO);
                     nectarAimed = nectarTurret.track(aiming.aimNecter()[1],
@@ -109,7 +108,7 @@ public class shooter {
                     nectarTurret.center(NECTAR_TURRET_CENTER);
                 }
                 if (pollenTurret.unwinding() || nectarTurret.unwinding()) state = states.RESET;
-                else if (shooting && inZone && pollenAimed && nectarAimed
+                else if (inZone && pollenAimed && nectarAimed
                     && atSpeed(pollenVelocity, pollenTarget) && atSpeed(nectarVelocity, nectarTarget)) state = states.SHOOT;// is the flywheel at speed?
                 else state = states.TRACK;
                 break;
@@ -119,10 +118,6 @@ public class shooter {
     private static void setVelocityPidf(DcMotorEx flywheel, PIDFCoefficients pidf) {
         flywheel.setPIDFCoefficients(DcMotor.RunMode.RUN_USING_ENCODER,
             new com.qualcomm.robotcore.hardware.PIDFCoefficients(pidf.P, pidf.I, pidf.D, pidf.F));
-    }
-
-    public void setShooting(boolean shooting) {
-        this.shooting = shooting;
     }
 
     public boolean ready() {

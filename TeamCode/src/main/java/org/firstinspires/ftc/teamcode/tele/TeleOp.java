@@ -82,7 +82,6 @@ public class TeleOp extends OpMode {
             intake.setState(intakeState.STOP);
         }
 
-        shooter.setShooting(gamepad1.right_trigger > 0.5);
         shooter.update();
         intake.update();
 
