@@ -5,6 +5,7 @@ import com.pedropathing.follower.Follower;
 import com.pedropathing.math.Pose;
 import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
+import org.firstinspires.ftc.teamcode.modules.intake;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 
@@ -28,8 +29,10 @@ public class TeleOp extends OpMode {
     private shooter shooter;
     private List<LynxModule> hubs;
     private Alliance alliance = Alliance.RED;
+    private intake intake;
 
-    private DcMotor intake;
+
+
 
     @Override
     public void init() {
@@ -43,9 +46,8 @@ public class TeleOp extends OpMode {
         }
         predictor = new predictiveAiming(follower);
         shooter = new shooter(hardwareMap, predictor);
+        intake = new intake(hardwareMap);
 
-        intake = hardwareMap.get(DcMotor.class, "intake");
-        intake.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
     }
 
     @Override
@@ -76,11 +78,10 @@ public class TeleOp extends OpMode {
         boolean shooting = gamepad2.right_bumper;
         shooter.update(shooting);
 
-        intake.setDirection(INTAKE_REVERSED ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD);
-        if (shooting) {
-            intake.setPower(shooter.ready() ? INTAKE_FEED_POWER : 0);
+        if ((shooting && shooter.ready()) || gamepad1.left_bumper) {
+            intake.runIntake();
         } else {
-            intake.setPower(gamepad2.right_trigger - gamepad2.left_trigger);
+            intake.stopIntake();
         }
 
         telemetry.addData("alliance", alliance);
@@ -101,6 +102,5 @@ public class TeleOp extends OpMode {
         follower.stop();
         follower.update();
         if (shooter != null) shooter.stop();
-        if (intake != null) intake.setPower(0);
     }
 }
