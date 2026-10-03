@@ -23,6 +23,6 @@ public class shootingRegression {
     }
 
     public double nectarDistance() {
-        return aiming.aim()[0];
+        return aiming.aimNecter()[0];
     }
 }

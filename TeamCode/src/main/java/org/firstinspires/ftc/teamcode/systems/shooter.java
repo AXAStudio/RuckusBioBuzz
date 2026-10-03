@@ -78,7 +78,7 @@ public class shooter {
         if (shooting && inZone) {
             pollenAimed = pollenTurret.track(aiming.aimPollen()[1],
                 POLLEN_TURRET_CENTER, POLLEN_TURRET_REVERSED);
-            nectarAimed = nectarTurret.track(aiming.aim()[1],
+            nectarAimed = nectarTurret.track(aiming.aimNecter()[1],
                 NECTAR_TURRET_CENTER, NECTAR_TURRET_REVERSED);
         } else {
             pollenTurret.center(POLLEN_TURRET_CENTER);

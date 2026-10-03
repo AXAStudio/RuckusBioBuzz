@@ -19,8 +19,8 @@ public class aimingSystem{
         this.alliance = alliance;
     }
 
-
-    public double[] aim() {
+//in form dist, theta
+    public double[] aimNecter() {
         return aimFrom(predictor.leadPose(nectarTurretOffset));
     }
 
