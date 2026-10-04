@@ -28,7 +28,7 @@ public class TeleOp extends OpMode {
 
     private Follower follower;
     private predictiveAiming predictor;
-    private shooter shooter;
+    private shooter shooterPollen;
     private List<LynxModule> hubs;
     private Alliance alliance = Alliance.RED;
     private intake intake;
@@ -45,7 +45,7 @@ public class TeleOp extends OpMode {
             follower.setPose(PoseStorage.pose);
         }
         predictor = new predictiveAiming(follower);
-        shooter = new shooter(hardwareMap, predictor);
+        shooterPollen = new shooter(hardwareMap, predictor, true);
         intake = new intake(hardwareMap);
 
     }
@@ -60,7 +60,7 @@ public class TeleOp extends OpMode {
 
     @Override
     public void start() {
-        shooter.setAlliance(alliance);
+        shooterPollen.setAlliance(alliance);
     }
 
     @Override
@@ -73,29 +73,18 @@ public class TeleOp extends OpMode {
 
         follower.manual(-gamepad1.left_stick_y, -gamepad1.left_stick_x, -gamepad1.right_stick_x);
         follower.update();
-
-        if ((shooter.ready()) || gamepad1.right_bumper) {
-            intake.setState(intakeState.INTAKE);
-        } else if(gamepad1.left_bumper) {
-            intake.setState(intakeState.REJECT);
-        }else{
-            intake.setState(intakeState.STOP);
-        }
-
-        shooter.update();
-        intake.update();
+        intake.update(gamepad1.left_bumper, gamepad1.right_bumper);
+        shooterPollen.update();
 
         telemetry.addData("alliance", alliance);
         telemetry.addData("x", pose.x());
         telemetry.addData("y", pose.y());
         telemetry.addData("heading (deg)", Math.toDegrees(pose.heading()));
-        telemetry.addData("in zone", shooter.inZone());
-        telemetry.addData("pollen velocity", shooter.pollenVelocity());
-        telemetry.addData("pollen target", shooter.pollenTarget());
-        telemetry.addData("nectar velocity", shooter.nectarVelocity());
-        telemetry.addData("nectar target", shooter.nectarTarget());
-        telemetry.addData("aimed pollen / nectar", shooter.pollenAimed() + " / " + shooter.nectarAimed());
-        telemetry.addData("ready", shooter.ready());
+        telemetry.addData("in zone", shooterPollen.inZone());
+        telemetry.addData("pollen velocity", shooterPollen.pollenVelocity());
+        telemetry.addData("pollen target", shooterPollen.pollenTarget());
+        telemetry.addData("nectar velocity", shooterPollen.nectarVelocity());
+        telemetry.addData("ready", shooterPollen.ready());
         telemetry.update();
     }
 
@@ -103,6 +92,6 @@ public class TeleOp extends OpMode {
     public void stop() {
         follower.stop();
         follower.update();
-        if (shooter != null) shooter.stop();
+        if (shooterPollen != null) shooterPollen.stop();
     }
 }

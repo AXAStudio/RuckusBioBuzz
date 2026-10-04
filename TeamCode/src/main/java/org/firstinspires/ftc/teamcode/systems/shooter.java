@@ -54,7 +54,7 @@ public class shooter {
     }
     states state = states.TRACK;
 
-    public shooter(HardwareMap hardwareMap, predictiveAiming predictor) {
+    public shooter(HardwareMap hardwareMap, predictiveAiming predictor, boolean isPollen) {
         this.predictor = predictor;
         this.zone = new zoneCheck(predictor);
 
@@ -91,7 +91,7 @@ public class shooter {
         pollenVelocity = pollenFlywheel.getVelocity();
         nectarVelocity = nectarFlywheel.getVelocity();
         boolean readyShoot = inZone && pollenAimed && nectarAimed
-                && atSpeed(pollenVelocity, pollenTarget);
+                && atSpeed(pollenVelocity, pollenTarget); //only for pollen need to make one for necter
         boolean unwinding = pollenTurret.unwinding() && !nectarTurret.unwinding();
         switch(state){
             case RESET:
@@ -99,6 +99,10 @@ public class shooter {
                 if (!unwinding) state = states.TRACK;
                 break;
             case TRACK:
+                if(readyShoot){
+                    state = states.SHOOT;
+                }
+                break;
             case SHOOT:
                 if (inZone) {
                     pollenAimed = pollenTurret.track(aiming.aimPollen()[1],
@@ -109,6 +113,7 @@ public class shooter {
                     pollenTurret.center(POLLEN_TURRET_CENTER);
                     nectarTurret.center(NECTAR_TURRET_CENTER);
                 }
+                //add shooting code
                 if (unwinding) state = states.RESET;
                 else if (readyShoot) state = states.SHOOT;// is the flywheel at speed?
                 else state = states.TRACK;

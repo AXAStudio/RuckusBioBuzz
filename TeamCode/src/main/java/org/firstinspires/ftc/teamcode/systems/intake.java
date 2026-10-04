@@ -18,6 +18,7 @@ public class intake {
         intakeRight = hardwareMap.get(DcMotor.class, "intakeRight");
         intakeLeft.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         intakeRight.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+
         //intakeRight.setDirection(DcMotor.Direction.REVERSE);
     }
 
@@ -25,16 +26,31 @@ public class intake {
         this.currentState = state;
     }
 
-    public void update() {
+    public void update(boolean leftBumper, boolean rightBumper) {
         if (currentState == intakeState.INTAKE) {
             intakeLeft.setPower(1);
             intakeRight.setPower(1);
+            if(!leftBumper && !rightBumper){
+                currentState  = intakeState.STOP;
+            }else if(leftBumper){
+                currentState  = intakeState.REJECT;
+            }
         } else if (currentState == intakeState.STOP) {
             intakeLeft.setPower(0);
             intakeRight.setPower(0);
+            if(leftBumper){
+                currentState  = intakeState.REJECT;
+            }else if(rightBumper){
+                currentState  = intakeState.INTAKE;
+            }
         }else if (currentState == intakeState.REJECT) {
             intakeLeft.setPower(-1);
             intakeRight.setPower(-1);
+            if(!leftBumper && !rightBumper){
+                currentState  = intakeState.STOP;
+            }else if(rightBumper){
+                currentState  = intakeState.INTAKE;
+            }
         }
 
 
