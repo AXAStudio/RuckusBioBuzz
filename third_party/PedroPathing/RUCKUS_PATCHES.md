@@ -30,7 +30,7 @@ Search the tree for `RUCKUS PATCH`. Each entry names the upstream 3.0.0 behaviou
 |---|---|---|
 | `build.gradle.kts`, `core/`, `revhub/build.gradle.kts` | Dokka, Spotless and `kotlin("android")` removed | Dokka broke variant selection across the composite build (2026-08-09 entry below) |
 | `revhub/build.gradle.kts` | `compileSdk` 35 → 34 | platform 35 is not installed; TeamCode compiles at 34 |
-| `gradle/libs.versions.toml` | FTC 11.2.0 → 11.1.0, AGP 8.7.3 → 8.7.0, `annotations` 23.0.0 restored | compile against what the app ships; `:telemetry` needs `annotations` |
+| `gradle/libs.versions.toml` | FTC 11.2.0 → 12.0.0 (was 11.1.0 until 2026-10-05), AGP 8.7.3 → 8.7.0, `annotations` 23.0.0 restored | compile against exactly what the app ships (a mismatch makes Android Studio flag Pinpoint enum types in `Constants` as errors); `:telemetry` needs `annotations` |
 | `settings.gradle.kts`, `telemetry/**` | local `:telemetry` module kept | not part of upstream. Its only TeamCode user was the 2.x `Tuning.java`, now gone: removable |
 | `core/.../control/PIDFController.java` (+ `PIDFCoefficients`, `PIDFCoefficientSupplier`) | the 2.1.2 classes, **retained** with their integral patches, now `implements Controller` | upstream deleted them. v3's `PIDController` has no integral clamp, band or reset threshold, and skips D when dt ≤ 1 ms. Every pod turn gain was measured on this arithmetic |
 | `revhub/.../CoaxialPod.java` | every 2.1.2 patch (kS tanh, pulsed approach + stall ladder, gain scheduling, flip hysteresis, output slew, derivative-on-measurement, median filter off, instrumentation); `getTurnPIDF()`; `setMotor/ServoCachingThreshold` write through to the config | stock v3 pod: sign-relay kF only, no hysteresis, no schedule |

@@ -1,6 +1,9 @@
 [versions]
 # RUCKUS PATCH: upstream 11.2.0. Compile against the SDK the app actually ships (build.dependencies.gradle).
-ftc = "11.1.0"
+# Must match it exactly: with two SDK versions on the IDE model, Android Studio treats e.g.
+# GoBildaPinpointDriver.EncoderDirection from each as distinct types and flags PinpointConfig
+# setters in Constants as type errors, though Gradle (which only sees 12.0.0) compiles fine.
+ftc = "12.0.0"
 dokka = "2.2.0"
 # RUCKUS PATCH: upstream 8.7.3. Match the root build's AGP.
 agp = "8.7.0"
