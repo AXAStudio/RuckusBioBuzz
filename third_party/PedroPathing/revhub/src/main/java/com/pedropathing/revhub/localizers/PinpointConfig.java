@@ -9,7 +9,7 @@ import java.util.OptionalDouble;
 
 public class PinpointConfig {
     public final ConfigVar<String> name = ConfigVar.required();
-    public final ConfigVar<GoBildaPinpointDriver.EncoderDirection> xPodDirection = ConfigVar.required();
+    public final ConfigVar<com.qualcomm.hardware.gobilda.GoBildaPinpointDriver.EncoderDirection> xPodDirection = ConfigVar.required();
     public final ConfigVar<GoBildaPinpointDriver.EncoderDirection> yPodDirection = ConfigVar.required();
     public final ConfigVar<Double> xPodOffset = ConfigVar.required();
     public final ConfigVar<Double> yPodOffset = ConfigVar.required();
@@ -19,7 +19,7 @@ public class PinpointConfig {
     public final ConfigVar<DistanceUnit> globalDistanceUnit = ConfigVar.of(DistanceUnit.INCH);
     public final ConfigVar<DistanceUnit> encoderResolutionUnit = ConfigVar.of(DistanceUnit.INCH);
 
-    public final ConfigVar<GoBildaPinpointDriver.GoBildaOdometryPods> podType = ConfigVar.of(GoBildaPinpointDriver.GoBildaOdometryPods.goBILDA_4_BAR_POD);
+    public final ConfigVar<com.qualcomm.hardware.gobilda.GoBildaPinpointDriver.GoBildaOdometryPods> podType = ConfigVar.of(GoBildaPinpointDriver.GoBildaOdometryPods.goBILDA_4_BAR_POD);
 
     public final ConfigVar<OptionalDouble> ticksPerUnit = ConfigVar.of(OptionalDouble.empty());
     public final ConfigVar<PinpointLocalizer.ResetMode> resetMode = ConfigVar.of(PinpointLocalizer.ResetMode.RECALIBRATE_IMU);

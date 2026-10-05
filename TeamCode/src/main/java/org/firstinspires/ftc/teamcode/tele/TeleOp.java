@@ -17,6 +17,7 @@ import org.firstinspires.ftc.teamcode.fieldview.FieldView;
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
 import org.firstinspires.ftc.teamcode.helpers.PoseStorage;
 import org.firstinspires.ftc.teamcode.modules.predictiveAiming;
+import org.firstinspires.ftc.teamcode.systems.scoopula;
 import org.firstinspires.ftc.teamcode.systems.shooter;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 
@@ -32,6 +33,7 @@ public class TeleOp extends OpMode {
     private List<LynxModule> hubs;
     private Alliance alliance = Alliance.RED;
     private intake intake;
+    private scoopula scoopula;
 
     @Override
     public void init() {
@@ -47,6 +49,7 @@ public class TeleOp extends OpMode {
         predictor = new predictiveAiming(follower);
         shooterPollen = new shooter(hardwareMap, predictor, true);
         intake = new intake(hardwareMap);
+        scoopula = new scoopula(hardwareMap);
 
     }
 
@@ -74,6 +77,7 @@ public class TeleOp extends OpMode {
         follower.manual(-gamepad1.left_stick_y, -gamepad1.left_stick_x, -gamepad1.right_stick_x);
         follower.update();
         intake.update(gamepad1.left_bumper, gamepad1.right_bumper);
+        scoopula.update(gamepad2.left_bumper && gamepad2.right_bumper);
         shooterPollen.update();
 
         telemetry.addData("alliance", alliance);

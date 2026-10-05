@@ -36,6 +36,7 @@ public class shooter {
     private final zoneCheck zone;
     private aimingSystem aiming;
     private shootingRegression regression;
+    private gate shooterGate;
 
     private final DcMotorEx pollenFlywheel;
     private final DcMotorEx nectarFlywheel;
@@ -58,6 +59,7 @@ public class shooter {
         this.predictor = predictor;
         this.zone = new zoneCheck(predictor);
 
+        shooterGate = new gate(hardwareMap);
         pollenFlywheel = hardwareMap.get(DcMotorEx.class, "pollenTurret");
         nectarFlywheel = hardwareMap.get(DcMotorEx.class, "nectarTurret");
         pollenTurret = new Turret(hardwareMap.get(Servo.class, "pollenTurretServo"));
@@ -96,9 +98,11 @@ public class shooter {
         switch(state){
             case RESET:
                 //hold the servos where the unwind sent them
+                shooterGate.closeGate();
                 if (!unwinding) state = states.TRACK;
                 break;
             case TRACK:
+                shooterGate.closeGate();
                 if(readyShoot){
                     state = states.SHOOT;
                 }
@@ -113,7 +117,9 @@ public class shooter {
                     pollenTurret.center(POLLEN_TURRET_CENTER);
                     nectarTurret.center(NECTAR_TURRET_CENTER);
                 }
+                shooterGate.openGate();
                 //add shooting code
+
                 if (unwinding) state = states.RESET;
                 else if (readyShoot) state = states.SHOOT;// is the flywheel at speed?
                 else state = states.TRACK;
