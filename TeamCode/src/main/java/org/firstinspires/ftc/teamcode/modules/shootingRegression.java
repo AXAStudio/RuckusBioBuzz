@@ -10,12 +10,14 @@ public class shootingRegression {
 
     public double shooterspeedpollen() {
         double distance = pollenDistance();
-        return distance;
+        int speed = (int)distance;
+        return speed;
     }
 
     public double shooterspeednectar() {
         double distance = nectarDistance();
-        return distance;
+        int speed = (int)distance;
+        return speed; //regression
     }
 
     public double pollenDistance() {
