@@ -64,6 +64,7 @@ public class TeleOp extends OpMode {
     @Override
     public void start() {
         shooterPollen.setAlliance(alliance);
+        intake.setAlliance(alliance);
     }
 
     @Override

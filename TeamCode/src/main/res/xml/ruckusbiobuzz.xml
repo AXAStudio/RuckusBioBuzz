@@ -47,6 +47,8 @@
             <AnalogInput name="se2" port="2" />
             <AnalogInput name="se3" port="3" />
             <goBILDAPinpoint name="pinpoint" port="0" bus="0" />
+            <ColorSensor name = "colorSensor" port = "1" bus="1"/>
+
         </LynxModule>
         <LynxModule name="Expansion Hub 2" port="2">
             <Motor name="intakeLeft" port="0" />

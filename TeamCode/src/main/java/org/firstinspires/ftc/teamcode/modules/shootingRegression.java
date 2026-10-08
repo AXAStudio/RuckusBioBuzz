@@ -1,10 +1,12 @@
 package org.firstinspires.ftc.teamcode.modules;
 
+import org.firstinspires.ftc.teamcode.systems.turret;
+
 public class shootingRegression {
 
-    private final aimingSystem aiming;
+    private final turret aiming;
 
-    public shootingRegression(aimingSystem aiming) {
+    public shootingRegression(turret aiming) {
         this.aiming = aiming;
     }
 
@@ -21,10 +23,10 @@ public class shootingRegression {
     }
 
     public double pollenDistance() {
-        return aiming.aimPollen()[0];
+        return aiming.aimPollen().distance;
     }
 
     public double nectarDistance() {
-        return aiming.aimNecter()[0];
+        return aiming.aimNectar().distance;
     }
 }
