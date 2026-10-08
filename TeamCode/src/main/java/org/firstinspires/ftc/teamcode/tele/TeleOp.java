@@ -30,6 +30,7 @@ public class TeleOp extends OpMode {
     private Follower follower;
     private predictiveAiming predictor;
     private shooter shooterPollen;
+    private shooter shooterNectar;
     private List<LynxModule> hubs;
     private Alliance alliance = Alliance.RED;
     private intake intake;
@@ -48,6 +49,7 @@ public class TeleOp extends OpMode {
         }
         predictor = new predictiveAiming(follower);
         shooterPollen = new shooter(hardwareMap, predictor, true);
+        shooterNectar = new shooter(hardwareMap, predictor, false);
         intake = new intake(hardwareMap);
         scoopula = new scoopula(hardwareMap);
 
@@ -80,6 +82,7 @@ public class TeleOp extends OpMode {
         intake.update(gamepad1.left_bumper, gamepad1.right_bumper);
         scoopula.update(gamepad2.left_bumper && gamepad2.right_bumper);
         shooterPollen.update();
+        shooterNectar.update();
 
         telemetry.addData("alliance", alliance);
         telemetry.addData("x", pose.x());

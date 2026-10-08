@@ -24,12 +24,15 @@ public class turret{
     public static double SERVO_RANGE_DEG = 355; // Axon Max MK1
     public static double UNWIND_HYSTERESIS_DEG = 10;
     public static double UNWIND_SETTLE_S = 1.0;
+    public static double center = 0;
 
     private final predictiveAiming predictor;
     private Alliance alliance;
 
     private final TurretServo pollenTurret;
     private final TurretServo nectarTurret;
+    private int[] gearratioPollen = new int[]{1,1};
+    private int[] gearratioNectar = new int[]{1,1};
 
     private boolean pollenAimed;
     private boolean nectarAimed;
@@ -58,7 +61,8 @@ public class turret{
 
 //in form dist, theta
     public void update(){
-
+        pollenTurret.track(aimPollen().theta, center, false, gearratioPollen);
+        nectarTurret.track(aimNectar().theta, center, false, gearratioNectar);
     }
     public aimer aimNectar() {
         return aimFrom(predictor.leadPose(nectarTurretOffset));
@@ -89,7 +93,7 @@ public class turret{
             this.servo = servo;
         }
 
-        boolean track(double theta, double center, boolean reversed, double[] gearRatio) {
+        boolean track(double theta, double center, boolean reversed, int[] gearRatio) {
             double range = SERVO_RANGE_DEG * gearRatio[1] / gearRatio[0]; //turret degrees across the full servo travel 0-1
             double turn = 360.0 / range; //one full turret revolution in servo position units
             double last = Double.isNaN(position) ? center : position; //last commanded position or center on the first call
