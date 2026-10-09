@@ -61,6 +61,17 @@ public class turret{
         pollenAimed = pollenTurret.track(aimPollen().theta, POLLEN_TURRET_CENTER, POLLEN_TURRET_REVERSED, POLLEN_TURRET_GEAR_RATIO);
         nectarAimed = nectarTurret.track(aimNectar().theta, NECTAR_TURRET_CENTER, NECTAR_TURRET_REVERSED, NECTAR_TURRET_GEAR_RATIO);
     }
+
+    public void center(){
+        pollenTurret.center(POLLEN_TURRET_CENTER);
+        nectarTurret.center(NECTAR_TURRET_CENTER);
+        pollenAimed = false;
+        nectarAimed = false;
+    }
+
+    public boolean unwinding(){
+        return pollenTurret.unwinding() || nectarTurret.unwinding();
+    }
     public aimer aimNectar() {
         return aimFrom(predictor.leadPose(nectarTurretOffset));
     }
