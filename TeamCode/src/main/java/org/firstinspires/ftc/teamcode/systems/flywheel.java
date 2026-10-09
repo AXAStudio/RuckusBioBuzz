@@ -50,7 +50,7 @@ public class flywheel {
         pollenFlywheel.setVelocity(regression.shooterspeedpollen());
         pollenFlywheel.setVelocity(regression.shooterspeednectar());
     }
-    public double pollenVelocity() { return pollenFlywheel.getVelocity(); }
-    public double nectarVelocity() { return nectarFlywheel.getVelocity(); }
+    public boolean atSpeedPollen() { return pollenFlywheel.getVelocity() == regression.shooterspeedpollen(); }
+    public boolean atSpeedNectar() { return nectarFlywheel.getVelocity() == regression.shooterspeednectar(); }
 
 }

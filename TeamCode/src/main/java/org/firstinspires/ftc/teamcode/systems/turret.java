@@ -127,6 +127,9 @@ public class turret{
             servo.setPosition(position);
             return aimed && System.nanoTime() >= settleUntilNanos;
         }
+        public void center(double center){
+            servo.setPosition(center);
+        }
 
         boolean unwinding() {
             return System.nanoTime() < settleUntilNanos;

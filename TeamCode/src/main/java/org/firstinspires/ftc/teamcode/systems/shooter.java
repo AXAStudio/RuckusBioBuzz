@@ -16,6 +16,10 @@ import org.firstinspires.ftc.teamcode.modules.zoneCheck;
 public class shooter {
     public static boolean POLLEN_FLYWHEEL_REVERSED = false;
     public static boolean NECTAR_FLYWHEEL_REVERSED = false;
+    private double pollenTarget;
+    private double nectarTarget;
+    private double pollenVelocity;
+    private double nectarVelocity;
     public static double AT_SPEED_FRACTION = 0.05;
     public static PIDFCoefficients POLLEN_PIDF = new PIDFCoefficients(500, 0, 0, 11.7);
     public static PIDFCoefficients NECTAR_PIDF = new PIDFCoefficients(500, 0, 0, 11.7);
@@ -45,10 +49,44 @@ public class shooter {
 
     public void setAlliance(Alliance alliance) {
         aiming.setAlliance(alliance);
+
     }
 
     public void update() {
+        aiming.update();
+        flywheel.update();
+        inZone = zone.predictedInZone();
+        pollenTarget = inZone ? regression.shooterspeedpollen() : 0;
+        nectarTarget = inZone ? regression.shooterspeednectar() : 0;
 
+        switch (state) {
+            case RESET:
+                shooterGate.closeGate();
+                if (!aiming.unwinding()) state = states.TRACK;
+                break;
+            case TRACK:
+            case SHOOT:
+                if (inZone) {
+                    aiming.update();
+                } else {
+                    aiming.center();
+                }
+                boolean readyShoot = inZone && aiming.pollenAimed() && aiming.nectarAimed()
+                        && flywheel.atSpeedPollen() && flywheel.atSpeedNectar();
+                if (aiming.unwinding()) {
+                    state = states.RESET;
+                } else if (readyShoot) {
+                    state = states.SHOOT;
+                } else {
+                    state = states.TRACK;
+                }
+                if (state == states.SHOOT) {
+                    shooterGate.openGate();
+                } else {
+                    shooterGate.closeGate();
+                }
+                break;
+        }
     }
 
     public boolean ready() {
