@@ -49,6 +49,8 @@ public class shooter {
         pollenFlywheel = hardwareMap.get(DcMotorEx.class, "pollenTurret");
         nectarFlywheel = hardwareMap.get(DcMotorEx.class, "nectarTurret");
 
+        pollenFlywheel.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
+        nectarFlywheel.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
         pollenFlywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
         nectarFlywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
         setVelocityPidf(pollenFlywheel, POLLEN_PIDF);
@@ -61,7 +63,45 @@ public class shooter {
     }
 
     public void update() {
+        pollenFlywheel.setDirection(POLLEN_FLYWHEEL_REVERSED ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD);
+        nectarFlywheel.setDirection(NECTAR_FLYWHEEL_REVERSED ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD);
 
+        inZone = zone.predictedInZone();
+        pollenTarget = inZone ? regression.shooterspeedpollen() : 0;
+        nectarTarget = inZone ? regression.shooterspeednectar() : 0;
+        pollenFlywheel.setVelocity(pollenTarget);
+        nectarFlywheel.setVelocity(nectarTarget);
+        pollenVelocity = pollenFlywheel.getVelocity();
+        nectarVelocity = nectarFlywheel.getVelocity();
+
+        switch (state) {
+            case RESET:
+                shooterGate.closeGate();
+                if (!aiming.unwinding()) state = states.TRACK;
+                break;
+            case TRACK:
+            case SHOOT:
+                if (inZone) {
+                    aiming.update();
+                } else {
+                    aiming.center();
+                }
+                boolean readyShoot = inZone && aiming.pollenAimed() && aiming.nectarAimed()
+                        && atSpeed(pollenVelocity, pollenTarget) && atSpeed(nectarVelocity, nectarTarget);
+                if (aiming.unwinding()) {
+                    state = states.RESET;
+                } else if (readyShoot) {
+                    state = states.SHOOT;
+                } else {
+                    state = states.TRACK;
+                }
+                if (state == states.SHOOT) {
+                    shooterGate.openGate();
+                } else {
+                    shooterGate.closeGate();
+                }
+                break;
+        }
     }
 
     private static void setVelocityPidf(DcMotorEx flywheel, PIDFCoefficients pidf) {
