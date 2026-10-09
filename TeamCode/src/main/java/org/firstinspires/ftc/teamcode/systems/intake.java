@@ -1,12 +1,14 @@
 package org.firstinspires.ftc.teamcode.systems;
 
 
+import com.acmerobotics.dashboard.config.Config;
 import com.qualcomm.robotcore.hardware.ColorSensor;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
 
+@Config
 public class intake {
     private DcMotor intakeLeft, intakeRight;
     private ColorSensor colorSensor;
@@ -34,37 +36,27 @@ public class intake {
         this.alliance = alliance;
     }
 
-    public void setState(intakeState state){
-        this.currentState = state;
+    public intakeState getState(){
+        return currentState;
     }
 
     public void update(boolean leftBumper, boolean rightBumper) {
+        if(leftBumper){
+            currentState = intakeState.REJECT;
+        }else if(rightBumper){
+            currentState = intakeState.INTAKE;
+        }else{
+            currentState = intakeState.STOP;
+        }
+
         int powerL = 0;
         int powerR = 0;
         if (currentState == intakeState.INTAKE) {
             powerL = 1;
             powerR = 1;
-            if(!leftBumper && !rightBumper){
-                currentState  = intakeState.STOP;
-            }else if(leftBumper){
-                currentState  = intakeState.REJECT;
-            }
-        } else if (currentState == intakeState.STOP) {
-            powerL = 0;
-            powerR = 0;
-            if(leftBumper){
-                currentState  = intakeState.REJECT;
-            }else if(rightBumper){
-                currentState  = intakeState.INTAKE;
-            }
-        }else if (currentState == intakeState.REJECT) {
+        } else if (currentState == intakeState.REJECT) {
             powerL = -1;
             powerR = -1;
-            if(!leftBumper && !rightBumper){
-                currentState  = intakeState.STOP;
-            }else if(rightBumper){
-                currentState  = intakeState.INTAKE;
-            }
         }
         if(alliance == Alliance.BLUE && colorSensor.red() > thresholdRed){
             powerL = -1;

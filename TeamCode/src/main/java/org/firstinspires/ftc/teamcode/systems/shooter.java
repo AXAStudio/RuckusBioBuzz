@@ -39,7 +39,7 @@ public class shooter {
     }
     states state = states.TRACK;
 
-    public shooter(HardwareMap hardwareMap, predictiveAiming predictor, boolean isPollen) {
+    public shooter(HardwareMap hardwareMap, predictiveAiming predictor) {
         this.predictor = predictor;
         this.zone = new zoneCheck(predictor);
         aiming = new turret(hardwareMap, predictor);

@@ -56,24 +56,28 @@ TeamCode/src/main/java/org/firstinspires/ftc/teamcode/
 ├── pedroPathing/
 │   ├── Constants.java                  THE constants file (swerve only, Quickstart layout): TUNED VALUES block on top
 │   │                                    (what robot.py constants splices), then follower / localizer / drivetrain + provenance
-│   ├── PositionalPod.java
+│   ├── HeadingHold.java                UNUSED - no OpMode references it (2.x setTeleOpDrive era)
+│   ├── PositionalPod.java               shelved positional pod; only diagnostics/swerve uses it
 │   ├── Tuning.java                      Pedro 3 AutoTune registry (@Tuner), port 10158
 │   └── procedures/                      Quickstart pedro3 tuners (Foresight, Pinpoint, Tests)
 ├── tele/TeleOp.java                      COMPETITION drive OpMode: follower.manual() from the sticks, robot-centric
-├── auto/{RedPollenAuto,ExampleSwerveAuto,PathStep}.java
+├── auto/{RedPollenAuto,shortAutoRed,redOption2,ExampleSwerveAuto,PathStep}.java   Red only, no mirroring
 │   └── visualizerAutos/*.pp             visualizer sources the auto .java files are exported from
-├── modules/                             compute only, no hardware: aimingSystem, predictiveAiming, shootingRegression, zoneCheck
+├── modules/                             compute only, no hardware: predictiveAiming, shootingRegression, zoneCheck
+├── systems/                             mechanisms (write hardware): intake, shooter (flywheels; owns turret), turret (aiming, was modules/aimingSystem), gate, scoopula
 ├── helpers/                             HivePosition, Alliance, PoseStorage (auto stop() saves, TeleOp init loads)
 ├── field/biobuzz_field.json             BIOBUZZ obstacles - ONE source: the visualizer imports it, the bring-up field fence loads it
 ├── fieldview/                           http://192.168.43.1:8080/field - live field, robot, predicted pose, zone (TeleOp publishes at 20 Hz)
-├── diagnostics/tests/                   blobDetectionTest, colorTunerTest
+├── diagnostics/                         PreMatchSystemCheck, motorbreakin
+├── diagnostics/tests/                   blobDetectionTest, colorTunerTest, rangeTest, spinUpTest
 ├── diagnostics/swerve/                  DIAGNOSTIC ONLY — never ships
 │   ├── SwerveBringUp.java               (~193 KB) bring-up OpMode + HTTP server
 │   ├── dashboard.html                   (~72 KB) local web UI + browser-gamepad drive
 │   ├── PodCal.java  PodRecorder.java  PodAutoTuner.java
 │   ├── SwerveBench.java  SwerveExport.java  SwerveWebApp.java
 │   ├── FenceGeometry.java               pure-Java keep-out geometry (host check: tools/swervetune/FenceGeometryCheck.java)
-│   ├── SwerveDirectTeleOp.java  RawMotorTest.java
+│   ├── SwerveDirectTeleOp.java  RawMotorTest.java  DashboardDriveTeleOp.java
+│   ├── TeleLoopProbe.java  SwerveConfigWriter.java
 │   └── README.md
 ├── pipelines/                           PollenDetectionPipeline; tools/ = blobDetection, colorTuner, getMedian
 └── wiring/swervewiring.png
@@ -218,10 +222,10 @@ famous "33 → 100 Hz" was really ~18 → 50 Hz.
 // pedroPathing/Constants.java (was SwerveDrivetrainConstants until 2026-10-01) — shipped. VERIFIED 2026-08-16.
 // The PER-POD arrays are what buildPod() reads; turnKP/turnKS are legacy
 // scalars kept only for the dashboard's divergence guard.
-turnKPPerPod = {0.380, 0.380, 0.380, 0.380};   // NOT 0.200 — that is the scalar
+turnKPPerPod = {0.380, 0.380, 0.380, 0.380};   // NOT 0.320 — that is the scalar
 turnKDPerPod = {0.022, 0.022, 0.022, 0.022};
 turnKSPerPod = {0.022, 0.022, 0.022, 0.022};   // NOT 0.035 — same story
-turnKSBandDegPerPod = 2.0;  turnKI = 0.0;  turnKF = 0.0;
+turnKSBandDegPerPod = {2.0, 2.0, 2.0, 2.0};  turnKI = 0.0;  turnKF = 0.0;
 cache = 0.01;  motorCaching = 0.05;
 pod.setPulsedApproach(true, 6.0°, 0.6°, 0.035, 20 ms, 20°/s, 0.10 s);
 CoaxialPod.TURN_GAIN_SCHEDULING = true;        // floor 0.24, ramps on drive power

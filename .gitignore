@@ -83,3 +83,6 @@ lint/tmp/
 my-session-transcript.md
 __pycache__/
 *.pyc
+
+*.swp
+*.swo
