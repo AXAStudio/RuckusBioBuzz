@@ -121,11 +121,6 @@ public class turret{
             return System.nanoTime() < settleUntilNanos;
         }
 
-        void center(double center) {
-            position = center;
-            servo.setPosition(center);
-        }
-
         private static double clamp(double position) {
             return Math.max(0, Math.min(1, position));
         }

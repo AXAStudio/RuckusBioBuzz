@@ -23,17 +23,12 @@ public class shooter {
     private final predictiveAiming predictor;
     private final zoneCheck zone;
     private final turret aiming;
+    private final flywheel flywheel;
     private final shootingRegression regression;
     private gate shooterGate;
 
-    private final DcMotorEx pollenFlywheel;
-    private final DcMotorEx nectarFlywheel;
-
     private boolean inZone;
-    private double pollenTarget;
-    private double nectarTarget;
-    private double pollenVelocity;
-    private double nectarVelocity;
+
     private enum states {
             RESET, TRACK, SHOOT
     }
@@ -42,17 +37,9 @@ public class shooter {
     public shooter(HardwareMap hardwareMap, predictiveAiming predictor) {
         this.predictor = predictor;
         this.zone = new zoneCheck(predictor);
+        this.flywheel = new flywheel(hardwareMap, predictor);
         aiming = new turret(hardwareMap, predictor);
         regression = new shootingRegression(aiming);
-
-        shooterGate = new gate(hardwareMap);
-        pollenFlywheel = hardwareMap.get(DcMotorEx.class, "pollenTurret");
-        nectarFlywheel = hardwareMap.get(DcMotorEx.class, "nectarTurret");
-
-        pollenFlywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
-        nectarFlywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
-        setVelocityPidf(pollenFlywheel, POLLEN_PIDF);
-        setVelocityPidf(nectarFlywheel, NECTAR_PIDF);
 
     }
 
@@ -64,27 +51,14 @@ public class shooter {
 
     }
 
-    private static void setVelocityPidf(DcMotorEx flywheel, PIDFCoefficients pidf) {
-        flywheel.setPIDFCoefficients(DcMotor.RunMode.RUN_USING_ENCODER,
-            new com.qualcomm.robotcore.hardware.PIDFCoefficients(pidf.P, pidf.I, pidf.D, pidf.F));
-    }
-
     public boolean ready() {
         return state == states.SHOOT;
-    }
-
-    public void stop() {
-        pollenFlywheel.setPower(0);
-        nectarFlywheel.setPower(0);
     }
 
     public boolean inZone() { return inZone; }
     public boolean pollenAimed() { return aiming.pollenAimed(); }
     public boolean nectarAimed() { return aiming.nectarAimed(); }
-    public double pollenTarget() { return pollenTarget; }
-    public double nectarTarget() { return nectarTarget; }
-    public double pollenVelocity() { return pollenVelocity; }
-    public double nectarVelocity() { return nectarVelocity; }
+
 
     private static boolean atSpeed(double velocity, double target) {
         return target > 0 && Math.abs(velocity - target) <= AT_SPEED_FRACTION * target;

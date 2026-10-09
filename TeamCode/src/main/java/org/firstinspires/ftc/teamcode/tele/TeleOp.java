@@ -86,9 +86,6 @@ public class TeleOp extends OpMode {
         telemetry.addData("y", pose.y());
         telemetry.addData("heading (deg)", Math.toDegrees(pose.heading()));
         telemetry.addData("in zone", shooterSystem.inZone());
-        telemetry.addData("pollen velocity", shooterSystem.pollenVelocity());
-        telemetry.addData("pollen target", shooterSystem.pollenTarget());
-        telemetry.addData("nectar velocity", shooterSystem.nectarVelocity());
         telemetry.addData("ready", shooterSystem.ready());
         telemetry.update();
     }
@@ -97,6 +94,5 @@ public class TeleOp extends OpMode {
     public void stop() {
         follower.stop();
         follower.update();
-        if (shooterSystem != null) shooterSystem.stop();
     }
 }
