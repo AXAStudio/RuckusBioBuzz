@@ -641,3 +641,15 @@ drive request is on the wire and stale intermediates are dropped. Expected effec
 round trip is under 90 ms (same commands, same rate, still robot-frame `foc=0`); under WiFi
 latency the robot now sees fewer, fresher commands instead of a backlog flushed late. Circle-test
 heading numbers taken before this date on a laggy link are not directly comparable.
+
+## 2026-10-10 — host bench scripts: gates, one-shot motion commands (rule 9 declaration)
+
+Diagnostic only (`tools/swervetune`), untested on hardware. `phase2_plant.py` now sends `drive`
+and `rawServo` once (`retries=1`, was 6): on a transport failure a step is now missing from the
+trace instead of possibly duplicated late (a duplicate `rawServo` restarts the dwell and bleeds
+one staircase power into the next). No change on a clean link. `pedrotune.py` `drive`/`cent`/`all`
+now refuse to run: under Pedro 3 their `pedroPidf dp/dd/df/cent` are ignored robot-side, so any
+`current_runs/pedrotune.jsonl` rows of kind `drive` or `cent` written after the 2026-10-01 Pedro 3
+migration compare identical controllers and should not be read as a gain effect. `trans` now
+stops if `pedroStart` did not start the follower (`activate=transheading` is refused on Pedro 3),
+so `trans` rows written after that migration also timed a follower that never ran.

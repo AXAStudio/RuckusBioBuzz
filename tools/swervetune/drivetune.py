@@ -10,10 +10,10 @@ stays inside a 30 inch box), records every loop, and scores each pod on:
     changes. The shake the driver feels is the wheel reversing when the demand did not.
   - settle after each X-snap transition (zero input -> pods swing ~45 deg)
 
-Usage:
-    python drivetune.py baseline                 # capture + score at current gains
-    python drivetune.py cfg <tag> pod0spec pod1spec pod2spec pod3spec
-    e.g. python drivetune.py cfg domtest "dom=true" "dom=true" "dom=true" "dom=true"
+Usage (plus exactly one of --confirmed-floor / --on-blocks, as robot.py drive requires):
+    python drivetune.py baseline --confirmed-floor   # capture + score at current gains
+    python drivetune.py cfg <tag> pod0spec pod1spec pod2spec pod3spec --confirmed-floor
+    e.g. python drivetune.py cfg domtest "dom=true" "dom=true" "dom=true" "dom=true" --confirmed-floor
     (specs are merged onto CURRENT gains per pod; empty string = leave pod alone)
 
 Each run appends a scored summary to current_runs/drivetune.jsonl and archives the trace.
@@ -27,6 +27,7 @@ import os
 import sys
 import time
 
+from robot import safe_stop, script_gates
 from swervebench import Bench, parse_csv, _mean, _archive
 
 CYCLES = 6
@@ -109,16 +110,20 @@ def run(tag: str, pod_specs: list[dict] | None) -> None:
 
     b.cmd("recStart", label=f"drivetune-{tag}")
     time.sleep(0.3)
-    for c in range(CYCLES):
-        drive_phase(b, FWD_POWER, 0, 0, FWD_S)
-        drive_phase(b, 0, 0, 0, PAUSE_S)
-        drive_phase(b, -FWD_POWER, 0, 0, FWD_S)
-        drive_phase(b, 0, 0, 0, PAUSE_S)
-    b.cmd("drive", retries=1, f=0, s=0, t=0)
-    time.sleep(0.2)
-    b.cmd("recStop")
-    time.sleep(0.3)
-    b.cmd("stop")
+    try:
+        for c in range(CYCLES):
+            drive_phase(b, FWD_POWER, 0, 0, FWD_S)
+            drive_phase(b, 0, 0, 0, PAUSE_S)
+            drive_phase(b, -FWD_POWER, 0, 0, FWD_S)
+            drive_phase(b, 0, 0, 0, PAUSE_S)
+        b.cmd("drive", retries=1, f=0, s=0, t=0)
+        time.sleep(0.2)
+        b.cmd("recStop")
+        time.sleep(0.3)
+    finally:
+        # A transport failure or Ctrl-C mid-cycle used to leave the last drive to the 400 ms
+        # watchdog alone. Zero drive, then stop, whatever happened.
+        safe_stop()
 
     csv_text = b.rec_csv()
     tr = parse_csv(csv_text)
@@ -164,10 +169,12 @@ def parse_spec(s: str) -> dict:
 
 
 if __name__ == "__main__":
-    mode = sys.argv[1] if len(sys.argv) > 1 else "baseline"
+    # It drives the robot back and forth: the same gates as robot.py drive.
+    argv, _ = script_gates(sys.argv[1:])
+    mode = argv[0] if argv else "baseline"
     if mode == "baseline":
         run("baseline", None)
     else:
-        tag = sys.argv[2]
-        specs = [parse_spec(s) for s in sys.argv[3:7]]
+        tag = argv[1]
+        specs = [parse_spec(s) for s in argv[2:6]]
         run(tag, specs)

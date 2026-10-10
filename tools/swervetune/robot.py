@@ -282,6 +282,36 @@ def surface_refusal(a) -> str | None:
     return None
 
 
+def script_gates(argv: list[str], box_always: bool = False) -> tuple[list[str], bool]:
+    """The `drive` gates for standalone bench scripts that move the robot (drivetune.py,
+    phase2_plant.py, pedrotune.py): exactly one of --confirmed-floor / --on-blocks on the command
+    line, then live/started and - unless on blocks, or always with ``box_always`` - pose and box.
+    Exits on refusal. Returns (argv without the two flags, on_blocks)."""
+    floor = "--confirmed-floor" in argv
+    blocks = "--on-blocks" in argv
+    rest = [x for x in argv if x not in ("--confirmed-floor", "--on-blocks")]
+    refusal = surface_refusal(argparse.Namespace(confirmed_floor=floor, on_blocks=blocks))
+    if refusal:
+        print(f"REFUSED: {refusal}")
+        sys.exit(EXIT_REFUSED)
+    code, _, reason = gates(need_box=box_always or not blocks)
+    if code != EXIT_OK:
+        print(f"REFUSED: {reason}")
+        sys.exit(code)
+    print(f"surface={'blocks' if blocks else 'floor'}")
+    return rest, blocks
+
+
+def safe_stop(actions=(("drive", {"f": 0, "s": 0, "t": 0}), ("stop", {}))) -> None:
+    """For a script's finally: sends each action straight to /cmd, retried (all idempotent), and
+    keeps going if one fails - a stop that depends on a state() read succeeding is no stop."""
+    for action, params in actions:
+        try:
+            _get("/cmd", {"action": action, **params}, timeout=2.0, retries=4)
+        except BenchError as e:
+            print(f"WARNING: could not send {action}: {e} - operator: STOP on the Driver Station.")
+
+
 def cmd_drive(a) -> int:
     refusal = surface_refusal(a)
     if refusal:

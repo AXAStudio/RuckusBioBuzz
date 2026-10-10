@@ -4,9 +4,9 @@ Everything here is open loop. The point is to find out what the hardware can and
 later on a criterion that cannot be met is recognised as a hardware limit rather than blamed on the
 controller - and so that the deadband compensation in Phase 3 has real numbers behind it.
 
-    python phase2_plant.py breakaway
-    python phase2_plant.py slew
-    python phase2_plant.py all
+    python phase2_plant.py breakaway --on-blocks
+    python phase2_plant.py slew --on-blocks
+    python phase2_plant.py all --on-blocks        (or --confirmed-floor, with the box armed)
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ import math
 import sys
 import time
 
+from robot import safe_stop, script_gates
 from swervebench import Bench, parse_csv, _mean, _stdev
 
 POD_COUNT = 4
@@ -75,7 +76,8 @@ def staircase(b: Bench, pod: int, sign: int) -> list[dict]:
     b.cmd("recStart", label=f"stair-p{pod}-{'pos' if sign > 0 else 'neg'}")
     time.sleep(0.25)
     for p in powers:
-        b.cmd("rawServo", pow=p, sec=DWELL_S, pod=pod)
+        # retries=1: a duplicate rawServo restarts the dwell (see swervebench.raw_staircase).
+        b.cmd("rawServo", retries=1, pow=p, sec=DWELL_S, pod=pod)
         time.sleep(DWELL_S + GAP_S)
     b.cmd("recStop")
     time.sleep(0.25)
@@ -173,7 +175,7 @@ def run_slew(b: Bench) -> None:
             b.cmd("select", pod=pod)
             b.cmd("recStart", label=f"slew-p{pod}-{name}")
             time.sleep(0.25)
-            b.cmd("rawServo", pow=sign * 1.0, sec=0.7, pod=pod)
+            b.cmd("rawServo", retries=1, pow=sign * 1.0, sec=0.7, pod=pod)
             time.sleep(1.2)
             b.cmd("recStop")
             time.sleep(0.2)
@@ -212,10 +214,13 @@ def run_looprate(b: Bench) -> None:
     print("\nLoop rate by mode")
     b.stop()
     time.sleep(0.5)
+    # Drive commands go out ONCE (retries=1): the default 6 retries can land a timed-out-but-
+    # delivered drive a second time, late, after the script has moved on.
     for name, setup in (
         ("IDLE", lambda: None),
         ("PID hold (4 pods)", lambda: b.cmd("pidStepAll", deg=0)),
-        ("DRIVE", lambda: [b.cmd("drive", f=0.2, s=0, t=0) or time.sleep(0.15) for _ in range(6)]),
+        ("DRIVE", lambda: [b.cmd("drive", retries=1, f=0.2, s=0, t=0) or time.sleep(0.15)
+                           for _ in range(6)]),
     ):
         setup()
         time.sleep(1.2)
@@ -224,7 +229,7 @@ def run_looprate(b: Bench) -> None:
             vals.append(b.state()["loopHz"])
             time.sleep(0.12)
             if name == "DRIVE":
-                b.cmd("drive", f=0.2, s=0, t=0)
+                b.cmd("drive", retries=1, f=0.2, s=0, t=0)
         print(f"  {name:<20} {_mean(vals):6.1f} Hz  (sigma {_stdev(vals):.1f})  "
               f"period {1000.0/_mean(vals):.1f} ms")
         b.stop()
@@ -232,16 +237,22 @@ def run_looprate(b: Bench) -> None:
 
 
 def main() -> None:
-    what = sys.argv[1] if len(sys.argv) > 1 else "all"
+    # Every mode moves something (rawServo, pidStepAll, and `loop` DRIVEs at 0.2), so the same
+    # gates as robot.py drive: --confirmed-floor or --on-blocks, and the box off blocks.
+    args, _ = script_gates(sys.argv[1:])
+    what = args[0] if args else "all"
     b = Bench()
     print(f"battery {b.voltage():.2f} V\n")
-    if what in ("breakaway", "all"):
-        run_breakaway(b)
-    if what in ("slew", "all"):
-        run_slew(b)
-    if what in ("loop", "all"):
-        run_looprate(b)
-    b.stop()
+    try:
+        if what in ("breakaway", "all"):
+            run_breakaway(b)
+        if what in ("slew", "all"):
+            run_slew(b)
+        if what in ("loop", "all"):
+            run_looprate(b)
+    finally:
+        # Whatever happened - an exception mid-DRIVE included - zero drive, then stop.
+        safe_stop()
 
 
 if __name__ == "__main__":
