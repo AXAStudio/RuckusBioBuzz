@@ -40,7 +40,10 @@ contradicts the code, the code wins — fix this file in the same commit.**
   control rate. Do not chase loop rates far above it expecting steering gains.
 - **Heading/odometry: goBILDA Pinpoint.** There is **no Control Hub IMU
   (BHI260AP/BNO055) in the control path.** `msHeading` ≈ **1.81 ms** and has
-  been ruled out as a loop-time cost.
+  been ruled out as a loop-time cost. Since 2026-10-10 `SwerveBringUp` pays it
+  every loop in FOLLOW and in DRIVE with heading hold off too (the fence needs a
+  fresh pose; FINDINGS.md), so those modes' loop rates are not comparable with
+  earlier traces.
 - Servo rail current is readable via `LynxGetADCCommand` on the
   `SERVO_CURRENT` channel — but it is a **rail total for all four servos** and
   is sampled on the **5 Hz** idle path, far too slow to catch a 0.37 s rise.
@@ -156,7 +159,9 @@ with `robot.py foresight`.
 - Host side: `SwerveBench.INSTANCE` ↔ `tools/swervetune/swervebench.py`, 1500 ms
   liveness window. Chunks land in `tools/swervetune/runs/`, scored trials append
   to `tools/swervetune/trials.jsonl`.
-- Browser-gamepad drive path lives at `dashboard.html:556-628`: 60 ms poll,
+- Browser-gamepad drive path lives in `dashboard.html` (`stopEverything`,
+  `setPadDriving` and the pad poll after it; it refuses any controller whose
+  `mapping` is not `standard`): 60 ms poll,
   **400 ms watchdog**. A backgrounded tab stops reporting axes and the watchdog
   cuts the robot.
 - The recorder is never written to `/sdcard` — it lives in RAM until pulled
