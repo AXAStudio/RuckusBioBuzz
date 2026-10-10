@@ -1,0 +1,705 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mechanism Tuner</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #171c24; --panel2: #1f2731; --line: #2b3542;
+    --text: #e6edf3; --muted: #8b98a8; --accent: #4da3ff;
+    --good: #3fb950; --warn: #d29922; --bad: #f85149;
+    --pollen: #e3a72f; --nectar: #4da3ff;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { position: sticky; top: 0; z-index: 20; display: flex; align-items: center; gap: 16px;
+    flex-wrap: wrap; padding: 10px 16px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  h1 { font-size: 16px; margin: 0; letter-spacing: .3px; }
+  .stat { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 13px; }
+  .stat b { color: var(--text); font-weight: 600; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+  .dot.on { background: var(--good); box-shadow: 0 0 8px var(--good); }
+  .dot.off { background: var(--bad); }
+  .spacer { flex: 1; }
+  button { font: inherit; color: var(--text); background: var(--panel2); border: 1px solid var(--line);
+    border-radius: 7px; padding: 7px 12px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button:active { transform: translateY(1px); }
+  button.primary { background: #14395f; border-color: #1f5c99; }
+  button.stop { background: #5c1a1a; border-color: var(--bad); font-weight: 700; padding: 9px 20px; }
+  button.small { padding: 4px 9px; font-size: 12px; }
+  button.on { background: #123122; border-color: var(--good); }
+  nav { display: flex; gap: 4px; padding: 8px 16px 0; max-width: 1500px; margin: 0 auto; flex-wrap: wrap; }
+  nav button { border-radius: 8px 8px 0 0; border-bottom: none; background: var(--panel); color: var(--muted); }
+  nav button.sel { background: var(--panel2); color: var(--text); border-color: var(--accent); }
+  main { padding: 0 16px 16px; max-width: 1500px; margin: 0 auto; }
+  .tab { display: none; } .tab.sel { display: block; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; margin-top: 14px; }
+  section > h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .7px; color: var(--muted); margin: 0 0 10px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 14px; }
+  .grid > *, .row > * { min-width: 0; }
+  .card { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
+  .card h3 { margin: 0 0 6px; font-size: 15px; display: flex; gap: 8px; align-items: center; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 6px 0; }
+  .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 1px 0;
+    font-variant-numeric: tabular-nums; }
+  .kv span:first-child { color: var(--muted); }
+  .big { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .badge { font-size: 11px; padding: 2px 7px; border-radius: 5px; background: #10151c;
+    border: 1px solid var(--line); color: var(--muted); }
+  .badge.bad { background: #3a1414; border-color: var(--bad); color: #ffb4ae; }
+  .badge.good { background: #123122; border-color: var(--good); color: #7ee095; }
+  .badge.warn { background: #2a2416; border-color: var(--warn); color: #f0c674; }
+  input[type=number], input[type=text], select { font: inherit; background: #0c1015; color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; width: 86px;
+    font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
+  input[type=text].wide { width: 220px; }
+  input[type=range] { flex: 1; min-width: 120px; }
+  label.inline { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
+  .msg { padding: 9px 12px; border-radius: 7px; background: var(--panel2); border-left: 3px solid var(--accent); }
+  .msg.bad { border-left-color: var(--bad); background: #2a1616; }
+  .hint { color: var(--muted); font-size: 12px; }
+  canvas { width: 100%; height: 230px; background: #0c1015; border-radius: 8px; border: 1px solid var(--line); display: block; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
+  th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  .tablewrap { overflow-x: auto; }
+  pre, textarea { background: #0c1015; color: var(--text); border: 1px solid var(--line); border-radius: 8px;
+    padding: 10px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; white-space: pre-wrap; margin: 0; }
+  textarea { width: 100%; min-height: 220px; resize: vertical; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 6px 0; }
+  .legend i { display: inline-block; width: 22px; height: 0; border-top: 3px solid; vertical-align: middle; margin-right: 5px; }
+  .legend i.dash { border-top-style: dashed; }
+  .swatch { width: 64px; height: 64px; border-radius: 10px; border: 1px solid var(--line); flex: none; }
+  .notehist { max-height: 300px; overflow-y: auto; }
+  .notehist div { padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .notehist .meta { color: var(--muted); font-size: 12px; }
+  a { color: var(--accent); }
+  @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } header { gap: 10px; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Mechanism Tuner</h1>
+  <span class="stat"><span id="liveDot" class="dot off"></span><span id="liveText">offline</span></span>
+  <span class="stat">Battery <b id="hdrVolts">–</b></span>
+  <span class="stat">Loop <b id="hdrLoop">–</b> <span class="hint">(1/mean dt)</span></span>
+  <span class="stat" id="hdrMsg"></span>
+  <span class="spacer"></span>
+  <button class="stop" onclick="cmd('stopAll')">STOP ALL</button>
+</header>
+<nav id="nav">
+  <button data-tab="overview" class="sel">Overview</button>
+  <button data-tab="fly">Flywheels</button>
+  <button data-tab="turret">Turrets &amp; servos</button>
+  <button data-tab="color">Color sensor</button>
+  <button data-tab="swerve">Swerve</button>
+  <button data-tab="export">Export</button>
+</nav>
+<main>
+<div id="tn-dock"></div>
+
+<!-- ======================================================== OVERVIEW -->
+<div class="tab sel" id="tab-overview">
+  <section>
+    <h2>Status</h2>
+    <div id="ovStatus" class="msg">Waiting for the robot…</div>
+    <div class="grid" style="margin-top:12px" id="ovCards"></div>
+  </section>
+  <section>
+    <h2>Messages from Claude</h2>
+    <p class="hint">Requests from a Claude session pop up as a banner on top of every tab (and on the
+      <a href="/swerve">swerve dashboard</a>), with a beep. Answer them there. Notes that wait on a
+      shot close themselves when the flywheel sees the dip. History:</p>
+    <div class="notehist" id="noteHist"><div class="hint">No messages yet.</div></div>
+    <div class="row" style="margin-top:8px">
+      <input type="text" class="wide" id="selfNote" placeholder="Test a banner on this page">
+      <button class="small" onclick="testNote()">Post test note</button>
+      <button class="small" onclick="fetch('/tune/notify?clear=1').then(TuneNotes.poll)">Dismiss all open</button>
+    </div>
+  </section>
+  <section>
+    <h2>How this fits</h2>
+    <p class="hint" style="margin:0">Run <b>Mechanism Tuner</b> (Diagnostics group) on the Driver Station for
+      flywheels, turrets, gate, scoopula and the intake color sensor; nothing moves until START, and
+      everything stops if no browser or Claude session has talked to the robot for 30 s. The
+      drivetrain is tuned in the separate <b>Swerve Bring-Up</b> OpMode — see the Swerve tab. Values found
+      here only reach competition code through the Export tab.</p>
+  </section>
+</div>
+
+<!-- ======================================================== FLYWHEELS -->
+<div class="tab" id="tab-fly">
+  <section>
+    <h2>Live velocity</h2>
+    <div class="legend">
+      <span><i style="border-color:var(--pollen)"></i>pollen velocity</span>
+      <span><i class="dash" style="border-color:var(--pollen)"></i>pollen target</span>
+      <span><i style="border-color:var(--nectar)"></i>nectar velocity</span>
+      <span><i class="dash" style="border-color:var(--nectar)"></i>nectar target</span>
+      <span>shaded = at-speed band (gate may open)</span>
+    </div>
+    <canvas id="flyChart"></canvas>
+    <div class="row">
+      <label class="inline">Window <select id="chartWin"><option>5</option><option selected>10</option><option>20</option><option>40</option></select> s</label>
+      <label class="inline">At-speed band <input type="number" id="atSpeed" step="0.5" min="0.5" max="50"> %</label>
+      <button class="small" onclick="cmd('atSpeed',{frac:num('atSpeed')/100})">Apply band</button>
+      <span class="hint">The band is <code>flywheel.AT_SPEED_FRACTION</code>: the shooter opens the gate only inside it.</span>
+    </div>
+  </section>
+  <div class="grid" id="wheelCards"></div>
+  <section>
+    <h2>Shots and disturbances</h2>
+    <p class="hint" style="margin-top:0">With a wheel in VEL mode and inside its band for 0.3 s (badge
+      <b>armed</b>), any drop out of the band is logged: dip depth, time to the bottom, and time until it is back
+      in the band — the time the shooter is <i>not ready</i> after a shot. <b>Kick</b> is a synthetic
+      disturbance (motor output cut for a few ms); it is repeatable but is not a real ball, so accept gains on real shots.</p>
+    <div class="row">
+      <button class="small" onclick="cmd('clearEvents')">Clear events</button>
+      <span class="hint" id="evSummary"></span>
+    </div>
+    <div class="tablewrap"><table id="evTable"></table></div>
+  </section>
+  <section>
+    <h2>Recorder</h2>
+    <div class="row">
+      <input type="text" class="wide" id="recLabel" placeholder="label">
+      <label class="inline"><input type="checkbox" id="recCur"> log motor current (slower loop)</label>
+      <button class="small primary" onclick="cmd('recStart',{label:val('recLabel')||'manual',cur:chk('recCur')?1:0})">Start</button>
+      <button class="small" onclick="cmd('recStop')">Stop</button>
+      <a href="/tune/rec.csv" target="_blank">rec.csv</a>
+      <span class="hint" id="recInfo"></span>
+    </div>
+    <p class="hint">One sample per loop, 6000 samples, stops when full. Steps record themselves. Color reads pause while recording.</p>
+  </section>
+  <section>
+    <h2>Claude prompt — flywheel PIDF</h2>
+    <p class="hint">Paste into a Claude Code session in this repo on a laptop that is on the robot WiFi.
+      Claude drives the tests and asks you for shots through banners on this page.</p>
+    <textarea id="promptFly" readonly></textarea>
+    <div class="row"><button class="primary" onclick="copy('promptFly', this)">Copy prompt</button></div>
+  </section>
+</div>
+
+<!-- ======================================================== TURRETS & SERVOS -->
+<div class="tab" id="tab-turret">
+  <section>
+    <h2>Turrets</h2>
+    <p class="hint" style="margin-top:0">The turrets are positional servos, so there is no PID to tune — only the
+      mapping from angle to servo position that <code>turret.java</code> uses:
+      <code>pos = center ± deg / (servoRange × grB / grA)</code>. Find <b>center</b> (turret straight ahead), check
+      <b>reversed</b> (+deg must turn the way the code expects), then verify the ratio by pointing at ±90° and
+      measuring. Wrong ratio → aim error grows with angle.</p>
+    <div class="grid" id="turretCards"></div>
+  </section>
+  <section>
+    <h2>Gate and scoopula</h2>
+    <p class="hint" style="margin-top:0">Both are currently <b>0 / 0</b> in shipped code (<code>gate.openPos/closePos</code>,
+      <code>scoopula.scoopPos/unscoopPos</code>). Move the servo until it is where it belongs, then mark it.</p>
+    <div class="grid" id="servoCards"></div>
+  </section>
+</div>
+
+<!-- ======================================================== COLOR -->
+<div class="tab" id="tab-color">
+  <section>
+    <h2>Live intake color sensor</h2>
+    <div class="row" style="gap:16px;align-items:flex-start">
+      <div class="swatch" id="swatch"></div>
+      <div style="flex:1;min-width:200px;max-width:320px" id="colorLive"></div>
+      <div style="flex:1;min-width:200px;max-width:360px" id="colorVerdict"></div>
+    </div>
+    <div class="row">
+      <button class="small" id="btnStream" onclick="cmd('colorStream',{on:S&&S.color&&S.color.stream?0:1})">Streaming</button>
+      <span class="hint">20 Hz; paused while the flywheel recorder runs. Same raw <code>red()/green()/blue()</code> calls as <code>intake.java</code>.</span>
+    </div>
+  </section>
+  <section>
+    <h2>Intake (shipped logic)</h2>
+    <div class="row">
+      <button class="small" onclick="cmd('intake',{mode:'OFF'})">Off</button>
+      <button class="small" onclick="cmd('intake',{mode:'IN'})">Intake</button>
+      <button class="small" onclick="cmd('intake',{mode:'OUT'})">Reverse</button>
+      <button class="small" onclick="cmd('intake',{mode:'WATCH'})">Watch only</button>
+      <span class="hint">Watch = motors stopped unless the shipped reject logic fires on a wrong-alliance piece.</span>
+    </div>
+    <div class="row">
+      <label class="inline">Alliance</label>
+      <button class="small" onclick="cmd('alliance',{side:'RED'})">RED</button>
+      <button class="small" onclick="cmd('alliance',{side:'BLUE'})">BLUE</button>
+      <span class="stat" id="intakeInfo"></span>
+    </div>
+  </section>
+  <section>
+    <h2>Labelled samples → thresholds</h2>
+    <p class="hint" style="margin-top:0">Hold each piece where the sensor sees it during intake and capture ~40 reads.
+      Do RED, BLUE, EMPTY (nothing in the intake) and every other thing the sensor might see (the other game
+      piece, a piece half-in, field tiles). Vary position between captures. The suggestion maximises correct calls
+      over all samples using the exact <code>intake.dominant()</code> rule.</p>
+    <div class="row">
+      <label class="inline">reads <input type="number" id="sampleN" value="40" min="1" max="500"></label>
+      <button class="small" onclick="sample('RED')">Capture RED</button>
+      <button class="small" onclick="sample('BLUE')">Capture BLUE</button>
+      <button class="small" onclick="sample('EMPTY')">Capture EMPTY</button>
+      <input type="text" id="sampleLabel" placeholder="other label">
+      <button class="small" onclick="sample(val('sampleLabel'))">Capture</button>
+      <span class="stat" id="sampleInfo"></span>
+    </div>
+    <div class="tablewrap"><table id="colorTable"></table></div>
+    <div id="colorSuggest" style="margin-top:10px"></div>
+    <div class="row">
+      <button class="small" onclick="if(confirm('Delete all color samples?'))cmd('colorClear')">Clear all samples</button>
+      <a href="/tune/color.csv" target="_blank">color.csv</a>
+    </div>
+  </section>
+  <section>
+    <h2>Thresholds (live)</h2>
+    <div class="row">
+      <label class="inline">thresholdRed <input type="number" id="thrRed"></label>
+      <label class="inline">thresholdBlue <input type="number" id="thrBlue"></label>
+      <label class="inline">DOMINANCE <input type="number" id="dom" step="0.05"></label>
+      <button class="small primary" onclick="cmd('colorParams',{red:num('thrRed'),blue:num('thrBlue'),dom:num('dom')})">Apply live</button>
+      <button class="small" onclick="fillColorInputs(true)">Reload</button>
+    </div>
+    <p class="hint">Applied to the shipped <code>intake</code> statics for this run only; restored when the OpMode stops. Ship them from the Export tab.</p>
+  </section>
+</div>
+
+<!-- ======================================================== SWERVE -->
+<div class="tab" id="tab-swerve">
+  <section>
+    <h2>Swerve drivetrain</h2>
+    <div id="swerveStatus" class="msg">–</div>
+    <p>The drivetrain has its own tool: the <b>Swerve Bring-Up</b> OpMode and its dashboard at
+      <a href="/swerve" target="_blank">/swerve</a>. It cannot run at the same time as Mechanism Tuner — one OpMode
+      owns the robot. Claude tunes it through <code>tools/swervetune/robot.py</code> and validates on the real Pedro
+      follower (<code>pedrocheck.py</code>); the result ends in <code>pedroPathing/Constants.java</code>.
+      Banners from Claude appear on the /swerve page too.</p>
+  </section>
+  <section>
+    <h2>Claude prompt — swerve</h2>
+    <textarea id="promptSwerve" readonly></textarea>
+    <div class="row"><button class="primary" onclick="copy('promptSwerve', this)">Copy prompt</button></div>
+  </section>
+</div>
+
+<!-- ======================================================== EXPORT -->
+<div class="tab" id="tab-export">
+  <section>
+    <h2>Values to ship</h2>
+    <p class="hint" style="margin-top:0">What this run currently holds, as the declarations in the shipped files.
+      <b>Changing these files is a shipped change</b>: build, then commit each value with its evidence.
+      From a laptop: <code>python tools/mechtune/mechtune.py export</code> (dry run) then <code>--write</code>.</p>
+    <div class="tablewrap"><table id="exportTable"></table></div>
+    <pre id="exportJava" style="margin-top:10px"></pre>
+    <div class="row"><button class="small" onclick="copy('exportJava', this)">Copy as Java</button></div>
+  </section>
+  <section>
+    <h2>Claude prompt — color sensor</h2>
+    <textarea id="promptColor" readonly style="min-height:150px"></textarea>
+    <div class="row"><button class="primary" onclick="copy('promptColor', this)">Copy prompt</button></div>
+  </section>
+</div>
+
+</main>
+<script src="/tune/notify.js"></script>
+<script>
+'use strict';
+var S = null;            // last /tune/state
+var hist = [];           // chart history: [tSec, pT, pV, nT, nV, band]
+var t0 = performance.now();
+var lastSeq = 0;
+var filled = {};         // inputs pre-filled once from the robot, so typing is never overwritten
+
+function $(id) { return document.getElementById(id); }
+function val(id) { return $(id).value.trim(); }
+function num(id) { return parseFloat($(id).value); }
+function chk(id) { return $(id).checked; }
+function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
+  return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]; }); }
+function f(v, d) { return v == null || isNaN(v) ? '–' : Number(v).toFixed(d == null ? 0 : d); }
+
+function cmd(action, params) {
+  var q = new URLSearchParams(Object.assign({action: action}, params || {}));
+  return fetch('/tune/cmd?' + q.toString(), {cache: 'no-store'}).then(function (r) { return r.json(); })
+    .then(function (j) { lastSeq = j.seq; return j; })
+    .catch(function () { $('hdrMsg').textContent = 'Command not delivered (robot offline?)'; });
+}
+
+function copy(id, btn) {
+  var el = $(id);
+  var text = el.value != null && el.tagName === 'TEXTAREA' ? el.value : el.textContent;
+  var done = function () { var o = btn.textContent; btn.textContent = 'Copied ✓'; setTimeout(function () { btn.textContent = o; }, 1500); };
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(done);
+  } else {
+    // The robot serves plain http, where the async clipboard API is unavailable.
+    if (el.select) { el.removeAttribute('readonly'); el.select(); document.execCommand('copy'); el.setAttribute('readonly', ''); }
+    else { var r = document.createRange(); r.selectNodeContents(el); var s = getSelection(); s.removeAllRanges(); s.addRange(r); document.execCommand('copy'); }
+    done();
+  }
+}
+
+// ---------------------------------------------------------------- tabs
+$('nav').addEventListener('click', function (e) {
+  var b = e.target.closest('button'); if (!b) return;
+  Array.prototype.forEach.call($('nav').children, function (x) { x.classList.toggle('sel', x === b); });
+  Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (t) {
+    t.classList.toggle('sel', t.id === 'tab-' + b.dataset.tab); });
+  try { localStorage.setItem('tuneTab', b.dataset.tab); } catch (err) {}
+  drawChart();
+});
+try { var savedTab = location.hash.slice(1) || localStorage.getItem('tuneTab');
+  if (savedTab) { var sb = document.querySelector('nav button[data-tab="' + savedTab + '"]'); if (sb) sb.click(); } } catch (err) {}
+
+// ---------------------------------------------------------------- static card scaffolding
+function buildWheelCards() {
+  $('wheelCards').innerHTML = ['pollen', 'nectar'].map(function (w, i) {
+    return '<section class="card" style="margin:0"><h3><span style="color:var(--' + w + ')">●</span>' +
+      w + ' flywheel <span class="badge" id="' + w + 'Mode">–</span><span class="badge" id="' + w + 'Speed">–</span>' +
+      '<span class="badge" id="' + w + 'Arm">–</span></h3>' +
+      '<div class="row" style="gap:22px"><div><div class="hint">velocity</div><div class="big" id="' + w + 'Vel">–</div></div>' +
+      '<div><div class="hint">target</div><div class="big" id="' + w + 'Tgt" style="color:var(--muted)">–</div></div>' +
+      '<div><div class="hint">current</div><div class="big" id="' + w + 'Cur" style="font-size:18px">–</div></div></div>' +
+      '<div class="hint" id="' + w + 'Err"></div>' +
+      '<div class="row"><label class="inline">ticks/s <input type="number" id="' + w + 'VelIn" value="2000" step="50"></label>' +
+      '<button class="small primary" onclick="cmd(\'fly\',{wheel:\'' + w + '\',vel:num(\'' + w + 'VelIn\')})">Spin</button>' +
+      '<button class="small" onclick="cmd(\'flyOff\',{wheel:\'' + w + '\'})">Off</button>' +
+      '<label class="inline">power <input type="number" id="' + w + 'PwrIn" value="0.5" step="0.05"></label>' +
+      '<button class="small" onclick="cmd(\'flyPower\',{wheel:\'' + w + '\',p:num(\'' + w + 'PwrIn\')})">Open loop</button></div>' +
+      '<div class="row"><label class="inline">reversed <input type="checkbox" id="' + w + 'Rev" onchange="cmd(\'flyDir\',{wheel:\'' + w + '\',reversed:this.checked?1:0})"></label>' +
+      '<span class="hint">positive ticks/s must be the shooting direction</span></div>' +
+      '<div class="row"><b style="font-size:12px">Hub PIDF</b>' +
+      ['p', 'i', 'd', 'f'].map(function (k) { return '<label class="inline">' + k.toUpperCase() +
+        ' <input type="number" step="any" id="' + w + 'K' + k + '"></label>'; }).join('') +
+      '<button class="small primary" onclick="applyPidf(\'' + w + '\')">Write</button></div>' +
+      '<div class="hint">hub reads back: <span id="' + w + 'Hub">–</span></div>' +
+      '<div class="row"><b style="font-size:12px">Step</b><label class="inline">from <input type="number" id="' + w + 'From" value="0" step="50"></label>' +
+      '<label class="inline">to <input type="number" id="' + w + 'To" value="2000" step="50"></label>' +
+      '<label class="inline">sec <input type="number" id="' + w + 'Sec" value="3" step="0.5"></label>' +
+      '<button class="small" onclick="cmd(\'step\',{wheel:\'' + w + '\',from:num(\'' + w + 'From\'),to:num(\'' + w + 'To\'),sec:num(\'' + w + 'Sec\')})">Run step</button></div>' +
+      '<div class="row"><b style="font-size:12px">Disturb</b><label class="inline">kick ms <input type="number" id="' + w + 'Kick" value="120" step="10"></label>' +
+      '<button class="small" onclick="cmd(\'kick\',{wheel:\'' + w + '\',ms:num(\'' + w + 'Kick\')})">Kick</button>' +
+      '<button class="small" onclick="cmd(\'ffSweep\',{wheel:\'' + w + '\'})">Feed-forward sweep</button></div>' +
+      '<div id="' + w + 'Step"></div><div id="' + w + 'Ff"></div></section>';
+  }).join('');
+}
+function applyPidf(w) {
+  cmd('pidf', {wheel: w, p: num(w + 'Kp'), i: num(w + 'Ki'), d: num(w + 'Kd'), f: num(w + 'Kf')});
+}
+
+function buildTurretCards() {
+  $('turretCards').innerHTML = ['pollen', 'nectar'].map(function (w) {
+    var id = 't' + w;
+    return '<div class="card"><h3>' + w + ' turret <span class="badge" id="' + id + 'Ok">–</span></h3>' +
+      '<div class="row" style="gap:22px"><div><div class="hint">servo position</div><div class="big" id="' + id + 'Pos">–</div></div>' +
+      '<div><div class="hint">turret angle</div><div class="big" id="' + id + 'Deg">–</div></div></div>' +
+      '<div class="row"><input type="range" min="0" max="1" step="0.001" id="' + id + 'Slider" ' +
+      'oninput="$(\'' + id + 'PosIn\').value=this.value" onchange="cmd(\'turretPos\',{which:\'' + w + '\',pos:this.value})"></div>' +
+      '<div class="row"><input type="number" step="0.001" id="' + id + 'PosIn">' +
+      '<button class="small primary" onclick="cmd(\'turretPos\',{which:\'' + w + '\',pos:num(\'' + id + 'PosIn\')})">Go</button>' +
+      [-0.01, -0.001, 0.001, 0.01].map(function (d) { return '<button class="small" onclick="nudge(\'' + w + '\',' + d + ')">' + (d > 0 ? '+' : '') + d + '</button>'; }).join('') + '</div>' +
+      '<div class="row"><label class="inline">point at <input type="number" id="' + id + 'DegIn" value="0" step="5"> deg</label>' +
+      '<button class="small" onclick="cmd(\'turretDeg\',{which:\'' + w + '\',deg:num(\'' + id + 'DegIn\')})">Point</button>' +
+      [-90, 0, 90].map(function (d) { return '<button class="small" onclick="cmd(\'turretDeg\',{which:\'' + w + '\',deg:' + d + '})">' + d + '°</button>'; }).join('') + '</div>' +
+      '<div class="row"><b style="font-size:12px">Calibration</b>' +
+      '<label class="inline">center <input type="number" step="0.001" id="' + id + 'Center"></label>' +
+      '<label class="inline">grA <input type="number" step="any" id="' + id + 'GrA"></label>' +
+      '<label class="inline">grB <input type="number" step="any" id="' + id + 'GrB"></label>' +
+      '<label class="inline">servo° <input type="number" step="any" id="' + id + 'Range"></label>' +
+      '<label class="inline">reversed <input type="checkbox" id="' + id + 'Rev"></label></div>' +
+      '<div class="row"><button class="small primary" onclick="turretCal(\'' + w + '\')">Apply</button>' +
+      '<button class="small" onclick="cmd(\'turretCal\',{which:\'' + w + '\',here:1}).then(function(){filled.t' + w + '=false})">Center = current position</button>' +
+      '<span class="hint" id="' + id + 'RangeInfo"></span></div></div>';
+  }).join('');
+}
+function nudge(w, d) {
+  var t = S && S.turrets && S.turrets.filter(function (x) { return x.name === w; })[0];
+  var p = t && t.pos != null ? t.pos : (t ? t.center : 0.5);
+  cmd('turretPos', {which: w, pos: Math.max(0, Math.min(1, p + d)).toFixed(4)});
+}
+function turretCal(w) {
+  var id = 't' + w;
+  cmd('turretCal', {which: w, center: num(id + 'Center'), grA: num(id + 'GrA'), grB: num(id + 'GrB'),
+    servoRange: num(id + 'Range'), reversed: chk(id + 'Rev') ? 1 : 0});
+}
+
+function buildServoCards() {
+  var defs = [['gate', ['open', 'close']], ['scoopula', ['scoop', 'unscoop']]];
+  $('servoCards').innerHTML = defs.map(function (d) {
+    var n = d[0], id = 's' + n;
+    return '<div class="card"><h3>' + n + ' <span class="badge" id="' + id + 'Ok">–</span></h3>' +
+      '<div class="big" id="' + id + 'Pos">–</div>' +
+      '<div class="row"><input type="range" min="0" max="1" step="0.001" id="' + id + 'Slider" ' +
+      'oninput="$(\'' + id + 'PosIn\').value=this.value" onchange="cmd(\'servoPos\',{name:\'' + n + '\',pos:this.value})"></div>' +
+      '<div class="row"><input type="number" step="0.001" id="' + id + 'PosIn">' +
+      '<button class="small primary" onclick="cmd(\'servoPos\',{name:\'' + n + '\',pos:num(\'' + id + 'PosIn\')})">Go</button>' +
+      d[1].map(function (m) { return '<button class="small" onclick="cmd(\'servoMark\',{name:\'' + n + '\',as:\'' + m + '\'})">Mark ' + m + '</button>'; }).join('') +
+      '</div><div class="hint" id="' + id + 'Marks"></div>' +
+      (n === 'gate' ? '<div class="row"><label class="inline">pulse ms <input type="number" id="gatePulseMs" value="250" step="25"></label>' +
+        '<button class="small" onclick="cmd(\'gatePulse\',{ms:num(\'gatePulseMs\')})">Pulse open</button>' +
+        '<span class="hint">opens then closes — feeds one staged piece</span></div>' : '') + '</div>';
+  }).join('');
+}
+
+function sample(label) {
+  if (!label) return;
+  cmd('colorSample', {label: label, n: num('sampleN')});
+}
+
+// ---------------------------------------------------------------- prompts
+function prompts() {
+  var v = S && S.live ? S.volts.toFixed(2) + ' V' : 'UNKNOWN';
+  $('promptFly').value =
+'Tune the flywheel velocity PIDF on our FTC robot (RuckusBioBuzz, BIOBUZZ 2026-27).\n\n' +
+'Read CLAUDE.md first, then MECHANISM_TUNING_TASK.md, and execute Part A (flywheel PIDF) end to end. ' +
+'CLAUDE.md section 8 (evidence and safety rules) applies and is not overridable.\n\n' +
+'Setup right now:\n' +
+'- The Mechanism Tuner OpMode is running on the robot; dashboard at http://192.168.43.1:8080/tune\n' +
+'- Your front door is tools/mechtune/mechtune.py (run `python tools/mechtune/mechtune.py check` first).\n' +
+'- Battery at the time this prompt was copied: ' + v + '. Surface: robot on the floor, wheels free to spin.\n' +
+'- I am at the robot with pollen and nectar pieces. When you need me to do something physical ' +
+'(feed a piece, swap the battery, check something), ask through `mechtune.py ask` or `mechtune.py shots`, ' +
+'which put a banner on the dashboard and wait for me. Do not ask in chat.\n\n' +
+'Deliverable: tuned POLLEN_PIDF / NECTAR_PIDF (and AT_SPEED_FRACTION if the data supports a change) ' +
+'spliced into systems/flywheel.java with `mechtune.py export --write`, built, and committed with the evidence.';
+  $('promptSwerve').value =
+'Tune the swerve drivetrain on our FTC robot (RuckusBioBuzz, BIOBUZZ 2026-27).\n\n' +
+'Read CLAUDE.md first, then ROBOT_CONTROL.md, then TUNING_TASK.md, and execute TUNING_TASK.md end to end. ' +
+'CLAUDE.md section 8 applies and is not overridable; the deploy gate (rule 5) still needs me.\n\n' +
+'Setup right now:\n' +
+'- The Swerve Bring-Up OpMode is running; its dashboard is http://192.168.43.1:8080/swerve\n' +
+'- Battery: ' + v + ' (re-read it from /swerve/state). Surface: tell me if you need it on blocks.\n' +
+'- Put every OPS REQUEST and question for me on the dashboard with ' +
+'`python tools/mechtune/mechtune.py ask "..."` - it shows as a banner with a beep on /swerve and /tune and ' +
+'returns my reply (e.g. "ready 12.6 V"). Keep batching requests as SWERVE_TASK.md says.\n\n' +
+'Deliverable: pedroPathing/Constants.java, accepted by pedrocheck.py on the installed build, committed per finding.';
+  $('promptColor').value =
+'Tune the intake color sensor thresholds on our FTC robot (RuckusBioBuzz).\n\n' +
+'Read CLAUDE.md, then Part B (intake color sensor) of MECHANISM_TUNING_TASK.md. The Mechanism Tuner ' +
+'OpMode is running (http://192.168.43.1:8080/tune). Use `python tools/mechtune/mechtune.py color` commands ' +
+'and ask me to hold each piece at the sensor through `mechtune.py ask`. Capture RED, BLUE, EMPTY and every ' +
+'other thing the sensor can see, check the suggested thresholds classify every sample, then splice them ' +
+'into systems/intake.java with `mechtune.py export --write --only intake` and commit with the confusion counts.';
+}
+
+// ---------------------------------------------------------------- chart
+function drawChart() {
+  var c = $('flyChart');
+  if (!c || !c.offsetParent) return;
+  var dpr = window.devicePixelRatio || 1;
+  var W = c.clientWidth, H = c.clientHeight;
+  if (c.width !== W * dpr) { c.width = W * dpr; c.height = H * dpr; }
+  var g = c.getContext('2d');
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, W, H);
+  var win = parseFloat($('chartWin').value);
+  var now = (performance.now() - t0) / 1000;
+  var pts = hist.filter(function (h) { return h[0] >= now - win; });
+  var maxV = 100;
+  pts.forEach(function (h) { maxV = Math.max(maxV, Math.abs(h[1]), Math.abs(h[2]), Math.abs(h[3]), Math.abs(h[4])); });
+  maxV = Math.ceil(maxV * 1.1 / 250) * 250;
+  var L = 48, R = 8, T = 8, B = 20;
+  var x = function (t) { return L + (t - (now - win)) / win * (W - L - R); };
+  var y = function (v) { return T + (1 - v / maxV) * (H - T - B); };
+  g.font = '11px ui-monospace, Consolas, monospace'; g.fillStyle = '#8b98a8'; g.strokeStyle = '#1f2731'; g.lineWidth = 1;
+  for (var k = 0; k <= 4; k++) {
+    var v = maxV * k / 4; g.beginPath(); g.moveTo(L, y(v)); g.lineTo(W - R, y(v)); g.stroke();
+    g.fillText(String(Math.round(v)), 4, y(v) + 4);
+  }
+  g.fillText('ticks/s · last ' + win + ' s', L + 4, H - 5);
+  if (pts.length < 2) return;
+  [[1, 'pollen'], [3, 'nectar']].forEach(function (s) {
+    var col = getComputedStyle(document.documentElement).getPropertyValue('--' + s[1]).trim();
+    // band
+    g.fillStyle = col + '22'; g.beginPath();
+    pts.forEach(function (h, i) { var b = Math.abs(h[s[0]]) * h[5]; (i ? g.lineTo : g.moveTo).call(g, x(h[0]), y(Math.abs(h[s[0]]) + b)); });
+    for (var i = pts.length - 1; i >= 0; i--) { var h = pts[i], b = Math.abs(h[s[0]]) * h[5]; g.lineTo(x(h[0]), y(Math.abs(h[s[0]]) - b)); }
+    g.closePath(); g.fill();
+    g.strokeStyle = col; g.lineWidth = 1.5; g.setLineDash([6, 4]); g.beginPath();
+    pts.forEach(function (h, i) { (i ? g.lineTo : g.moveTo).call(g, x(h[0]), y(Math.abs(h[s[0]]))); }); g.stroke();
+    g.setLineDash([]); g.lineWidth = 2; g.beginPath();
+    pts.forEach(function (h, i) { (i ? g.lineTo : g.moveTo).call(g, x(h[0]), y(Math.abs(h[s[0] + 1]))); }); g.stroke();
+  });
+}
+
+// ---------------------------------------------------------------- render
+function setText(id, t) { var e = $(id); if (e && e.textContent !== t) e.textContent = t; }
+function setHtml(id, h) { var e = $(id); if (e && e.innerHTML !== h) e.innerHTML = h; }
+function fillOnce(key, fn) { if (!filled[key]) { fn(); filled[key] = true; } }
+
+function render() {
+  var live = S && S.live;
+  $('liveDot').className = 'dot ' + (live ? 'on' : 'off');
+  setText('liveText', !S ? 'offline' : !live ? 'OpMode not running' : S.started ? 'running' : 'INIT — press START');
+  setText('hdrVolts', live ? S.volts.toFixed(2) + ' V' : '–');
+  setText('hdrLoop', live && S.loopHzTrue ? S.loopHzTrue.toFixed(0) + ' Hz' : '–');
+  setText('hdrMsg', live ? S.message : '');
+  $('swerveStatus').innerHTML = S && S.swerveLive
+    ? '<span class="badge good">Swerve Bring-Up is running</span> — open <a href="/swerve" target="_blank">/swerve</a>.'
+    : '<span class="badge">Swerve Bring-Up is not running</span> — select it on the Driver Station to tune the drivetrain.';
+  if (!live) {
+    $('ovStatus').className = 'msg bad';
+    setHtml('ovStatus', S ? 'Robot app reachable, but <b>Mechanism Tuner</b> is not running. Select it in the Diagnostics group and press INIT.' +
+      (S.swerveLive ? ' (Swerve Bring-Up is running right now.)' : '') : 'Robot not reachable. Join the robot WiFi.');
+    return;
+  }
+  $('ovStatus').className = 'msg' + (S.watchdog || /REFUSED|ERROR|UNKNOWN/.test(S.message) ? ' bad' : '');
+  setHtml('ovStatus', (S.started ? '<b>Running.</b> ' : '<b>INIT.</b> Press START on the Driver Station before anything can move. ') + esc(S.message));
+
+  var ov = [];
+  S.wheels.forEach(function (w) {
+    ov.push('<div class="card"><h3>' + w.name + ' flywheel ' + (w.ok ? '' : '<span class="badge bad">missing</span>') + '</h3>' +
+      '<div class="kv"><span>mode</span><span>' + w.mode + '</span></div><div class="kv"><span>velocity / target</span><span>' +
+      f(w.vel) + ' / ' + f(w.target) + '</span></div><div class="kv"><span>PIDF</span><span>' + w.pidf.join(', ') + '</span></div></div>');
+  });
+  ov.push('<div class="card"><h3>Turrets &amp; servos</h3>' + S.turrets.concat(S.servos).map(function (t) {
+    return '<div class="kv"><span>' + t.name + (t.center != null ? ' turret' : '') + '</span><span>' + (t.ok ? 'pos ' + f(t.pos, 3) : '<span class="badge bad">missing</span>') + '</span></div>'; }).join('') + '</div>');
+  ov.push('<div class="card"><h3>Color sensor ' + (S.color.ok ? '' : '<span class="badge bad">missing</span>') + '</h3>' +
+    '<div class="kv"><span>r g b a</span><span>' + [S.color.r, S.color.g, S.color.b, S.color.a].join(' ') + '</span></div>' +
+    '<div class="kv"><span>samples</span><span>' + S.color.samples + '</span></div>' +
+    '<div class="kv"><span>intake</span><span>' + S.intake.mode + ' · ' + S.intake.alliance + '</span></div></div>');
+  setHtml('ovCards', ov.join(''));
+
+  // flywheels
+  fillOnce('atSpeed', function () { $('atSpeed').value = (S.atSpeedFrac * 100).toFixed(1); });
+  S.wheels.forEach(function (w) {
+    var n = w.name;
+    setText(n + 'Vel', f(w.vel)); setText(n + 'Tgt', w.mode === 'POWER' ? 'p ' + f(w.power, 2) : f(w.target));
+    setText(n + 'Cur', w.cur == null ? '–' : f(w.cur, 2) + ' A');
+    setText(n + 'Mode', w.ok ? w.mode + (w.kicking ? ' · KICK' : '') + (w.stepPhase ? ' · STEP' : '') + (w.ffRunning ? ' · FF ' + (w.ffLevel + 1) : '') : 'MISSING');
+    $(n + 'Mode').className = 'badge' + (w.ok ? '' : ' bad');
+    setText(n + 'Speed', w.atSpeed ? 'at speed' : 'not at speed');
+    $(n + 'Speed').className = 'badge ' + (w.atSpeed ? 'good' : w.mode === 'VEL' ? 'warn' : '');
+    setText(n + 'Arm', ['arming', 'armed', 'in dip', 'recovering'][w.dipState] || '–');
+    $(n + 'Arm').className = 'badge' + (w.dipState === 1 ? ' good' : w.dipState >= 2 ? ' warn' : '');
+    setText(n + 'Err', w.ok ? (w.mode === 'VEL' && w.target ? 'error ' + f(w.vel - w.target) + ' ticks/s (' + f(100 * (w.vel - w.target) / Math.abs(w.target), 1) + '%)' : '') : w.error);
+    setText(n + 'Hub', w.hubPidf || '–');
+    fillOnce(n + 'pidf', function () { ['p', 'i', 'd', 'f'].forEach(function (k, i) { $(n + 'K' + k).value = w.pidf[i]; }); $(n + 'Rev').checked = w.reversed; });
+    var st = w.lastStep;
+    setHtml(n + 'Step', st ? (st.error ? '<div class="msg bad">' + esc(st.error) + '</div>' :
+      '<div class="tablewrap"><table><tr><th>last step</th><th>rise 10–90</th><th>in band</th><th>settled</th><th>overshoot</th><th>ss err ± std</th><th>loop</th><th>V</th></tr>' +
+      '<tr><td>' + f(st.from) + '→' + f(st.to) + '</td><td>' + f(st.rise10_90S, 3) + ' s</td><td>' + f(st.firstInBandS, 3) + ' s</td><td>' +
+      (st.settleS == null ? '<span class="badge bad">never</span>' : f(st.settleS, 3) + ' s') + '</td><td>' + f(st.overshootPct, 1) + '%</td><td>' +
+      f(st.ssErrMean, 1) + ' ± ' + f(st.ssErrStd, 1) + '</td><td>' + f(st.loopHzTrue) + ' Hz</td><td>' + f(st.volts, 2) + '</td></tr></table></div>') : '');
+    var ff = w.ff;
+    setHtml(n + 'Ff', ff ? '<div class="hint" style="margin-top:6px">Feed-forward sweep: ' + ff.levels.map(function (l) { return 'p' + l[0] + '→' + f(l[1]); }).join(', ') +
+      '. Max velocity (fit) <b>' + f(ff.maxVelFit) + '</b> → F ≈ <b>' + f(ff.fFromFit, 2) + '</b>' +
+      (ff.fFromFull != null ? ' (at full power: ' + f(ff.maxVelAtFull) + ' → F ' + f(ff.fFromFull, 2) + ')' : '') + '. FIRST guide: F = 32767 / max ticks/s.</div>' : '');
+  });
+  var tSec = (performance.now() - t0) / 1000;
+  hist.push([tSec, S.wheels[0].target, S.wheels[0].vel, S.wheels[1].target, S.wheels[1].vel, S.atSpeedFrac]);
+  while (hist.length && hist[0][0] < tSec - 45) hist.shift();
+  drawChart();
+
+  var ev = S.events.slice().reverse();
+  setHtml('evTable', ev.length ? '<tr><th>#</th><th>wheel</th><th>source</th><th>target</th><th>dip</th><th>to bottom</th><th>back at speed</th><th>overshoot</th><th>PIDF</th><th>V</th></tr>' +
+    ev.map(function (e) { return '<tr><td>' + e.id + '</td><td>' + e.wheel + '</td><td>' + e.source + '</td><td>' + f(e.target) + '</td><td>' +
+      f(e.dipPct, 1) + '% (' + f(e.dipTps) + ')</td><td>' + f(e.tMinMs) + ' ms</td><td>' + (e.recoverMs < 0 ? '<span class="badge bad">&gt;3 s</span>' : f(e.recoverMs) + ' ms') +
+      '</td><td>' + (e.overPct == null ? '–' : f(e.overPct, 1) + '%') + '</td><td>' + e.pidf.join(', ') + '</td><td>' + f(e.volts, 2) + '</td></tr>'; }).join('')
+    : '<tr><td class="hint">No shots or kicks yet.</td></tr>');
+  var shots = S.events.filter(function (e) { return e.source === 'shot' && e.recoverMs >= 0; });
+  setText('evSummary', shots.length ? shots.length + ' recovered shots shown, median back-at-speed ' +
+    f(shots.map(function (e) { return e.recoverMs; }).sort(function (a, b) { return a - b; })[Math.floor(shots.length / 2)]) + ' ms' : '');
+  setText('recInfo', (S.rec.recording ? '● recording ' : 'stopped · ') + S.rec.label + ' · ' + S.rec.size + '/' + S.rec.capacity);
+
+  // turrets and servos
+  S.turrets.forEach(function (t) {
+    var id = 't' + t.name;
+    setText(id + 'Ok', t.ok ? t.device : 'missing ' + t.device); $(id + 'Ok').className = 'badge' + (t.ok ? '' : ' bad');
+    setText(id + 'Pos', f(t.pos, 3)); setText(id + 'Deg', t.deg == null ? '–' : f(t.deg, 1) + '°');
+    if (t.pos != null && document.activeElement !== $(id + 'Slider')) $(id + 'Slider').value = t.pos;
+    setText(id + 'RangeInfo', 'full travel = ' + f(t.rangeDeg, 1) + '° of turret');
+    fillOnce(id, function () { $(id + 'Center').value = t.center; $(id + 'GrA').value = t.grA; $(id + 'GrB').value = t.grB;
+      $(id + 'Range').value = t.servoRange; $(id + 'Rev').checked = t.reversed; $(id + 'PosIn').value = t.pos != null ? t.pos : t.center; });
+  });
+  S.servos.forEach(function (s) {
+    var id = 's' + s.name;
+    setText(id + 'Ok', s.ok ? s.device : 'missing ' + s.device); $(id + 'Ok').className = 'badge' + (s.ok ? '' : ' bad');
+    setText(id + 'Pos', f(s.pos, 3));
+    if (s.pos != null && document.activeElement !== $(id + 'Slider')) $(id + 'Slider').value = s.pos;
+    setText(id + 'Marks', Object.keys(s.marks).map(function (k) { return k + ': ' + (s.marks[k] == null ? 'not marked' : s.marks[k]); }).join(' · '));
+  });
+
+  // color
+  var c = S.color, m = Math.max(1, c.r, c.g, c.b);
+  $('swatch').style.background = 'rgb(' + Math.round(255 * c.r / m) + ',' + Math.round(255 * c.g / m) + ',' + Math.round(255 * c.b / m) + ')';
+  setHtml('colorLive', !c.ok ? '<span class="badge bad">no device named colorSensor</span>' :
+    ['red', 'green', 'blue', 'alpha'].map(function (k, i) { return '<div class="kv"><span>' + k + '</span><span>' + [c.r, c.g, c.b, c.a][i] + '</span></div>'; }).join('') +
+    (c.hasDistance ? '<div class="kv"><span>distance</span><span>' + f(c.dist, 1) + ' cm</span></div>' : '') +
+    '<div class="kv"><span>red / max(g,b)</span><span>' + f(c.r / Math.max(1, c.g, c.b), 2) + '</span></div>' +
+    '<div class="kv"><span>blue / max(g,r)</span><span>' + f(c.b / Math.max(1, c.g, c.r), 2) + '</span></div>');
+  var rejectNow = (S.intake.alliance === 'RED' && c.blueDominant) || (S.intake.alliance === 'BLUE' && c.redDominant);
+  setHtml('colorVerdict', '<div class="kv"><span>RED dominant</span><span class="badge ' + (c.redDominant ? 'bad' : '') + '">' + c.redDominant + '</span></div>' +
+    '<div class="kv"><span>BLUE dominant</span><span class="badge ' + (c.blueDominant ? 'good' : '') + '">' + c.blueDominant + '</span></div>' +
+    '<div class="kv"><span>intake would reject (' + S.intake.alliance + ')</span><span class="badge ' + (rejectNow ? 'warn' : '') + '">' + rejectNow + '</span></div>' +
+    '<div class="hint">thresholds red ' + c.thresholdRed + ' · blue ' + c.thresholdBlue + ' · dominance ' + c.dominance + '</div>' +
+    (c.pausedForRec ? '<div class="badge warn">paused: recorder running</div>' : ''));
+  $('btnStream').classList.toggle('on', c.stream); setText('btnStream', c.stream ? 'Streaming on' : 'Streaming off');
+  setText('intakeInfo', S.intake.ok ? 'intake ' + S.intake.mode + ' · alliance ' + S.intake.alliance : 'intake unavailable: ' + S.intake.error);
+  setText('sampleInfo', c.sampling ? 'capturing ' + c.samplingLabel + '… ' + c.sampling + ' left' : c.samples + ' samples stored');
+  var sm = c.summary || {labels: []};
+  setHtml('colorTable', sm.labels.length ? '<tr><th>label</th><th>n</th><th>red mean [min–max]</th><th>green</th><th>blue</th><th>alpha</th><th>called RED</th><th>called BLUE</th></tr>' +
+    sm.labels.map(function (l) { var rng = function (k) { return f(l.mean[k]) + ' [' + l.min[k] + '–' + l.max[k] + ']'; };
+      var bad = function (hits, want) { return '<span class="badge ' + ((want ? hits < l.n : hits > 0) ? 'bad' : 'good') + '">' + hits + '/' + l.n + '</span>'; };
+      return '<tr><td>' + esc(l.label) + '</td><td>' + l.n + '</td><td>' + rng(0) + '</td><td>' + rng(1) + '</td><td>' + rng(2) + '</td><td>' + rng(3) + '</td><td>' +
+        bad(l.redHits, l.label === 'RED') + '</td><td>' + bad(l.blueHits, l.label === 'BLUE') + '</td></tr>'; }).join('')
+    : '<tr><td class="hint">No samples yet.</td></tr>');
+  var sg = sm.suggest;
+  setHtml('colorSuggest', sg ? '<div class="msg">Suggested: thresholdRed <b>' + sg.thresholdRed + '</b>, thresholdBlue <b>' + sg.thresholdBlue +
+    '</b>, DOMINANCE <b>' + sg.dominance + '</b> — ' + sg.errorsSuggested + ' wrong calls of ' + sg.total + ' (current values: ' + sg.errorsCurrent +
+    ') <button class="small primary" onclick="cmd(\'colorSuggestApply\').then(function(){filled.color=false})">Apply live</button></div>'
+    : '<div class="hint">Capture RED, BLUE and at least one other label to get a suggestion.</div>');
+  fillOnce('color', function () { fillColorInputs(false); });
+
+  // export
+  setHtml('exportTable', '<tr><th>file</th><th>field</th><th>value</th></tr>' + S.export.map(function (e) {
+    return '<tr><td>' + e.file + '</td><td>' + e.name + '</td><td style="text-align:left"><code>' + esc(e.value) + '</code></td></tr>'; }).join(''));
+  var byFile = {};
+  S.export.forEach(function (e) { (byFile[e.file] = byFile[e.file] || []).push(e.name + ' = ' + e.value + ';'); });
+  setText('exportJava', Object.keys(byFile).map(function (k) { return '// ' + k + '\n' + byFile[k].join('\n'); }).join('\n\n'));
+}
+function fillColorInputs(force) {
+  if (!S || !S.live) return;
+  $('thrRed').value = S.color.thresholdRed; $('thrBlue').value = S.color.thresholdBlue; $('dom').value = S.color.dominance;
+}
+
+TuneNotes.subscribe(function (notes, now) {
+  setHtml('noteHist', notes.length ? notes.slice().reverse().map(function (n) {
+    return '<div>' + esc(n.text) + '<div class="meta">' + esc(n.from) + ' · ' + new Date(n.postedMs).toLocaleTimeString() + ' · ' +
+      (n.resolved ? (n.await === 'none' ? 'info' : '✓ ' + esc(n.resolution) + (n.reply ? ' — "' + esc(n.reply) + '"' : '')) : '<b style="color:var(--warn)">waiting</b>') + '</div></div>';
+  }).join('') : '<div class="hint">No messages yet.</div>');
+});
+function testNote() {
+  var t = val('selfNote') || 'Test banner from the dashboard';
+  fetch('/tune/notify?' + new URLSearchParams({text: t, from: 'dashboard', level: 'action'})).then(TuneNotes.poll);
+}
+
+// ---------------------------------------------------------------- poll
+var polling = false;
+function poll() {
+  if (polling) return;
+  polling = true;
+  fetch('/tune/state', {cache: 'no-store'}).then(function (r) { return r.json(); })
+    .then(function (j) {
+      var wasLive = S && S.live;
+      S = j;
+      if (S.live && !wasLive) { filled = {}; }
+      render();
+    })
+    .catch(function () { S = null; render(); })
+    .then(function () { polling = false; });
+}
+buildWheelCards(); buildTurretCards(); buildServoCards();
+prompts();
+setInterval(poll, 100);
+setInterval(prompts, 5000);
+window.addEventListener('resize', drawChart);
+poll();
+</script>
+</body>
+</html>
