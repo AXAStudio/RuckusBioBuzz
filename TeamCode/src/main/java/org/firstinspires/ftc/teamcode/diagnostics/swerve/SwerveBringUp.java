@@ -2567,12 +2567,15 @@ public class SwerveBringUp extends OpMode {
         PodCal c = cals[selected];
         double wheelDeg = Math.toDegrees(c.wheelThetaFromEncoder(c.zeroedAngleRad(volts[selected])));
 
-        allStop();
+        // Through setMode, not a bare assignment, and before anything is armed: setMode owns the
+        // transition cleanup (restoring scan-forced servo directions - a closed-loop step on a
+        // FORWARD-forced reversed pod has its feedback sign flipped and spins forever - and
+        // breaking the follower when leaving FOLLOW), and it resets routine state.
+        setMode(Mode.AUTOTUNE);
         clearTrace(selected);
         tuner.start(selected, c, wheelDeg);
         autoTuneTimer.reset();
         phaseTimer.reset();
-        mode = Mode.AUTOTUNE;
         routineActive = true;
         message = "Auto-tuning pod " + selected + ".";
     }
@@ -2675,15 +2678,15 @@ public class SwerveBringUp extends OpMode {
             return;
         }
 
+        // setMode first, for the same transition cleanup as startAutoTune.
+        setMode(Mode.HEADING);
         headingTargetRad = headingRad;
         headingOpenLoopPower = displaceDeg >= 0 ? 0.35 : -0.35;
         headingClosedLoop = false;
         clearTrace(selected);
         tracePod = -2;   // marks the trace as heading rather than a pod
-        allStop();
         phaseTimer.reset();
         autoTuneTimer.reset();
-        mode = Mode.HEADING;
         routineActive = true;
         message = "Heading step: displacing open-loop, then closing the loop.";
     }
@@ -2699,11 +2702,12 @@ public class SwerveBringUp extends OpMode {
             message = "Cannot build pods: " + podBuildError;
             return;
         }
+        // setMode first, for the same transition cleanup as startAutoTune.
+        setMode(Mode.PID);
         pidTargetRad = Math.toRadians(targetDeg);
         clearTrace(selected);
         pidHolding = true;
         phaseTimer.reset();
-        mode = Mode.PID;
         message = String.format(Locale.US, "Pod %d stepping to %.0f deg.", selected, targetDeg);
     }
 
@@ -3609,7 +3613,9 @@ public class SwerveBringUp extends OpMode {
                             + "step would be an absolute jump.";
                     break;
                 }
-                allStop();
+                // setMode, not a bare assignment: it owns the transition cleanup (scan-forced
+                // servo directions, breaking the follower, aborting a live autotune).
+                setMode(Mode.CAL_POS);
                 // calPos is carried forward from calHome and each completed walk, so it tracks
                 // where the servo actually is rather than what the controller last cached.
                 // No ensurePods() here: see runCalPos.
@@ -3618,7 +3624,6 @@ public class SwerveBringUp extends OpMode {
                 calSteps = 0;
                 calLastRaw = Math.toDegrees(cals[selected].rawAngleRad(volts[selected]));
                 phaseTimer.reset();
-                mode = Mode.CAL_POS;
                 routineActive = true;
                 message = String.format(Locale.US,
                         "Walking pod %d from position %.3f to %.3f in %.3f steps, stopping on a "
