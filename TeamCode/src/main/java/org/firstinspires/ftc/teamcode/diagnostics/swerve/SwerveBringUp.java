@@ -1788,6 +1788,13 @@ public class SwerveBringUp extends OpMode {
 
     private double[] applyBoxLimit(double forward, double strafe) {
         boxClampedNow = false;
+        // NaN slips through every comparison below unclamped. Inputs are validated upstream;
+        // this keeps the fence from ever passing one regardless.
+        if (Double.isNaN(forward) || Double.isNaN(strafe)
+                || Double.isInfinite(forward) || Double.isInfinite(strafe)) {
+            boxClampedNow = true;
+            return new double[] {0, 0};
+        }
         if (!boxValid) {
             return new double[] {forward, strafe};
         }
@@ -3216,6 +3223,7 @@ public class SwerveBringUp extends OpMode {
         if (action == null) {
             return;
         }
+        requireFiniteArgs(cmd);
         int pod = intArg(cmd, "pod", selected);
         if (pod >= 0 && pod < POD_COUNT) {
             selected = pod;
@@ -3440,8 +3448,8 @@ public class SwerveBringUp extends OpMode {
                             new com.pedropathing.math.Pose[ptTexts.length];
                     for (int i = 0; i < ptTexts.length; i++) {
                         String[] xy = ptTexts[i].split(",");
-                        double px = Double.parseDouble(xy[0]);
-                        double py = Double.parseDouble(xy[1]);
+                        double px = finiteDouble(xy[0]);
+                        double py = finiteDouble(xy[1]);
                         if (!pedroPointOk(px, py)) {
                             message = String.format(Locale.US,
                                     "REFUSED: control point (%.1f, %.1f) leaves the box minus "
@@ -3484,10 +3492,10 @@ public class SwerveBringUp extends OpMode {
                         // headingInterpolator does. Pedro's linear() interpolates on distance
                         // instead, so a visualizer path run with linear is a different path.
                         String[] parts = head.split(":");
-                        final double h0 = Math.toRadians(Double.parseDouble(parts[1]));
-                        double h1 = Math.toRadians(Double.parseDouble(parts[2]));
+                        final double h0 = Math.toRadians(finiteDouble(parts[1]));
+                        double h1 = Math.toRadians(finiteDouble(parts[2]));
                         final double shape = Math.max(0.25, Math.min(4.0,
-                                parts.length > 3 ? Double.parseDouble(parts[3]) : 1.0));
+                                parts.length > 3 ? finiteDouble(parts[3]) : 1.0));
                         final double dH = Angle.normalizeSigned(h1 - h0);
                         seg = seg.heading((curve, t) -> Angle.normalizeSigned(
                                 h0 + dH * Math.pow(Math.max(0, Math.min(1, t)), shape)));
@@ -3495,14 +3503,14 @@ public class SwerveBringUp extends OpMode {
                         seg = seg.heading(com.pedropathing.paths.interpolator.Interpolator.tangent.reverse());
                     } else if (head.startsWith("constant")) {
                         double deg = head.contains(":")
-                                ? Double.parseDouble(head.substring(head.indexOf(':') + 1))
+                                ? finiteDouble(head.substring(head.indexOf(':') + 1))
                                 : Math.toDegrees(headingRad);
                         seg = seg.constant(Math.toRadians(deg));
                     } else if (head.startsWith("linear")) {
                         String[] parts = head.split(":");
                         seg = seg.linear(
-                                Math.toRadians(Double.parseDouble(parts[1])),
-                                Math.toRadians(Double.parseDouble(parts[2])));
+                                Math.toRadians(finiteDouble(parts[1])),
+                                Math.toRadians(finiteDouble(parts[2])));
                     } else {
                         seg = seg.tangent();
                     }
@@ -4397,9 +4405,11 @@ public class SwerveBringUp extends OpMode {
                         headingStickTimer.reset();
                     }
                 }
-                driveForward = doubleArg(cmd, "f", 0);
-                driveStrafe = doubleArg(cmd, "s", 0);
-                driveTurn = doubleArg(cmd, "t", 0);
+                // Clamped to the mixer's range: nothing downstream bounds a host value, and an
+                // out-of-range demand would drive past what the fence's margins were sized for.
+                driveForward = Utils.clamp(doubleArg(cmd, "f", 0), -1.0, 1.0);
+                driveStrafe = Utils.clamp(doubleArg(cmd, "s", 0), -1.0, 1.0);
+                driveTurn = Utils.clamp(doubleArg(cmd, "t", 0), -1.0, 1.0);
                 driveFieldOriented = doubleArg(cmd, "foc", 0) != 0;
                 lastDriveCmdMs = System.currentTimeMillis();
                 message = "Drive test active.";
@@ -4504,11 +4514,61 @@ public class SwerveBringUp extends OpMode {
     }
 
     private static double doubleArg(Map<String, String> cmd, String key, double fallback) {
+        double d;
         try {
             String v = cmd.get(key);
-            return v == null ? fallback : Double.parseDouble(v);
+            if (v == null) {
+                return fallback;
+            }
+            d = Double.parseDouble(v);
         } catch (NumberFormatException e) {
             return fallback;
+        }
+        // Double.parseDouble accepts "NaN" and "Infinity" (and "1e999"). NaN passes straight
+        // through applyBoxLimit - every comparison is false - and a NaN gain was being saved to
+        // the calibration file. handleCommand already refuses these up front; this is the
+        // backstop for any path that reaches here another way.
+        if (Double.isNaN(d) || Double.isInfinite(d)) {
+            throw new IllegalArgumentException(key + "=" + cmd.get(key) + " is not a finite number");
+        }
+        return d;
+    }
+
+    /** Double.parseDouble for host-sent text, refusing NaN/Infinity. */
+    private static double finiteDouble(String text) {
+        double d = Double.parseDouble(text.trim());
+        if (Double.isNaN(d) || Double.isInfinite(d)) {
+            throw new IllegalArgumentException("\"" + text + "\" is not a finite number");
+        }
+        return d;
+    }
+
+    /** Free-text parameters (pts/head are parsed piecewise with finiteDouble). */
+    private static boolean isTextParam(String key) {
+        return "action".equals(key) || "label".equals(key) || "pts".equals(key)
+                || "head".equals(key);
+    }
+
+    /**
+     * Throws if any numeric-looking parameter is NaN or infinite, before the command does
+     * anything - a half-applied setPidf (some pods changed, then a NaN) is worse than none.
+     * drainCommands turns the throw into an ERROR message and IDLE.
+     */
+    private static void requireFiniteArgs(Map<String, String> cmd) {
+        for (Map.Entry<String, String> e : cmd.entrySet()) {
+            if (e.getValue() == null || isTextParam(e.getKey())) {
+                continue;
+            }
+            double d;
+            try {
+                d = Double.parseDouble(e.getValue().trim());
+            } catch (NumberFormatException notANumber) {
+                continue;   // non-numeric text: doubleArg falls back, as it always has
+            }
+            if (Double.isNaN(d) || Double.isInfinite(d)) {
+                throw new IllegalArgumentException(e.getKey() + "=" + e.getValue()
+                        + " is not a finite number");
+            }
         }
     }
 
