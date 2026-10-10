@@ -3190,7 +3190,24 @@ public class SwerveBringUp extends OpMode {
     private void drainCommands() {
         Map<String, String> cmd;
         while ((cmd = SwerveBench.INSTANCE.poll()) != null) {
-            handleCommand(cmd);
+            try {
+                handleCommand(cmd);
+            } catch (RuntimeException e) {
+                // One malformed parameter (pedroChain pts "1,2;3", a head spec "param:10", an
+                // export after a NaN gain) used to throw out of loop() and kill the OpMode - and
+                // the HTTP server's last snapshot with it. A command that throws has done an
+                // unknown fraction of its work, so everything stops before it is reported.
+                try {
+                    pidHolding = false;
+                    setMode(Mode.IDLE);
+                } catch (RuntimeException stopFailure) {
+                    allStop();
+                    mode = Mode.IDLE;
+                    pedro = null;
+                }
+                message = "ERROR in " + cmd.get("action") + ": " + e
+                        + " - stopped (IDLE); fix the command and resend.";
+            }
         }
     }
 
@@ -4396,11 +4413,22 @@ public class SwerveBringUp extends OpMode {
                     message = "No heading available - field forward not captured.";
                 }
                 break;
-            case "export":
-                exportText = SwerveExport.generate(cals, liveForExport());
+            case "export": {
+                SwerveExport.Live live = liveForExport();
+                String nonFinite = SwerveExport.nonFinite(cals, live);
+                if (nonFinite != null) {
+                    // Cleared, not left holding the previous export, so nothing stale can be
+                    // spliced on the back of a refused one.
+                    exportText = "";
+                    message = "REFUSED export: non-finite values (" + nonFinite + "). Set them "
+                            + "with setPidf/pedroPidf first.";
+                    break;
+                }
+                exportText = SwerveExport.generate(cals, live);
                 message = "Constants generated - Constants.java declarations; splice with "
                         + "robot.py constants --write.";
                 break;
+            }
             case "save":
                 saveCalibration();
                 message = "Calibration saved to " + CAL_FILE.getName();

@@ -96,7 +96,7 @@ def outcome(action: str, before_msg: str, window_s: float = 2.0) -> tuple[bool, 
     msg = st.get("message", "")
     errs = " | ".join(str(e) for e in st.get("errors", []))
     bad_markers = ("UNKNOWN COMMAND", "REFUSED", "Press START", "first.", "needs ", "Cannot ",
-                   "failed", "No pinpoint", "No pose", "No box", "not available")
+                   "failed", "No pinpoint", "No pose", "No box", "not available", "ERROR in ")
     bad = any(m in msg for m in bad_markers) or f'UNKNOWN COMMAND "{action}"' in errs
     if msg == before_msg:
         msg += ("   (UNCONFIRMED: message did not change in 2 s - either the command repeats the "

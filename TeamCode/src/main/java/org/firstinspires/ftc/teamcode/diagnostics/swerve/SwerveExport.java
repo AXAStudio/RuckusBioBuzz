@@ -53,9 +53,61 @@ public final class SwerveExport {
     }
 
     /**
+     * Null when every number the export writes is finite, else the names that are not. A NaN or
+     * infinite gain (a setPidf kp=NaN, say) used to reach {@link #num}, where
+     * {@code BigDecimal.valueOf} throws and took the OpMode down; and spliced into Constants.java
+     * it would ship. The caller refuses the export with this message instead.
+     */
+    public static String nonFinite(PodCal[] bySs, Live live) {
+        List<String> bad = new ArrayList<>();
+        finite(bad, "naturalForwardDeceleration", live.naturalForwardDeceleration);
+        finite(bad, "naturalStrafeDeceleration", live.naturalStrafeDeceleration);
+        finite(bad, "headingKP", live.headingKP);
+        finite(bad, "forwardTranslationalPrimaryKP", live.forwardTranslationalPrimaryKP);
+        finite(bad, "forwardTranslationalSecondaryKP", live.forwardTranslationalSecondaryKP);
+        finite(bad, "strafeTranslationalPrimaryKP", live.strafeTranslationalPrimaryKP);
+        finite(bad, "strafeTranslationalSecondaryKP", live.strafeTranslationalSecondaryKP);
+        finite(bad, "translationalKI", live.translationalKI);
+        finite(bad, "translationalKD", live.translationalKD);
+        finite(bad, "pinpointXPodOffset", live.pinpointXPodOffset);
+        finite(bad, "pinpointYPodOffset", live.pinpointYPodOffset);
+        for (int i = 0; i < bySs.length; i++) {
+            PodCal p = bySs[i];
+            String who = "ss" + i + ".";
+            finite(bad, who + "kP", p.kP);
+            finite(bad, who + "kD", p.kD);
+            finite(bad, who + "kS", p.kS);
+            finite(bad, who + "kSBandDeg", p.kSBandDeg);
+            finite(bad, who + "zero", p.angleOffsetRad);
+            finite(bad, who + "analogMin", p.analogMin);
+            finite(bad, who + "analogMax", p.analogMax);
+            finite(bad, who + "servoCaching", p.servoCaching);
+            finite(bad, who + "pulseBandDeg", p.pulseBandDeg);
+            finite(bad, who + "pulseTolDeg", p.pulseTolDeg);
+            finite(bad, who + "pulsePower", p.pulsePower);
+            finite(bad, who + "pulseMs", p.pulseMs);
+            finite(bad, who + "pulseStationaryDegPerSec", p.pulseStationaryDegPerSec);
+            finite(bad, who + "pulseCoastMs", p.pulseCoastMs);
+        }
+        return bad.isEmpty() ? null : String.join(", ", bad);
+    }
+
+    private static void finite(List<String> bad, String name, double v) {
+        if (Double.isNaN(v) || Double.isInfinite(v)) {
+            bad.add(name + "=" + v);
+        }
+    }
+
+    /**
      * @param bySs pods indexed by servo number ss0..ss3 - the indexing Constants' arrays use
+     * @return the declarations, or - if any exported number is non-finite - a single comment
+     *     line saying which, with no declarations for the splicer to apply
      */
     public static String generate(PodCal[] bySs, Live live) {
+        String nonFinite = nonFinite(bySs, live);
+        if (nonFinite != null) {
+            return "// EXPORT REFUSED - non-finite values: " + nonFinite + "\n";
+        }
         List<String> warnings = new ArrayList<>();
         StringBuilder sb = new StringBuilder();
         sb.append("// Swerve Bring-Up export");
