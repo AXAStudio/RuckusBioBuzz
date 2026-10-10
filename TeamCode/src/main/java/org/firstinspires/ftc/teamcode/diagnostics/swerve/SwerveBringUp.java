@@ -2999,6 +2999,22 @@ public class SwerveBringUp extends OpMode {
     }
 
     /**
+     * Everything that rewrites the Pinpoint frame (setPose, resetImu, recalibrateImu, odoConfig)
+     * goes through here first. allStop() alone left FOLLOW running: runFollowMode kept calling
+     * pedro.update() toward a target in the old frame, with the box already cleared. IDLE through
+     * setMode breaks the follower, and the follower is dropped because it carries the old frame -
+     * the next pedroStart builds a fresh one, the same as fieldFence does.
+     */
+    private void stopForFrameChange() {
+        pidHolding = false;
+        setMode(Mode.IDLE);
+        if (pedro != null) {
+            pedroBreak();
+            pedro = null;
+        }
+    }
+
+    /**
      * 2.1.2's breakFollowing(). v3's Follower.stop() only changes mode - the drivetrain hears
      * about it on the next update(), which runFollowMode stops calling the moment it leaves
      * FOLLOW - so the drivetrain is stopped here directly to release the pods now.
@@ -3297,7 +3313,7 @@ public class SwerveBringUp extends OpMode {
                     message = "setPose needs x, y and headingDeg.";
                     break;
                 }
-                allStop();
+                stopForFrameChange();
                 pinpoint.setPosition(new Pose2D(DistanceUnit.INCH, px, py,
                         AngleUnit.DEGREES, ph));
                 pinpoint.update();
@@ -3749,7 +3765,7 @@ public class SwerveBringUp extends OpMode {
                     break;
                 }
                 try {
-                    allStop();
+                    stopForFrameChange();
                     pinpoint.recalibrateIMU();
                     headingStuckSeconds = 0;
                     message = "Pinpoint IMU recalibrating - keep the robot still for a moment.";
@@ -3763,7 +3779,7 @@ public class SwerveBringUp extends OpMode {
                     break;
                 }
                 try {
-                    allStop();
+                    stopForFrameChange();
                     pinpoint.resetPosAndIMU();
                     headingStuckSeconds = 0;
                     // The box lives in the pose frame that was just destroyed. A stale fence
@@ -4062,8 +4078,8 @@ public class SwerveBringUp extends OpMode {
                             ? odoXPodReversed : "reversed".equalsIgnoreCase(cmd.get("fdir")));
                     odoYPodReversed = boolArg(cmd, "yPodReversed", cmd.get("sdir") == null
                             ? odoYPodReversed : "reversed".equalsIgnoreCase(cmd.get("sdir")));
+                    stopForFrameChange();
                     applyOdometry();
-                    allStop();
                     pinpoint.resetPosAndIMU();
                     boxValid = false;
                     boxMarked0 = false;
