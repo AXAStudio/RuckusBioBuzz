@@ -12,8 +12,8 @@ import org.firstinspires.ftc.teamcode.modules.predictiveAiming;
 @Config
 public class turret{
 
-    public static double[] nectarTurretOffset = {0, 0};
-    public static double[] pollenTurretOffset = {0, 0};
+    public static double[] nectarTurretOffset = {3.22, 0};
+    public static double[] pollenTurretOffset = {-5.91, 0};
 
     public static double POLLEN_TURRET_CENTER = 0.5;
     public static double NECTAR_TURRET_CENTER = 0.5;
@@ -128,6 +128,7 @@ public class turret{
             return aimed && System.nanoTime() >= settleUntilNanos;
         }
         public void center(double center){
+            position = center;
             servo.setPosition(center);
         }
 
