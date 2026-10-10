@@ -319,15 +319,7 @@ public class CoaxialPod implements SwervePod {
         // full-speed diagonals 2026-08-14. Inside a +/-10 degree band around the boundary the
         // previous flip state is kept; the worst cost is accepting a 100 degree rotation
         // instead of an 80 degree one, once.
-        boolean flip;
-        double absErr = Math.abs(errorRad);
-        if (absErr > Math.PI / 2.0 + FLIP_HYSTERESIS_RAD) {
-            flip = true;
-        } else if (absErr < Math.PI / 2.0 - FLIP_HYSTERESIS_RAD) {
-            flip = false;
-        } else {
-            flip = lastMoveFlipped;
-        }
+        boolean flip = decideFlip(Math.abs(errorRad));
         lastMoveFlipped = flip;
         if (flip) {
             // add 180 degrees (pi radians)
@@ -482,6 +474,36 @@ public class CoaxialPod implements SwervePod {
             lastDrivePower = drivePower;
             driveMotor.setPower(drivePower);
         }
+    }
+
+    /**
+     * RUCKUS PATCH: the flip decision with hysteresis, given the unflipped |error|. The one copy
+     * of it: {@link #move} acts on it and {@link #wouldChangeFlip} reports it to the mixer.
+     */
+    private boolean decideFlip(double absErrRad) {
+        if (absErrRad > Math.PI / 2.0 + FLIP_HYSTERESIS_RAD) {
+            return true;
+        } else if (absErrRad < Math.PI / 2.0 - FLIP_HYSTERESIS_RAD) {
+            return false;
+        }
+        return lastMoveFlipped;
+    }
+
+    /**
+     * RUCKUS PATCH: whether {@link #move} with this target, issued now, would change the flip
+     * state - i.e. whether the pod will answer the demand by flipping and reversing the drive
+     * rather than by rotating to it. Hysteresis and flip memory included, so the answer is
+     * exactly the decision move() will make. Lets Swerve's demand slew limiter skip only the
+     * jumps the pod really resolves by flipping. No side effects.
+     *
+     * @param targetWheelRad wheel-space target, as move() takes it
+     * @param encoderRad     the pod's current encoder-frame angle, as {@link #getAngle} returns
+     *                       it - passed in so the caller's reading is reused, not re-read
+     */
+    public boolean wouldChangeFlip(double targetWheelRad, double encoderRad) {
+        double absErr = Angle.smallestDifference(Angle.normalize(encoderRad),
+                adjustThetaForEncoder(targetWheelRad));
+        return decideFlip(absErr) != lastMoveFlipped;
     }
 
     /**

@@ -83,9 +83,11 @@ public class Swerve implements Drivetrain {
      * one; at 50 Hz true with a 25 ms p99 the same limit permits 5.4 deg per loop.
      *
      * <p>Applied on the shortest-angle difference so it never sends a pod the long way round, and
-     * skipped entirely past a quarter turn, where the pod flips and reverses the drive rather
-     * than rotating - rate-limiting a flip would force a real 180 degree sweep with the drive
-     * pointing the wrong way throughout.
+     * skipped where the pod flips and reverses the drive rather than rotating - rate-limiting a
+     * flip would force a real 180 degree sweep with the drive pointing the wrong way throughout.
+     * "Where the pod flips" is the pod's own decision (see {@code resolvesByFlip}), not a bare
+     * quarter-turn test: with the pod's +-10 degree flip hysteresis the two disagree for jumps
+     * of 90-100 degrees.
      */
     private static volatile double demandSlewDegPerSec = 214.0;
 
@@ -208,6 +210,19 @@ public class Swerve implements Drivetrain {
      */
     private static double rotationBaseAngle(SwervePod pod) {
         return Math.atan2(pod.getOffset().x(), -pod.getOffset().y());
+    }
+
+    /**
+     * RUCKUS PATCH: whether {@code pod} will answer demand {@code theta} by changing its flip
+     * state, as the demand slew limiter's skip condition. A {@link CoaxialPod} answers with its
+     * own decision (hysteresis and flip memory included); any other pod keeps the stock
+     * quarter-turn assumption.
+     */
+    private static boolean resolvesByFlip(SwervePod pod, double theta, double encoderRad) {
+        if (pod instanceof CoaxialPod) {
+            return ((CoaxialPod) pod).wouldChangeFlip(theta, encoderRad);
+        }
+        return true;
     }
 
     /** RUCKUS PATCH: 2.1.2's Vector kept theta in [0, 2pi); keep feeding the pods that range. */
@@ -376,9 +391,12 @@ public class Swerve implements Drivetrain {
 
         // Find the avg scaling constant (avg of cos(angle error))
         double avgScaling = 0;
+        // RUCKUS PATCH: kept for the slew limiter's flip check, so it costs no extra read.
+        double[] currentRads = new double[pods.size()];
 
         for (int i = 0; i < pods.size(); i++) {
             double currentRad = pods.get(i).getAngle();
+            currentRads[i] = currentRad;
 
             // ask the pod to translate the wheel-space theta into the encoder frame
             double targetRad = pods.get(i).adjustThetaForEncoder(podThetas[i]);
@@ -430,7 +448,14 @@ public class Swerve implements Drivetrain {
                 // for. Rate-limiting there would force a real 180 degree sweep with the drive
                 // pointing the wrong way for the whole of it. So limit ordinary rotations only,
                 // and re-anchor on the ones the pod will resolve by flipping.
-                if (Math.abs(delta) <= Math.PI / 2.0) {
+                //
+                // RUCKUS PATCH (2026-10-10): "past a quarter turn" is not the pod's rule. The pod
+                // flips only past 90 + 10 degrees and keeps its previous flip state inside the
+                // +-10 degree hysteresis band, so a 90-100 degree jump on an unflipped pod was
+                // neither limited here nor flipped there - a ~95 degree snap at full authority.
+                // Ask the pod: skip only when it will actually change its flip state.
+                if (Math.abs(delta) <= Math.PI / 2.0
+                        || !resolvesByFlip(pods.get(podNum), theta, currentRads[podNum])) {
                     if (delta > maxStep) {
                         theta = Angle.normalize(lastCommandedTheta[podNum] + maxStep);
                     } else if (delta < -maxStep) {
