@@ -56,10 +56,13 @@ public class flywheel {
         pollenVelocity = pollenFlywheel.getVelocity();
         nectarVelocity = nectarFlywheel.getVelocity();
     }
-    public boolean atSpeedPollen() { return atSpeed(pollenVelocity, pollenTarget); }
-    public boolean atSpeedNectar() { return atSpeed(nectarVelocity, nectarTarget); }
+    public boolean atSpeedPollen() { return atSpeedPollen(AT_SPEED_FRACTION); }
+    public boolean atSpeedNectar() { return atSpeedNectar(AT_SPEED_FRACTION); }
+    /** Same check with a caller-chosen band, e.g. the wider band shooter holds SHOOT with. */
+    public boolean atSpeedPollen(double fraction) { return atSpeed(pollenVelocity, pollenTarget, fraction); }
+    public boolean atSpeedNectar(double fraction) { return atSpeed(nectarVelocity, nectarTarget, fraction); }
 
-    private static boolean atSpeed(double velocity, double target) {
-        return target > 0 && Math.abs(velocity - target) <= AT_SPEED_FRACTION * target;
+    private static boolean atSpeed(double velocity, double target, double fraction) {
+        return target > 0 && Math.abs(velocity - target) <= fraction * target;
     }
 }
