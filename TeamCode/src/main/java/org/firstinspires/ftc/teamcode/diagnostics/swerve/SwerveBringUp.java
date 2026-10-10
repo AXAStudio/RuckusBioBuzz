@@ -3953,6 +3953,14 @@ public class SwerveBringUp extends OpMode {
                             hxT, hyT, PEDRO_TARGET_MARGIN_IN);
                     break;
                 }
+                // A hold servoes straight at its point, so the robot sweeps the segment from
+                // here to there - checked like a pedroLine, or a hold across a rail gets through.
+                String holdRefusal = pedroPathRefusal(
+                        new double[][] {{cur.x(), cur.y()}, {hxT, hyT}});
+                if (holdRefusal != null) {
+                    message = holdRefusal;
+                    break;
+                }
                 pedro.hold(new com.pedropathing.math.Pose(hxT, hyT, cur.heading() + dh));
                 pedroJob = "hold";
                 message = String.format(Locale.US, "Holding %+.1f, %+.1f, %+.1f deg from here.",
