@@ -80,8 +80,15 @@ public class CoaxialPod implements SwervePod {
     // demand continuously. Sits under the human driver's band (0.1-0.2).
     private static final double PULSE_DRIVE_GATE = 0.08;
     private static final double PULSE_ESCALATE = 1.5;
-    // Must clear the stiffest pod's breakaway (podMinV max 0.106 measured) or a stalled ladder
-    // rides the cap forever; 0.09 did exactly that on pod 3.
+    // Must clear the stiffest pod's breakaway or a stalled ladder rides the cap forever; a 0.09
+    // cap did exactly that on pod 3 (2026-08-15).
+    // RUCKUS NOTE (2026-10-10): this used to cite "podMinV max 0.106 measured" as the breakaway.
+    // podMinV is the ANALOG ENCODER's minimum voltage (Constants.podMinV -> analogMinVoltage;
+    // 0.106 V is pod 3's), not a servo power. Measured open-loop breakaway is 0.050 on tiles and
+    // 0.030 off the ground, uniform across pods after the lubrication pass (0.05-0.07 before it)
+    // - see the turn-gain notes in Constants. So 0.13 is ~2.6x the tiles breakaway, and that a
+    // 0.09 cap (1.8x) still stalled suggests a 20 ms pulse needs more than the steady-state
+    // figure; why is unmeasured. Value unchanged.
     private static final double PULSE_MAX_POWER = 0.13;
     private static final double PULSE_PROGRESS_FRACTION = 0.75;
     private static final double PULSE_PROGRESS_MIN_RAD = Math.toRadians(0.35);
