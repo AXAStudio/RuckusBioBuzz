@@ -119,7 +119,7 @@
     <div class="row" style="margin-top:8px">
       <input type="text" class="wide" id="selfNote" placeholder="Test a banner on this page">
       <button class="small" onclick="testNote()">Post test note</button>
-      <button class="small" onclick="fetch('/tune/notify?clear=1').then(TuneNotes.poll)">Dismiss all open</button>
+      <button class="small" onclick="fetch('/tune/notify?clear=1').then(notesPoll, notesPoll)">Dismiss all open</button>
     </div>
   </section>
   <section>
@@ -453,39 +453,63 @@ function sample(label) {
 
 // ---------------------------------------------------------------- prompts
 function prompts() {
-  var v = S && S.live ? S.volts.toFixed(2) + ' V' : 'UNKNOWN';
-  $('promptFly').value =
+  var v = S && S.live ? S.volts.toFixed(2) + ' V (read when this prompt was copied)' : 'read it from the robot yourself';
+  $('promptSwerve').value = PROMPTS.swerve.replace('{VOLTS}', v);
+  $('promptFly').value = PROMPTS.fly.replace('{VOLTS}', v);
+  $('promptColor').value = PROMPTS.color.replace('{VOLTS}', v);
+}
+// Keep these identical to the copies handed out in chat; MECHANISM_TUNING_TASK.md / TUNING_TASK.md hold the procedure.
+var PROMPTS = {
+swerve:
+'Tune the swerve drivetrain on our FTC robot (RuckusBioBuzz, BIOBUZZ 2026-27) and ship the result into ' +
+'pedroPathing/Constants.java.\n\n' +
+'Read CLAUDE.md first, then ROBOT_CONTROL.md, then TUNING_TASK.md, and execute TUNING_TASK.md end to end. ' +
+'CLAUDE.md section 8 applies and is not overridable; every deploy still goes through me (rule 5).\n\n' +
+'Where the gains must end up: pedroPathing/Constants.java (TUNED VALUES block). TeleOp and every auto ' +
+'(RedPollenAuto, shortAutoRed, redOption2, ExampleSwerveAuto) build the robot with ' +
+'Constants.createFollower(hardwareMap), so that file is the only place a gain reaches competition code. ' +
+'Values that live only in the bring-up tool or its hub calibration file (swerve_bringup_cal.txt) do NOT ' +
+'reach auto. Splice them with `python tools/swervetune/robot.py constants` (dry run) then `--write`, and ' +
+'Foresight Tuner output with `robot.py foresight`. Accept only on tools/swervetune/pedrocheck.py with ' +
+'--pods shipped on the installed build, then build, commit each value with its evidence, and push.\n\n' +
+'Setup right now:\n' +
+'- Swerve Bring-Up is running; dashboard http://192.168.43.1:8080/swerve. Start with `python tools/swervetune/robot.py check`.\n' +
+'- Battery: {VOLTS}. Surface: ask me.\n' +
+'- I am at the robot, not the laptop. Send every OPS REQUEST and question with ' +
+'`python tools/mechtune/mechtune.py ask "..."`: it shows as a banner with a beep on /swerve and returns my reply ' +
+'(e.g. "ready 12.6 V"). Batch requests as SWERVE_TASK.md says; never ask in chat while I am at the robot.',
+fly:
 'Tune the flywheel velocity PIDF on our FTC robot (RuckusBioBuzz, BIOBUZZ 2026-27).\n\n' +
 'Read CLAUDE.md first, then MECHANISM_TUNING_TASK.md, and execute Part A (flywheel PIDF) end to end. ' +
 'CLAUDE.md section 8 (evidence and safety rules) applies and is not overridable.\n\n' +
 'Setup right now:\n' +
-'- The Mechanism Tuner OpMode is running on the robot; dashboard at http://192.168.43.1:8080/tune\n' +
-'- Your front door is tools/mechtune/mechtune.py (run `python tools/mechtune/mechtune.py check` first).\n' +
-'- Battery at the time this prompt was copied: ' + v + '. Surface: robot on the floor, wheels free to spin.\n' +
-'- I am at the robot with pollen and nectar pieces. When you need me to do something physical ' +
-'(feed a piece, swap the battery, check something), ask through `mechtune.py ask` or `mechtune.py shots`, ' +
-'which put a banner on the dashboard and wait for me. Do not ask in chat.\n\n' +
-'Deliverable: tuned POLLEN_PIDF / NECTAR_PIDF (and AT_SPEED_FRACTION if the data supports a change) ' +
-'spliced into systems/flywheel.java with `mechtune.py export --write`, built, and committed with the evidence.';
-  $('promptSwerve').value =
-'Tune the swerve drivetrain on our FTC robot (RuckusBioBuzz, BIOBUZZ 2026-27).\n\n' +
-'Read CLAUDE.md first, then ROBOT_CONTROL.md, then TUNING_TASK.md, and execute TUNING_TASK.md end to end. ' +
-'CLAUDE.md section 8 applies and is not overridable; the deploy gate (rule 5) still needs me.\n\n' +
+'- The Mechanism Tuner OpMode is running; dashboard http://192.168.43.1:8080/tune. Start with ' +
+'`python tools/mechtune/mechtune.py check`.\n' +
+'- Battery: {VOLTS}.\n' +
+'- I am at the robot with pollen and nectar pieces. Ask me for anything physical (confirm the wheels are clear, ' +
+'feed a piece, swap the battery) with `mechtune.py ask` or `mechtune.py shots`, which put a banner on the ' +
+'dashboard and wait for me. Do not ask in chat.\n' +
+'- Search with steps and kicks; accept only on real shots (randomised interleaved `mechtune.py ab --test shots`, ' +
+'95% CI excluding zero).\n\n' +
+'Deliverable: tuned POLLEN_PIDF / NECTAR_PIDF (and AT_SPEED_FRACTION only if the data supports it) spliced into ' +
+'systems/flywheel.java with `mechtune.py export --only flywheel --write`, built, committed one value per commit ' +
+'with the A/B output in the message, then pushed.',
+color:
+'Tune the intake color sensor thresholds on our FTC robot (RuckusBioBuzz, BIOBUZZ 2026-27).\n\n' +
+'Read CLAUDE.md first, then MECHANISM_TUNING_TASK.md, and execute Part B (intake color sensor). ' +
+'CLAUDE.md section 8 applies.\n\n' +
 'Setup right now:\n' +
-'- The Swerve Bring-Up OpMode is running; its dashboard is http://192.168.43.1:8080/swerve\n' +
-'- Battery: ' + v + ' (re-read it from /swerve/state). Surface: tell me if you need it on blocks.\n' +
-'- Put every OPS REQUEST and question for me on the dashboard with ' +
-'`python tools/mechtune/mechtune.py ask "..."` - it shows as a banner with a beep on /swerve and /tune and ' +
-'returns my reply (e.g. "ready 12.6 V"). Keep batching requests as SWERVE_TASK.md says.\n\n' +
-'Deliverable: pedroPathing/Constants.java, accepted by pedrocheck.py on the installed build, committed per finding.';
-  $('promptColor').value =
-'Tune the intake color sensor thresholds on our FTC robot (RuckusBioBuzz).\n\n' +
-'Read CLAUDE.md, then Part B (intake color sensor) of MECHANISM_TUNING_TASK.md. The Mechanism Tuner ' +
-'OpMode is running (http://192.168.43.1:8080/tune). Use `python tools/mechtune/mechtune.py color` commands ' +
-'and ask me to hold each piece at the sensor through `mechtune.py ask`. Capture RED, BLUE, EMPTY and every ' +
-'other thing the sensor can see, check the suggested thresholds classify every sample, then splice them ' +
-'into systems/intake.java with `mechtune.py export --write --only intake` and commit with the confusion counts.';
-}
+'- The Mechanism Tuner OpMode is running; dashboard http://192.168.43.1:8080/tune. Start with ' +
+'`python tools/mechtune/mechtune.py check`. Battery: {VOLTS}.\n' +
+'- Ask me to hold each piece at the sensor with `mechtune.py color sample LABEL --ask "..."`. Capture RED, BLUE, ' +
+'EMPTY and every other thing the sensor can see, at least twice each at different positions.\n' +
+'- The suggestion must call every sample correctly; then check reject live in WATCH mode for both alliances.\n\n' +
+'Deliverable: thresholdRed / thresholdBlue / DOMINANCE spliced into systems/intake.java with ' +
+'`mechtune.py export --only intake --write`, built, committed with the confusion counts, then pushed.'
+};
+
+buildWheelCards(); buildTurretCards(); buildServoCards();
+prompts();
 
 // ---------------------------------------------------------------- chart
 function drawChart() {
@@ -668,7 +692,10 @@ function fillColorInputs(force) {
   $('thrRed').value = S.color.thresholdRed; $('thrBlue').value = S.color.thresholdBlue; $('dom').value = S.color.dominance;
 }
 
-TuneNotes.subscribe(function (notes, now) {
+// notify.js comes from the robot (/tune/notify.js). Opened from disk it is absent, and the page
+// must still render - prompts and controls included - so every use of it is guarded.
+function notesPoll() { if (window.TuneNotes) TuneNotes.poll(); }
+if (window.TuneNotes) TuneNotes.subscribe(function (notes, now) {
   setHtml('noteHist', notes.length ? notes.slice().reverse().map(function (n) {
     return '<div>' + esc(n.text) + '<div class="meta">' + esc(n.from) + ' · ' + new Date(n.postedMs).toLocaleTimeString() + ' · ' +
       (n.resolved ? (n.await === 'none' ? 'info' : '✓ ' + esc(n.resolution) + (n.reply ? ' — "' + esc(n.reply) + '"' : '')) : '<b style="color:var(--warn)">waiting</b>') + '</div></div>';
@@ -676,7 +703,7 @@ TuneNotes.subscribe(function (notes, now) {
 });
 function testNote() {
   var t = val('selfNote') || 'Test banner from the dashboard';
-  fetch('/tune/notify?' + new URLSearchParams({text: t, from: 'dashboard', level: 'action'})).then(TuneNotes.poll);
+  fetch('/tune/notify?' + new URLSearchParams({text: t, from: 'dashboard', level: 'action'})).then(notesPoll, notesPoll);
 }
 
 // ---------------------------------------------------------------- poll
@@ -694,8 +721,6 @@ function poll() {
     .catch(function () { S = null; render(); })
     .then(function () { polling = false; });
 }
-buildWheelCards(); buildTurretCards(); buildServoCards();
-prompts();
 setInterval(poll, 100);
 setInterval(prompts, 5000);
 window.addEventListener('resize', drawChart);
