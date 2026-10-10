@@ -303,7 +303,9 @@ public class Constants {
     // arithmetic, same kS/pulse/schedule/flip/slew code). Checked on the host by driving the
     // 2.1.2 and 3.0.0 CoaxialPod + Swerve side by side through identical inputs and simulated
     // plants: servo commands agree to 1e-14 over 1200 steps at 8, 10 and 25 ms loops. Every
-    // number below still describes the code that runs.
+    // number below still describes the code that runs. Since 2026-10-10 the mixer/pod differ
+    // from 2.1.2 in release, flip-skip and stop() handling (RUCKUS_PATCHES.md); turn-gain step
+    // tests drive pod.move() directly and are unaffected, driving-session numbers predate them.
     //
     // Everything below the 2026-08-12 block was measured before the mechanical work and no
     // longer describes this robot's friction. Kept because the negative results are still

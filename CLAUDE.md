@@ -117,7 +117,10 @@ measured on the deleted OpMode. **`TeleOp`'s loop rate is unmeasured.**
 encoder→angle map, and the shortest-path flip.** Read the vendored tree, not
 upstream docs. It is a **fork, not a wrapper**: in-place `RUCKUS PATCH` edits,
 inventoried in `third_party/PedroPathing/RUCKUS_PATCHES.md`. The pod loop and
-mixer were checked equal to the 2.1.2 fork on the host (2e-13° over 1200 steps).
+mixer were checked equal to the 2.1.2 fork on the host (2e-13° over 1200 steps)
+at the port. Since 2026-10-10 they deliberately differ from it in four
+release / flip-skip / stop cases (RUCKUS_PATCHES.md v3 table, 2026-10-10 rows);
+step tests that call `pod.move()` directly (pidStep) are unaffected.
 
 **Third bucket for the shipped/diagnostic rule: `vendored` —
 `third_party/PedroPathing/**`.** Editing it forks an upstream dependency, and
