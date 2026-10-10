@@ -70,6 +70,9 @@ TeamCode/src/main/java/org/firstinspires/ftc/teamcode/
 ├── fieldview/                           http://192.168.43.1:8080/field - live field, robot, predicted pose, zone (TeleOp publishes at 20 Hz)
 ├── diagnostics/                         PreMatchSystemCheck, motorbreakin
 ├── diagnostics/tests/                   blobDetectionTest, colorTunerTest, rangeTest, spinUpTest
+├── diagnostics/tuning/                  DIAGNOSTIC ONLY — "Mechanism Tuner" OpMode + /tune dashboard: flywheel PIDF
+│                                         (step / kick / shot recovery / ff sweep), turrets, gate, scoopula, intake color;
+│                                         app-level operator banners (/tune/notify, notify.js - also on /swerve)
 ├── diagnostics/swerve/                  DIAGNOSTIC ONLY — never ships
 │   ├── SwerveBringUp.java               (~193 KB) bring-up OpMode + HTTP server
 │   ├── dashboard.html                   (~72 KB) local web UI + browser-gamepad drive
@@ -88,6 +91,8 @@ tools/swervetune/                        HOST-SIDE Python harness
 ├── robot.py          front door for a Claude session: check/state/cmd/drive/stop/constants/foresight (ROBOT_CONTROL.md)
 ├── pedrocheck.py     VALIDATION through the real Pedro follower: suite / .pp path / report (TUNING_TASK.md)
 └── ftcdash.py        FTC Dashboard WebSocket client (robot.py estop uses its STOP)
+tools/mechtune/mechtune.py               HOST-SIDE front door for Mechanism Tuner + `ask`/`say` operator banners
+                                         (works under any OpMode); task prompt: MECHANISM_TUNING_TASK.md
 ```
 
 `CoaxialPod` owns the 17 turn tunables and is the class both `TeleOp` and
@@ -117,7 +122,7 @@ such change and name the upstream 3.0.0 behaviour it changes.
 
 ### Hard rule: diagnostic vs. shipped
 
-`diagnostics/swerve/**` and `tools/swervetune/**` are **tools**. `tele/`,
+`diagnostics/swerve/**`, `diagnostics/tuning/**`, `tools/swervetune/**` and `tools/mechtune/**` are **tools**. `tele/`,
 `auto/`, `pedroPathing/` are **shipped**. Say which side of that line every
 change falls on. The dashboard deliberately flags divergence between tool gains
 and `Constants` in red — that is correct behaviour, not a bug.

@@ -108,6 +108,11 @@ Record what it prints. **Do not trust `RUN_STATE.md` over this output.**
 
 ### 3.3 Pre-flight OPS REQUEST — one message, not drip-fed
 
+**Deliver OPS REQUESTs as dashboard banners** when the operator is at the robot rather than the
+laptop: `python tools/mechtune/mechtune.py ask "OPS REQUEST 3 - ..."` shows it on `/swerve` (and
+`/tune`) with a beep, waits, and prints their reply (`ready 12.6 V`). The board is app-level, so
+it works under Swerve Bring-Up. It only carries messages; every gate below still applies.
+
 Send this before the **first** motion of the session. Repeat the starred items after every deploy
 or battery swap.
 
