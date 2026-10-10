@@ -52,7 +52,6 @@ public class intake {
         }else{
             currentState = intakeState.STOP;
         }
-
         int powerL = 0;
         int powerR = 0;
         if (currentState == intakeState.INTAKE) {

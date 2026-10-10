@@ -10,6 +10,7 @@ public class shooter {
     private final zoneCheck zone;
     private final turret aiming;
     private final flywheel flywheel;
+    private final intake intake;
     private gate shooterGate;
 
     private boolean inZone;
@@ -22,6 +23,7 @@ public class shooter {
     public shooter(HardwareMap hardwareMap, predictiveAiming predictor) {
         this.zone = new zoneCheck(predictor);
         aiming = new turret(hardwareMap, predictor);
+        intake = new intake(hardwareMap);
         this.flywheel = new flywheel(hardwareMap, aiming);
         shooterGate = new gate(hardwareMap);
 
@@ -29,6 +31,7 @@ public class shooter {
 
     public void setAlliance(Alliance alliance) {
         aiming.setAlliance(alliance);
+        intake.setAlliance(alliance);
 
     }
 
@@ -55,6 +58,8 @@ public class shooter {
                 }
                 if (state == states.SHOOT) {
                     shooterGate.openGate();
+                    intake.update(false,true);
+
                 } else {
                     shooterGate.closeGate();
                 }
