@@ -43,11 +43,7 @@ public class shooter {
                 break;
             case TRACK:
             case SHOOT:
-                if (inZone) {
-                    aiming.update();
-                } else {
-                    aiming.center();
-                }
+                aiming.update();
                 boolean readyShoot = inZone && aiming.pollenAimed() && aiming.nectarAimed()
                         && flywheel.atSpeedPollen() && flywheel.atSpeedNectar();
                 if (aiming.unwinding()) {
