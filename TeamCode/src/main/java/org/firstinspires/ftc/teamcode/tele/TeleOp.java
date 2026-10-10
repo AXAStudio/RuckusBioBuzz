@@ -80,7 +80,11 @@ public class TeleOp extends OpMode {
         Swerve.setTranslationPriority(TRANSLATION_PRIORITY);
         follower.manual(-gamepad1.left_stick_y, -gamepad1.left_stick_x, -gamepad1.right_stick_x);
         follower.update();
-        intake.update(gamepad1.left_bumper, gamepad1.right_bumper);
+        if(shooterSystem.shooting()){
+            intake.update(false, true); //just sends intake command that's overridable
+        }else {
+            intake.update(gamepad1.left_bumper, gamepad1.right_bumper);
+        }
         scoopula.update(gamepad2.left_bumper && gamepad2.right_bumper);
         shooterSystem.update();
 
