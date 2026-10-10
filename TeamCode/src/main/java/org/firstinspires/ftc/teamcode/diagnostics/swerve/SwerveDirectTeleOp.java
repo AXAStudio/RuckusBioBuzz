@@ -41,10 +41,20 @@ import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
  * the Follower and gains field-centric driving and path following.
  */
 @Config
-@TeleOp(name = "Swerve TeleOp", group = "TeleOp")
+// Diagnostics, not "TeleOp": it must not sit in the Driver Station list beside the competition
+// OpMode, where it is one mis-tap from a match.
+@TeleOp(name = "Swerve TeleOp", group = "Diagnostics")
 public class SwerveDirectTeleOp extends OpMode {
     private static final double DEADBAND = 0.05;
     private static final double SLOW_SPEED = 0.35;
+
+    /**
+     * Dashboard input expires this long after a value last changed. Nothing tells the OpMode
+     * that FTC Dashboard disconnected - the statics just keep their last values - so without a
+     * timeout a dropped laptop leaves the robot driving. To keep going, change a value (set it
+     * to 0 and back).
+     */
+    private static final double DASHBOARD_INPUT_TIMEOUT_S = 10.0;
 
     /**
      * Drive from these dashboard values instead of the sticks.
@@ -53,6 +63,9 @@ public class SwerveDirectTeleOp extends OpMode {
      * 500 ms, which happens constantly with no driver station attached - the OpMode then reads
      * zero however hard you are holding the stick. These give a stable input source until a
      * driver station is available.
+     *
+     * <p>They are statics, so they outlive the OpMode: init() puts them back to zero/off, or the
+     * robot would drive off on START with whatever the last run left set.
      */
     public static boolean USE_DASHBOARD_INPUT = false;
     public static double FORWARD = 0;
@@ -60,12 +73,19 @@ public class SwerveDirectTeleOp extends OpMode {
     public static double TURN = 0;
 
     private final ElapsedTime loopTimer = new ElapsedTime();
+    private final ElapsedTime dashboardInputAge = new ElapsedTime();
+    private boolean lastUseDashboard;
+    private double lastForward, lastStrafe, lastTurn;
 
     private Swerve swerve;
     private double loopHz;
 
     @Override
     public void init() {
+        USE_DASHBOARD_INPUT = false;
+        FORWARD = 0;
+        STRAFE = 0;
+        TURN = 0;
         swerve = Constants.createSwerve(hardwareMap);
         telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
     }
@@ -88,20 +108,33 @@ public class SwerveDirectTeleOp extends OpMode {
         double strafe;
         double turn;
 
+        boolean dashboardExpired = false;
         if (USE_DASHBOARD_INPUT) {
-            forward = FORWARD;
-            strafe = STRAFE;
-            turn = TURN;
+            if (!lastUseDashboard || FORWARD != lastForward || STRAFE != lastStrafe
+                    || TURN != lastTurn) {
+                dashboardInputAge.reset();
+                lastForward = FORWARD;
+                lastStrafe = STRAFE;
+                lastTurn = TURN;
+            }
+            dashboardExpired = dashboardInputAge.seconds() > DASHBOARD_INPUT_TIMEOUT_S;
+            forward = dashboardExpired ? 0 : clampUnit(FORWARD);
+            strafe = dashboardExpired ? 0 : clampUnit(STRAFE);
+            turn = dashboardExpired ? 0 : clampUnit(TURN);
         } else {
             double speed = gamepad1.left_bumper ? SLOW_SPEED : 1.0;
             forward = deadband(-gamepad1.left_stick_y) * speed;
             strafe = deadband(-gamepad1.left_stick_x) * speed;
             turn = deadband(-gamepad1.right_stick_x) * speed;
         }
+        lastUseDashboard = USE_DASHBOARD_INPUT;
 
         swerve.applyDrive(new DrivePowers(forward, strafe, turn));
 
-        telemetry.addData("input", USE_DASHBOARD_INPUT ? "dashboard" : "gamepad");
+        telemetry.addData("input", !USE_DASHBOARD_INPUT ? "gamepad"
+                : dashboardExpired ? String.format(java.util.Locale.US, "dashboard EXPIRED (no "
+                        + "change for %.0f s) - change a value to drive", DASHBOARD_INPUT_TIMEOUT_S)
+                : "dashboard");
         telemetry.addData("forward", forward);
         telemetry.addData("strafe", strafe);
         telemetry.addData("turn", turn);
@@ -115,6 +148,10 @@ public class SwerveDirectTeleOp extends OpMode {
         if (swerve != null) {
             swerve.applyDrive(new DrivePowers(0, 0, 0));
         }
+    }
+
+    private static double clampUnit(double value) {
+        return Double.isNaN(value) ? 0.0 : Math.max(-1.0, Math.min(1.0, value));
     }
 
     private static double deadband(double value) {
