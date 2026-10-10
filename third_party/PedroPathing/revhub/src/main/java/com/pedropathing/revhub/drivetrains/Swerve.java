@@ -225,6 +225,19 @@ public class Swerve implements Drivetrain {
         return true;
     }
 
+    /**
+     * RUCKUS PATCH: the pod's current heading in wheel space, the frame move() takes - the inverse
+     * of {@link SwervePod#adjustThetaForEncoder}. That map is {@code c +- wheelTheta (mod 2pi)} for
+     * any pod (an offset and an optional reversal), so probing it at 0 and a quarter turn recovers
+     * c and the sign without reaching past the interface.
+     */
+    private static double wheelThetaOf(SwervePod pod) {
+        double c = pod.adjustThetaForEncoder(0.0);
+        double sign = Angle.normalizeSigned(pod.adjustThetaForEncoder(Math.PI / 2.0) - c) > 0
+                ? 1.0 : -1.0;
+        return Angle.normalize(sign * Angle.normalizeSigned(pod.getAngle() - c));
+    }
+
     /** RUCKUS PATCH: 2.1.2's Vector kept theta in [0, 2pi); keep feeding the pods that range. */
     private static double thetaOf(Vector2D v) {
         return Angle.normalize(v.theta());
@@ -245,8 +258,18 @@ public class Swerve implements Drivetrain {
             setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
         }
 
-        for (SwervePod pod : pods) {
-            pod.move(pod.getAngle(), 0, true);
+        for (int i = 0; i < pods.size(); i++) {
+            SwervePod pod = pods.get(i);
+            // RUCKUS PATCH (2026-10-10): upstream passes pod.getAngle() - the ENCODER-frame angle -
+            // where move() takes a WHEEL-space theta. Released, so the servo never acts on it, but
+            // move() still records it as the demand (the recorder's tgt column), decides the flip
+            // state against it (which then breaks the next 80-100 degree tie) and feeds it to the
+            // turn PID's error history. Re-send the pod its own last demand instead, so stop()
+            // leaves that state as the last real command left it; a pod never commanded yet gets
+            // its current heading, converted to wheel space.
+            double theta = Double.isNaN(lastCommandedTheta[i])
+                    ? wheelThetaOf(pod) : lastCommandedTheta[i];
+            pod.move(theta, 0, true);
             pod.setToFloat();
         }
         // RUCKUS PATCH: the pods were just floated behind the cache's back.
