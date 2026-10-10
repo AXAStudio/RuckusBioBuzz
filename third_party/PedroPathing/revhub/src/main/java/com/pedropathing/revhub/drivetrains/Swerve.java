@@ -467,7 +467,15 @@ public class Swerve implements Drivetrain {
                 lastCommandedTheta[podNum] = theta;
             }
 
-            pods.get(podNum).move(theta, finalVector.magnitude() * avgScaling, release);
+            // RUCKUS PATCH (2026-10-10): a released pod gets exactly zero drive. The taper exists
+            // to keep the demand DIRECTION continuous; the walls still decide release as booleans,
+            // and before the taper (and in stock v3) a released pod's vectors were deleted, so it
+            // was handed 0. With the taper the leftover sub-epsilon magnitude reached the motor
+            // instead - and since the drive cache forces a write only at exactly 0, up to 0.05 of
+            // stale power could sit on an unsteered wheel until X-lock (or forever under
+            // IGNORE_ANGLE_CHANGES). Exact 0 restores the old contract and forces that write.
+            double drive = release ? 0.0 : finalVector.magnitude() * avgScaling;
+            pods.get(podNum).move(theta, drive, release);
         }
     }
 
