@@ -472,6 +472,15 @@ swerve:
 'reach auto. Splice them with `python tools/swervetune/robot.py constants` (dry run) then `--write`, and ' +
 'Foresight Tuner output with `robot.py foresight`. Accept only on tools/swervetune/pedrocheck.py with ' +
 '--pods shipped on the installed build, then build, commit each value with its evidence, and push.\n\n' +
+'What changed since the shipped gains:\n' +
+'- The turn gains in Constants.java were tuned on the bare chassis. The robot now carries the intake, sorter ' +
+'and both turrets, so treat every pod gain as unvalidated under this load: re-run the search on the loaded ' +
+'robot and accept nothing that pedrocheck.py has not passed on it.\n' +
+'- TeleOp has translation priority (tele/TeleOp.java TRANSLATION_PRIORITY, default 0.75; the vendored ' +
+'Swerve.setTranslationPriority, 0 = upstream). When stick plus turn saturates a pod it cuts rotation only as ' +
+'far as needed to keep that fraction of the translation. It acts only on follower.manual(), so paths, ' +
+'pedrocheck.py and the bring-up tool\'s own driving never see it; do not tune it here. Once the gains are ' +
+'shipped, ask me for a driver A/B in TeleOp (0 vs 0.75, randomised, from FTC Dashboard).\n\n' +
 'Setup right now:\n' +
 '- Swerve Bring-Up is running; dashboard http://192.168.43.1:8080/swerve. Start with `python tools/swervetune/robot.py check`.\n' +
 '- Battery: {VOLTS}. Surface: ask me.\n' +

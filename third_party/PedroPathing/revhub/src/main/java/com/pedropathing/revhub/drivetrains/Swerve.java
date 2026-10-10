@@ -89,6 +89,16 @@ public class Swerve implements Drivetrain {
      */
     private static volatile double demandSlewDegPerSec = 214.0;
 
+    /**
+     * RUCKUS PATCH: smallest fraction of the commanded translation a manual command keeps when
+     * rotation saturates a pod. 0 disables it, which is upstream: every pod vector is divided by
+     * the largest, so full stick plus full turn drops translation to 54% on this chassis. Above
+     * 0, rotation is cut only as far as needed to hold translation at this fraction; commands
+     * that already keep it are untouched. Only {@code drive(powers, true)} applies it; paths and
+     * the tools' {@link #applyDrive(DrivePowers)} never do.
+     */
+    private static volatile double translationPriority = 0.0;
+
     /** Per-pod anchor for the demand slew limiter, radians; NaN until first commanded. */
     private final double[] lastCommandedTheta;
     private long lastArcadeNano = 0;
@@ -144,6 +154,33 @@ public class Swerve implements Drivetrain {
 
     public static double getDemandSlewDegPerSec() {
         return demandSlewDegPerSec;
+    }
+
+    public static void setTranslationPriority(double fraction) {
+        translationPriority = Range.clip(fraction, 0, 1);
+    }
+
+    public static double getTranslationPriority() {
+        return translationPriority;
+    }
+
+    /**
+     * Largest s in [0, 1] with every |translation + s * rotation_i| <= 1 / translationPriority,
+     * so normalising by the largest pod still leaves that fraction of the translation. One
+     * quadratic per pod; translation is at most unit length, so each root is in [0, 1].
+     */
+    private double rotationKeep(Vector2D translation, double rotation) {
+        double limit = 1.0 / translationPriority;
+        double keep = 1.0;
+        double tt = translation.magnitudeSquared();
+        for (SwervePod pod : pods) {
+            Vector2D r = Vector2D.polar(rotation, rotationBaseAngle(pod) + Math.PI / 2);
+            double rr = r.magnitudeSquared();
+            double tr = translation.dot(r);
+            if (tt + 2 * tr + rr <= limit * limit) continue;
+            keep = Math.min(keep, (-tr + Math.sqrt(tr * tr - rr * (tt - limit * limit))) / rr);
+        }
+        return keep;
     }
 
     /**
@@ -238,10 +275,14 @@ public class Swerve implements Drivetrain {
             setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         else
             setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
-        applyDrive(powers);
+        applyDrive(powers, manual);
     }
 
     public void applyDrive(DrivePowers powers) {
+        applyDrive(powers, false);
+    }
+
+    private void applyDrive(DrivePowers powers, boolean manual) {
         double forward = powers.forward();
         double strafe = -powers.strafe();
         // RUCKUS PATCH: CCW-positive, as DrivePowers.turn is everywhere in core (Foresight,
@@ -288,6 +329,9 @@ public class Swerve implements Drivetrain {
         // Untapered, these collapse to the original hard switch: scale 0 below the wall, 1 above.
         double rotationScalar = zeroRotation ? rotation * rotScale : rotation;
         Vector2D translationVector = zeroTrans ? rawTrans.times(transScale) : rawTrans;
+        if (manual && translationPriority > 0 && rotationScalar != 0) {
+            rotationScalar *= rotationKeep(translationVector, rotationScalar);
+        }
 
         Vector2D[] podVectors = new Vector2D[pods.size()];
         // RUCKUS PATCH: pod directions are carried separately. Vector2D is cartesian, so a

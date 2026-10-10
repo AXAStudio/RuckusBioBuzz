@@ -19,7 +19,7 @@ competition code never runs:
 |---|---|---|
 | `pidStep`, `pidStepAll`, `autoTune`, `perpod_tune.py`, `kssweep.py` | one pod's turn loop, robot still | No path follower, no drive load, no Foresight demand pattern. The rolling-plant discovery (2026-08-14) is exactly a gain set that passed every static test and limit-cycled while driving |
 | `headingStep`, `headingGoto`, `setHeadingPidf`, `headtune.py` | the TOOL's heading hold: PIDF with kD and a sign feed-forward | Foresight's heading controller is **P only**, called twice per update with different errors. A kP tuned with a kD under it does not transfer |
-| `drive`, `robot.py drive`, `drivecapture.py`, dashboard sticks | the tool's own `Swerve` built with ITS config (`IGNORE_ANGLE_CHANGES` unless xLock, `manualBrakeMode` off, its epsilon) | Not the shipped `SwerveConfig`, not the follower, and the fence clamp is in the loop |
+| `drive`, `robot.py drive`, `drivecapture.py`, dashboard sticks | the tool's own `Swerve` built with ITS config (`IGNORE_ANGLE_CHANGES` unless xLock, `manualBrakeMode` off, its epsilon) | Not the shipped `SwerveConfig`, not the follower, no TeleOp translation priority (`applyDrive` never applies it), and the fence clamp is in the loop |
 
 **Every gain is accepted only on `tools/swervetune/pedrocheck.py` results** - the real
 `Follower` + `Foresight` + shipped `SwerveConfig`, driving holds, turns, lines, curves and the

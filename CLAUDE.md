@@ -60,7 +60,8 @@ TeamCode/src/main/java/org/firstinspires/ftc/teamcode/
 │   ├── PositionalPod.java               shelved positional pod; only diagnostics/swerve uses it
 │   ├── Tuning.java                      Pedro 3 AutoTune registry (@Tuner), port 10158
 │   └── procedures/                      Quickstart pedro3 tuners (Foresight, Pinpoint, Tests)
-├── tele/TeleOp.java                      COMPETITION drive OpMode: follower.manual() from the sticks, robot-centric
+├── tele/TeleOp.java                      COMPETITION drive OpMode: follower.manual() from the sticks, robot-centric,
+│                                         TRANSLATION_PRIORITY 0.75 (vendored Swerve; manual only, unmeasured on the robot)
 ├── auto/{RedPollenAuto,shortAutoRed,redOption2,ExampleSwerveAuto,PathStep}.java   Red only, no mirroring
 │   └── visualizerAutos/*.pp             visualizer sources the auto .java files are exported from
 ├── modules/                             compute only, no hardware: predictiveAiming, shootingRegression, zoneCheck

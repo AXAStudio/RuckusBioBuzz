@@ -7,6 +7,7 @@ import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.math.Pose;
+import com.pedropathing.revhub.drivetrains.Swerve;
 import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import org.firstinspires.ftc.teamcode.systems.intake;
@@ -26,6 +27,7 @@ import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 public class TeleOp extends OpMode {
     public static double INTAKE_FEED_POWER = 1.0;
     public static boolean INTAKE_REVERSED = false;
+    public static double TRANSLATION_PRIORITY = 0.75;
 
     private Follower follower;
     private predictiveAiming predictor;
@@ -75,6 +77,7 @@ public class TeleOp extends OpMode {
             hub.clearBulkCache();
         }
 
+        Swerve.setTranslationPriority(TRANSLATION_PRIORITY);
         follower.manual(-gamepad1.left_stick_y, -gamepad1.left_stick_x, -gamepad1.right_stick_x);
         follower.update();
         intake.update(gamepad1.left_bumper, gamepad1.right_bumper);
@@ -94,5 +97,6 @@ public class TeleOp extends OpMode {
     public void stop() {
         follower.stop();
         follower.update();
+        Swerve.setTranslationPriority(0);
     }
 }
