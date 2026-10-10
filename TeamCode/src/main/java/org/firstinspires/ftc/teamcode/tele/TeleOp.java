@@ -45,8 +45,9 @@ public class TeleOp extends OpMode {
             hub.setBulkCachingMode(LynxModule.BulkCachingMode.MANUAL);
         }
         follower = Constants.createFollower(hardwareMap);
-        if (PoseStorage.pose != null) {
-            follower.setPose(PoseStorage.pose);
+        Pose autoEndPose = PoseStorage.take();
+        if (autoEndPose != null) {
+            follower.setPose(autoEndPose);
         }
         predictor = new predictiveAiming(follower);
         shooterSystem = new shooter(hardwareMap, predictor);

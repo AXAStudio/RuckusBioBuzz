@@ -39,6 +39,8 @@ public class ExampleSwerveAuto extends OpMode {
 
     @Override
     public void init() {
+        // Before anything that can throw: a pose left by an earlier auto must not reach TeleOp.
+        PoseStorage.clear();
         // Pedro 3 follows paths with Foresight, whose braking model and gains have not been
         // measured on this robot yet. Refuse to build a path-following OpMode on placeholders.
         Constants.requireForesightMeasured();

@@ -63,6 +63,8 @@ public class shortAutoRed extends OpMode {
 
     @Override
     public void init() {
+        // Before anything that can throw: a pose left by an earlier auto must not reach TeleOp.
+        PoseStorage.clear();
         // Pedro 3 follows paths with Foresight, whose braking model and gains must be measured
         // on the robot first. Refuse to build a path-following OpMode on placeholders.
         Constants.requireForesightMeasured();

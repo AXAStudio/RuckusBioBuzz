@@ -4,6 +4,7 @@ import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.bylazar.configurables.annotations.Configurable;
 import com.bylazar.telemetry.TelemetryManager;
 import com.bylazar.telemetry.PanelsTelemetry;
+import org.firstinspires.ftc.teamcode.helpers.PoseStorage;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 import com.pedropathing.api.Paths;
 import com.pedropathing.follower.Follower;
@@ -21,6 +22,8 @@ public class redOption2 extends OpMode {
 
     @Override
     public void init() {
+        // This auto never saves its end pose, so make sure an earlier auto's doesn't reach TeleOp.
+        PoseStorage.clear();
         panelsTelemetry = PanelsTelemetry.INSTANCE.getTelemetry();
 
         follower = Constants.createFollower(hardwareMap);

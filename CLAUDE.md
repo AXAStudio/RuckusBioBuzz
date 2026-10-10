@@ -66,7 +66,7 @@ TeamCode/src/main/java/org/firstinspires/ftc/teamcode/
 │   └── visualizerAutos/*.pp             visualizer sources the auto .java files are exported from
 ├── modules/                             compute only, no hardware: predictiveAiming, shootingRegression, zoneCheck
 ├── systems/                             mechanisms (write hardware): intake, shooter (flywheels; owns turret), turret (aiming, was modules/aimingSystem), gate, scoopula
-├── helpers/                             HivePosition, Alliance, PoseStorage (auto stop() saves, TeleOp init loads)
+├── helpers/                             HivePosition, Alliance, PoseStorage (autos clear at init + save in stop(), TeleOp init take()s it once)
 ├── field/biobuzz_field.json             BIOBUZZ obstacles - ONE source: the visualizer imports it, the bring-up field fence loads it
 ├── fieldview/                           http://192.168.43.1:8080/field - live field, robot, predicted pose, zone (TeleOp publishes at 20 Hz)
 ├── diagnostics/                         PreMatchSystemCheck, motorbreakin
@@ -100,7 +100,7 @@ tools/mechtune/mechtune.py               HOST-SIDE front door for Mechanism Tune
 `SwerveBringUp` drive, so bring-up tuning transfers to competition code.
 
 **`DriveTeleOp` was deleted 2026-09-18** and replaced by `TeleOp` (sticks →
-`follower.manual()`, no heading hold, no braking clamp, pose loaded from `helpers/PoseStorage`, which autos save in `stop()`,
+`follower.manual()`, no heading hold, no braking clamp, pose taken once from `helpers/PoseStorage`, which autos save in `stop()`,
 no `TeleLoopProbe`). Every `DriveTeleOp` number below — including the 99.3 Hz — was
 measured on the deleted OpMode. **`TeleOp`'s loop rate is unmeasured.**
 
