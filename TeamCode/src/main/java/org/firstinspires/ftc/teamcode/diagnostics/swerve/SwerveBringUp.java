@@ -1009,6 +1009,9 @@ public class SwerveBringUp extends OpMode {
     @Override
     public void stop() {
         allStop();
+        // The next run's reload check needs to know where the robot was LEFT, not where it was
+        // when the box was marked - the robot drives between the two.
+        refreshBoxWitness();
         restorePedroSpeedCap();
         restoreShippedStatics();
         SwerveBench.INSTANCE.markStopped();
@@ -1466,35 +1469,31 @@ public class SwerveBringUp extends OpMode {
                     // heading had drifted to -0.63 deg. The box would have loaded as valid and
                     // fenced a patch of floor 20 inches away from the real one.
                     //
-                    // Two independent triggers now, either of which discards:
-                    //   * the pose is at the origin within a tolerance wide enough to survive
-                    //     drift, AND the witness says we were somewhere else when the box was
-                    //     last written - that is a reset, not a robot that drove home;
-                    //   * there is no witness at all (a box file written before this check
-                    //     existed), in which case the frame cannot be verified.
-                    double absHeading = Math.abs(Angle.normalizeSigned(headingRad));
-                    boolean atOrigin = Math.abs(poseXIn) < 1.0 && Math.abs(poseYIn) < 1.0
-                            && absHeading < Math.toRadians(2.0);
-                    boolean witnessFar = !boxWitnessValid
-                            || Math.hypot(boxWitnessX, boxWitnessY) > 6.0;
-                    if (boxValid && atOrigin && witnessFar) {
-                        boxValid = false;
-                        if (BOX_FILE.exists()) {
-                            BOX_FILE.delete();
-                        }
-                        message = "Saved box discarded: the odometry frame was reset while this "
-                                + "OpMode was not running (a power cycle, or any OpMode that "
-                                + "builds a Pedro Follower). Re-mark corners A and B.";
-                    } else if (boxValid && boxWitnessValid) {
-                        double moved = Math.hypot(poseXIn - boxWitnessX, poseYIn - boxWitnessY);
-                        if (moved > BOX_WITNESS_TOLERANCE_IN) {
-                            // Not the reset signature, but the robot is not where it was left.
-                            // It may simply have been pushed - the Pinpoint keeps integrating
-                            // with no OpMode running - so this warns rather than discards.
-                            message = String.format(Locale.US,
-                                    "Box loaded, but the robot is %.1f in from where it was when "
-                                            + "the box was last written. If it was carried rather "
-                                            + "than pushed, re-mark corners A and B.", moved);
+                    // "Pose at the origin" was the only reset signature until 2026-10-10, and it
+                    // is not enough: autos and TeleOp setPose a start pose such as (72, 8, 90),
+                    // which is nowhere near the origin, and a witness saved within 6 in of the
+                    // origin switched the check off. The rule now is positive confirmation:
+                    // the box survives only if the robot is still where the witness says it
+                    // was left - written by saveBox and refreshed at stop() - within a tight
+                    // position AND heading tolerance. Anything else (no witness, a moved
+                    // frame, a robot carried or pushed while no OpMode ran) discards it. When
+                    // in doubt the operator re-marks; a false discard costs a minute, a false
+                    // keep fences the wrong patch of floor.
+                    if (boxValid) {
+                        String mismatch = boxWitnessMismatch();
+                        if (mismatch != null) {
+                            String was = String.format(Locale.US, "%s, x %.1f..%.1f, y %.1f..%.1f",
+                                    boxKind, boxMinX, boxMaxX, boxMinY, boxMaxY);
+                            boxValid = false;
+                            setMarkedFence();
+                            if (BOX_FILE.exists()) {
+                                BOX_FILE.delete();
+                            }
+                            message = "Saved box discarded: " + mismatch + ". The odometry frame "
+                                    + "may have moved while this OpMode was not running (a power "
+                                    + "cycle, an auto or TeleOp setting its start pose, any OpMode "
+                                    + "that builds a Pedro Follower) or the robot was moved. "
+                                    + "Re-arm it (it was " + was + ").";
                         }
                     }
                 }
@@ -1508,14 +1507,50 @@ public class SwerveBringUp extends OpMode {
     // ---------------------------------------------------------------- field box
 
     /**
-     * How far the robot may be from its witness pose before the box is called into question.
-     * Generous: the point is to catch a moved FRAME, not to police a nudge.
+     * How far the reloaded pose may be from the witness before the box is discarded. Tight on
+     * purpose (was a 12 in warning): a parked robot's Pinpoint does not move, so a real
+     * difference means a moved frame or a moved robot, and either way the fence is unverified.
      */
-    private static final double BOX_WITNESS_TOLERANCE_IN = 12.0;
+    private static final double BOX_WITNESS_TOLERANCE_IN = 1.0;
+    private static final double BOX_WITNESS_TOLERANCE_RAD = Math.toRadians(2.0);
 
     /** Where the robot was when the box was last written. See the frame check in readHeading. */
     private double boxWitnessX, boxWitnessY, boxWitnessHeadingRad;
     private boolean boxWitnessValid;
+
+    /** Null when the current pose matches the box's witness, else why it does not. */
+    private String boxWitnessMismatch() {
+        if (!boxWitnessValid) {
+            return "it has no witness pose, so the frame it was marked in cannot be verified";
+        }
+        double dPos = Math.hypot(poseXIn - boxWitnessX, poseYIn - boxWitnessY);
+        double dHead = Math.abs(Angle.normalizeSigned(headingRad - boxWitnessHeadingRad));
+        if (dPos <= BOX_WITNESS_TOLERANCE_IN && dHead <= BOX_WITNESS_TOLERANCE_RAD) {
+            return null;
+        }
+        return String.format(Locale.US,
+                "the pose is (%.1f, %.1f, %.1f deg) but the box was saved at (%.1f, %.1f, %.1f "
+                        + "deg) - %.1f in / %.1f deg apart, tolerance %.1f in / %.1f deg",
+                poseXIn, poseYIn, Math.toDegrees(headingRad), boxWitnessX, boxWitnessY,
+                Math.toDegrees(boxWitnessHeadingRad), dPos, Math.toDegrees(dHead),
+                BOX_WITNESS_TOLERANCE_IN, Math.toDegrees(BOX_WITNESS_TOLERANCE_RAD));
+    }
+
+    /**
+     * Rewrites the box file so its witness is where the robot is NOW, from a fresh Pinpoint
+     * read. Only for a box this run has already verified (or armed) - refreshing the witness of
+     * a box whose frame check is still pending would launder an unverified fence. If the pose
+     * cannot be read, the file is written without a witness, so the next reload discards it.
+     */
+    private void refreshBoxWitness() {
+        if (!boxValid || boxNeedsFrameCheck) {
+            return;
+        }
+        readHeading(true);
+        if (boxValid) {   // the read's own sanity check may just have discarded it
+            saveBox();
+        }
+    }
 
     private void saveBox() {
         FileWriter w = null;
@@ -1544,6 +1579,10 @@ public class SwerveBringUp extends OpMode {
                 w.write("# witness: pose when written. x|y|headingRad\n");
                 w.write("witness|" + poseXIn + "|" + poseYIn + "|" + headingRad + "\n");
             }
+            boxWitnessValid = poseOk;
+            boxWitnessX = poseXIn;
+            boxWitnessY = poseYIn;
+            boxWitnessHeadingRad = headingRad;
         } catch (IOException e) {
             message = "Could not save box: " + e.getMessage();
         } finally {
@@ -3301,7 +3340,8 @@ public class SwerveBringUp extends OpMode {
                 // Writes a known pose into the Pinpoint. The recovery path for a frame that was
                 // re-origined by something else: if the robot has not physically moved since,
                 // restoring the pose it held restores the frame exactly, and a box marked in
-                // that frame becomes valid again without re-marking corners.
+                // that frame becomes valid again without re-marking corners (boxSet with the
+                // coordinates the reload's discard message printed).
                 //
                 // It does NOT re-validate the box on its own - the operator has to confirm the
                 // fence lines up with the mat, because "the robot has not moved" is a claim only
@@ -3321,6 +3361,10 @@ public class SwerveBringUp extends OpMode {
                 pinpoint.setPosition(new Pose2D(DistanceUnit.INCH, px, py,
                         AngleUnit.DEGREES, ph));
                 pinpoint.update();
+                // The pose just moved on purpose: an armed box keeps its meaning (the operator
+                // vouches for it), so its witness moves with the pose rather than tripping the
+                // next reload's frame check.
+                refreshBoxWitness();
                 message = String.format(Locale.US,
                         "Pose set to (%.4f, %.4f) at %.4f deg. Confirm the box lines up with the "
                                 + "mat before driving.", px, py, ph);

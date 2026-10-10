@@ -146,11 +146,13 @@ read):
   and reloaded when the OpMode inits. **It can survive a redeploy.**
 - It is **discarded automatically** in three cases. Read `box.valid` and `message` after every
   restart, because nothing else tells you:
-  - The pose is back at the origin while the witness says it was elsewhere. That is a Pinpoint
-    power cycle, or any OpMode that builds a Pedro `Follower`, **including `DriveTeleOp`**.
+  - At reload, the pose does not match the witness within **1 in and 2°** (or there is no
+    witness). The witness is written when the box is armed and refreshed at the OpMode's
+    `stop()` and on `setPose`, so this catches a Pinpoint power cycle, any auto/TeleOp that set
+    a start pose or drove, any OpMode that builds a Pedro `Follower`, and a robot moved by hand.
+    `message` carries the discarded box's coordinates.
   - Odometry jumps faster than the robot can move (it was picked up or dragged).
   - `resetImu`, `odoConfig` or `boxClear` is sent.
-- It warns, and does not discard, if the robot is more than 12 in from the witness.
 - It lives in the **dead-reckoned pose frame**. "Armed" does not mean "correct": yaw drift slides
   and rotates it. CLAUDE.md rule 6 still requires re-marking after a reflash or pose reset, and
   re-reading `/state` before motion. A box that reloads as valid does **not** exempt you from the

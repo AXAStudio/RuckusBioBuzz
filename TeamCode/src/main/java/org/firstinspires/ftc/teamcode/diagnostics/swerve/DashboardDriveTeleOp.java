@@ -54,10 +54,10 @@ import java.util.Locale;
  * <ul>
  *   <li>Stick values arrive every loop instead of every 60 ms plus WiFi latency.
  *   <li>No publish, recorder or HTTP path, so the loop rate differs (unmeasured here).
- *   <li>The Pinpoint is read every loop. Bring-up reads it at 5 Hz when heading hold is off,
- *       which also slows its box and field-oriented updates in that case.
+ *   <li>The Pinpoint is read every loop. Bring-up does the same in DRIVE since 2026-10-10;
+ *       before that it read at 5 Hz when heading hold was off.
  *   <li>A box that fails the frame check is disarmed for this run only; the file is left for
- *       the bring-up tool to judge.
+ *       the bring-up tool to judge. A box that passes has its witness refreshed at stop.
  *   <li>No 400 ms command watchdog: the Driver Station already zeroes a lost gamepad.
  *   <li>Runtime-only dashboard knobs (taper/slew, gain-schedule tuning, PWM range) are not
  *       persisted anywhere, so this sees their defaults unless it runs in the same app session.
@@ -96,7 +96,8 @@ public class DashboardDriveTeleOp extends OpMode {
     private static final double BOX_MARGIN_BASE_IN = 4.0;
     private static final double BOX_MARGIN_LOOKAHEAD_S = 0.30;
     private static final double BOX_TAPER_IN = 6.0;
-    private static final double BOX_WITNESS_TOLERANCE_IN = 12.0;
+    private static final double BOX_WITNESS_TOLERANCE_IN = 1.0;
+    private static final double BOX_WITNESS_TOLERANCE_RAD = Math.toRadians(2.0);
 
     private static final File CAL_FILE = new File(AppUtil.FIRST_FOLDER, "swerve_bringup_cal.txt");
     private static final File BOX_FILE = new File(AppUtil.FIRST_FOLDER, "swerve_field_box.txt");
@@ -119,7 +120,7 @@ public class DashboardDriveTeleOp extends OpMode {
     private boolean boxValid;
     private boolean boxNeedsFrameCheck;
     private boolean boxClampedNow;
-    private double boxWitnessX, boxWitnessY;
+    private double boxWitnessX, boxWitnessY, boxWitnessHeadingRad;
     private boolean boxWitnessValid;
 
     private boolean xLock = true;
@@ -266,6 +267,54 @@ public class DashboardDriveTeleOp extends OpMode {
         if (swerve != null) {
             swerve.applyDrive(new DrivePowers(0, 0, 0));
         }
+        refreshBoxWitness();
+    }
+
+    /**
+     * This OpMode never re-origins the Pinpoint, so a box that passed the frame check is still
+     * good when it stops - but the robot has driven, and the bring-up's reload would discard the
+     * box against the stale witness. Rewrites only the witness line, from a fresh read; a box
+     * that failed the check (or never ran it) leaves the file for the bring-up tool to judge. An
+     * unreadable pose drops the witness, so the next reload discards: conservative.
+     */
+    private void refreshBoxWitness() {
+        if (!boxValid || boxNeedsFrameCheck || !BOX_FILE.exists()) {
+            return;
+        }
+        readHeading();
+        if (!boxValid) {
+            return;
+        }
+        List<String> lines = new ArrayList<>();
+        BufferedReader r = null;
+        try {
+            r = new BufferedReader(new FileReader(BOX_FILE));
+            String line;
+            while ((line = r.readLine()) != null) {
+                if (!line.startsWith("witness|") && !line.startsWith("# witness")) {
+                    lines.add(line);
+                }
+            }
+        } catch (IOException e) {
+            return;
+        } finally {
+            closeQuietly(r);
+        }
+        java.io.FileWriter w = null;
+        try {
+            w = new java.io.FileWriter(BOX_FILE, false);
+            for (String line : lines) {
+                w.write(line + "\n");
+            }
+            if (poseOk) {
+                w.write("# witness: pose when written. x|y|headingRad\n");
+                w.write("witness|" + poseXIn + "|" + poseYIn + "|" + headingRad + "\n");
+            }
+        } catch (IOException e) {
+            // Nothing to report to at stop; the stale witness makes the next reload discard.
+        } finally {
+            closeQuietly(w);
+        }
     }
 
     private void clearCaches() {
@@ -385,6 +434,7 @@ public class DashboardDriveTeleOp extends OpMode {
                 if (p.length >= 4 && "witness".equals(p[0])) {
                     boxWitnessX = Double.parseDouble(p[1]);
                     boxWitnessY = Double.parseDouble(p[2]);
+                    boxWitnessHeadingRad = Double.parseDouble(p[3]);
                     boxWitnessValid = true;
                 } else if (p.length >= 4) {
                     boxMinX = Double.parseDouble(p[0]);
@@ -465,21 +515,23 @@ public class DashboardDriveTeleOp extends OpMode {
             }
             if (boxNeedsFrameCheck) {
                 boxNeedsFrameCheck = false;
-                double absHeading = Math.abs(Angle.normalizeSigned(headingRad));
-                boolean atOrigin = Math.abs(poseXIn) < 1.0 && Math.abs(poseYIn) < 1.0
-                        && absHeading < Math.toRadians(2.0);
-                boolean witnessFar = !boxWitnessValid
-                        || Math.hypot(boxWitnessX, boxWitnessY) > 6.0;
-                if (boxValid && atOrigin && witnessFar) {
-                    boxValid = false;
-                    message = "Saved box disarmed: the odometry frame looks reset. Re-mark "
-                            + "corners A and B in Swerve Bring-Up.";
-                } else if (boxValid && boxWitnessValid) {
-                    double moved = Math.hypot(poseXIn - boxWitnessX, poseYIn - boxWitnessY);
-                    if (moved > BOX_WITNESS_TOLERANCE_IN) {
-                        message = String.format(Locale.US,
-                                "Box loaded, but the robot is %.1f in from where it was when the "
-                                        + "box was last written.", moved);
+                // SwerveBringUp's rule (2026-10-10): the box is kept only if the robot is still
+                // where the witness says it was left, position AND heading. "Pose at the origin"
+                // missed every OpMode that setPose's a start pose away from the origin.
+                if (boxValid) {
+                    double dPos = Math.hypot(poseXIn - boxWitnessX, poseYIn - boxWitnessY);
+                    double dHead = Math.abs(
+                            Angle.normalizeSigned(headingRad - boxWitnessHeadingRad));
+                    if (!boxWitnessValid || dPos > BOX_WITNESS_TOLERANCE_IN
+                            || dHead > BOX_WITNESS_TOLERANCE_RAD) {
+                        boxValid = false;
+                        message = boxWitnessValid
+                                ? String.format(Locale.US, "Saved box disarmed: the robot is "
+                                        + "%.1f in / %.1f deg from where the box was last "
+                                        + "written - the frame may have moved. Re-arm it in "
+                                        + "Swerve Bring-Up.", dPos, Math.toDegrees(dHead))
+                                : "Saved box disarmed: it has no witness pose, so its frame "
+                                        + "cannot be verified. Re-arm it in Swerve Bring-Up.";
                     }
                 }
             }

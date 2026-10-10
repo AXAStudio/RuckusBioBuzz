@@ -204,11 +204,15 @@ footprint + heading indicator.
   targets); the taper makes that rotation continuous rather than a step. Treat
   any azimuth sample with `box.clamped=true` as suspect.
 - The box **reloads from the hub file at OpMode init** and can survive a
-  redeploy. The OpMode discards it itself if the pose is back at the origin
-  while the witness says otherwise (Pinpoint power cycle, or any OpMode that
-  builds a Pedro `Follower` — including `DriveTeleOp`), or if odometry jumps
-  faster than the robot can move. Rule 6 still applies: `/state` `box.valid` is
-  the only authority, and a reloaded box still gets the corner check.
+  redeploy. The witness pose in the file is written when the box is armed and
+  refreshed at `stop()` (and on `setPose`). Since 2026-10-10 the OpMode keeps a
+  reloaded box **only if the current pose matches the witness within 1 in and
+  2°**; anything else discards it with the old coordinates in `message` — no
+  witness, a Pinpoint power cycle, any auto/TeleOp that set a start pose or
+  drove, any OpMode that builds a Pedro `Follower`, a robot moved by hand. It
+  also discards it if odometry jumps faster than the robot can move. Rule 6
+  still applies: `/state` `box.valid` is the only authority, and a reloaded box
+  still gets the corner check.
 
 ### Statistics rule (this repo has been burned by it three times)
 
