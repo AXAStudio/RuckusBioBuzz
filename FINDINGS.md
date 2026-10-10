@@ -621,3 +621,14 @@ Expected effect on measurement:
   `pedro.update()`. No FOLLOW loop rate is recorded in this file, so there is no pre-change
   baseline; the first `pedrocheck.py` session should record `1/mean(dt)` in FOLLOW and label it
   post-2026-10-10.
+
+## 2026-10-10 — DashboardDriveTeleOp enforces field/border fences (rule 9 declaration)
+
+Diagnostic only, no data taken, untested on hardware. `DashboardDriveTeleOp.loadBox` ignored the
+`kind|`, `robot|` and `keepout|` lines, so a saved field/border fence was enforced as a plain
+centre-point box (footprint up to ~9 in past the wall, keep-outs dropped). It now parses them like
+`SwerveBringUp.loadBox` and clamps exactly like `SwerveBringUp.applyBoxLimit` (heading-aware
+centre bounds + `FenceGeometry.clampKeepOut`). A box file it cannot parse, or of an unknown kind,
+now refuses all motion (it used to drive unfenced). Expected effect: none with a marked box
+(identical clamp); with a field/border fence, more clamping near walls and keep-outs. No session
+has driven this OpMode under a field fence, so no earlier data is affected.

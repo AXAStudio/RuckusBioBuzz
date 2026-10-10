@@ -44,7 +44,9 @@ import java.util.Locale;
  * <p>Everything below the input stage is a copy of {@code SwerveBringUp.runDriveMode} and its
  * helpers, constants included: the same {@link SwerveConfig} (X_LOCK, no brake, no voltage
  * compensation, epsilon 0.05), the same heading PIDF (kP 1.20, kD 0.080) and hold phase machine
- * with the epsilon-bypass trim, the same field-oriented transform, and the same box limit. The
+ * with the epsilon-bypass trim, the same field-oriented transform, and the same box limit -
+ * marked box, or field/border fence with its heading-aware footprint and keep-outs (a box file
+ * it cannot parse or enforce refuses all motion rather than fencing something weaker). The
  * input stage reproduces {@code dashboard.html}'s gamepad path: vector deadband 0.06 on the left
  * stick, scalar 0.06 on the right, no speed scaling. {@code DriveTeleOp} differs from it on
  * every one of those points. If {@code runDriveMode} changes, this copy must follow - the
@@ -122,6 +124,17 @@ public class DashboardDriveTeleOp extends OpMode {
     private boolean boxClampedNow;
     private double boxWitnessX, boxWitnessY, boxWitnessHeadingRad;
     private boolean boxWitnessValid;
+
+    // Field/border fence, as SwerveBringUp persists it (kind|, robot|, keepout| lines): the rect
+    // is the perimeter the robot's FOOTPRINT must stay inside, plus keep-outs. Ignoring those
+    // lines loaded a fence as a centre-point box - footprint up to ~9 in past the wall, rails and
+    // FLOWERS not fenced at all.
+    private boolean boxBoundary;
+    private String boxKind = "marked";
+    private final List<FenceGeometry.Polygon> keepOuts = new ArrayList<>();
+    private double fenceRobotL, fenceRobotW;
+    /** Non-null when a box file exists but cannot be enforced as written: no motion at all. */
+    private String boxRefusal;
 
     private boolean xLock = true;
     private boolean headingHold = true;
@@ -252,6 +265,9 @@ public class DashboardDriveTeleOp extends OpMode {
                     ? "Cannot build drivetrain: " + podBuildError
                     : "No " + CAL_FILE.getName() + " on the hub - save a calibration from "
                             + "Swerve Bring-Up first. Not driving.";
+        } else if (boxRefusal != null) {
+            // Nothing is commanded at all, not even a zero drive (X-lock would turn the pods).
+            message = boxRefusal;
         } else {
             runDriveMode();
         }
@@ -431,7 +447,27 @@ public class DashboardDriveTeleOp extends OpMode {
                     continue;
                 }
                 String[] p = line.split("\\|");
-                if (p.length >= 4 && "witness".equals(p[0])) {
+                // Same parse as SwerveBringUp.loadBox.
+                if (p.length >= 2 && "kind".equals(p[0])) {
+                    boxKind = p[1].trim();
+                } else if (p.length >= 3 && "robot".equals(p[0])) {
+                    fenceRobotL = Double.parseDouble(p[1]);
+                    fenceRobotW = Double.parseDouble(p[2]);
+                    boxBoundary = true;
+                    if ("marked".equals(boxKind)) {
+                        boxKind = "field";   // a file written before the kind line existed
+                    }
+                } else if (p.length >= 3 && "keepout".equals(p[0])) {
+                    String[] pts = p[2].split(";");
+                    double[] xs = new double[pts.length];
+                    double[] ys = new double[pts.length];
+                    for (int i = 0; i < pts.length; i++) {
+                        String[] xy = pts[i].split(",");
+                        xs[i] = Double.parseDouble(xy[0]);
+                        ys[i] = Double.parseDouble(xy[1]);
+                    }
+                    keepOuts.add(new FenceGeometry.Polygon(p[1], xs, ys));
+                } else if (p.length >= 4 && "witness".equals(p[0])) {
                     boxWitnessX = Double.parseDouble(p[1]);
                     boxWitnessY = Double.parseDouble(p[2]);
                     boxWitnessHeadingRad = Double.parseDouble(p[3]);
@@ -445,11 +481,42 @@ public class DashboardDriveTeleOp extends OpMode {
                     boxNeedsFrameCheck = true;
                 }
             }
-        } catch (IOException | NumberFormatException e) {
+            boolean known = "marked".equals(boxKind) || "field".equals(boxKind)
+                    || "border".equals(boxKind);
+            if (!known || (boxBoundary != !"marked".equals(boxKind))
+                    || (boxBoundary && !(fenceRobotL > 0 && fenceRobotW > 0))) {
+                // A fence this copy does not know how to enforce is not enforced as something
+                // weaker: nothing moves.
+                boxValid = false;
+                boxRefusal = "Box file kind \"" + boxKind + "\" is not one this OpMode can "
+                        + "enforce. Not driving - re-arm or clear it in Swerve Bring-Up.";
+            }
+        } catch (IOException | RuntimeException e) {
+            // A half-read fence (a perimeter without its keep-outs) is worse than none, and a
+            // file that exists was meant to fence something: refuse motion rather than drive
+            // unfenced.
             boxValid = false;
+            keepOuts.clear();
+            boxRefusal = "Box file unreadable (" + e.getMessage() + "). Not driving - re-arm "
+                    + "or clear it in Swerve Bring-Up.";
         } finally {
             closeQuietly(r);
         }
+    }
+
+    /** Walls the robot CENTRE must stay inside: {minX, minY, maxX, maxY}. SwerveBringUp copy. */
+    private double[] centreBounds(double heading) {
+        if (!boxBoundary) {
+            return new double[] {boxMinX, boxMinY, boxMaxX, boxMaxY};
+        }
+        double rx = FenceGeometry.reachX(fenceRobotL, fenceRobotW, heading);
+        double ry = FenceGeometry.reachY(fenceRobotL, fenceRobotW, heading);
+        return new double[] {boxMinX + rx, boxMinY + ry, boxMaxX - rx, boxMaxY - ry};
+    }
+
+    /** Keep-outs are checked against a circle of the footprint's half-diagonal: any heading. */
+    private double fenceRobotRadius() {
+        return Math.hypot(fenceRobotL, fenceRobotW) / 2;
     }
 
     private static void closeQuietly(java.io.Closeable c) {
@@ -569,31 +636,44 @@ public class DashboardDriveTeleOp extends OpMode {
         double vx = forward * ch - strafe * sh;
         double vy = forward * sh + strafe * ch;
 
+        double[] cb = centreBounds(headingRad);
+        double cMinX = cb[0], cMinY = cb[1], cMaxX = cb[2], cMaxY = cb[3];
         double hiX = BOX_MARGIN_BASE_IN + Math.max(0, poseVxIn) * BOX_MARGIN_LOOKAHEAD_S;
         double loX = BOX_MARGIN_BASE_IN + Math.max(0, -poseVxIn) * BOX_MARGIN_LOOKAHEAD_S;
         double hiY = BOX_MARGIN_BASE_IN + Math.max(0, poseVyIn) * BOX_MARGIN_LOOKAHEAD_S;
         double loY = BOX_MARGIN_BASE_IN + Math.max(0, -poseVyIn) * BOX_MARGIN_LOOKAHEAD_S;
 
         boolean clamped = false;
-        double fx = outwardScale(boxMaxX - hiX - poseXIn);
+        double fx = outwardScale(cMaxX - hiX - poseXIn);
         if (vx > 0 && fx < 1.0) {
             vx *= fx;
             clamped = true;
         }
-        double fxLo = outwardScale(poseXIn - (boxMinX + loX));
+        double fxLo = outwardScale(poseXIn - (cMinX + loX));
         if (vx < 0 && fxLo < 1.0) {
             vx *= fxLo;
             clamped = true;
         }
-        double fy = outwardScale(boxMaxY - hiY - poseYIn);
+        double fy = outwardScale(cMaxY - hiY - poseYIn);
         if (vy > 0 && fy < 1.0) {
             vy *= fy;
             clamped = true;
         }
-        double fyLo = outwardScale(poseYIn - (boxMinY + loY));
+        double fyLo = outwardScale(poseYIn - (cMinY + loY));
         if (vy < 0 && fyLo < 1.0) {
             vy *= fyLo;
             clamped = true;
+        }
+        // Keep-outs after the walls, exactly as SwerveBringUp.applyBoxLimit.
+        for (FenceGeometry.Polygon k : keepOuts) {
+            double[] kv = FenceGeometry.clampKeepOut(k, poseXIn, poseYIn, vx, vy,
+                    poseVxIn, poseVyIn, fenceRobotRadius(), BOX_MARGIN_BASE_IN,
+                    BOX_MARGIN_LOOKAHEAD_S, BOX_TAPER_IN);
+            if (kv[2] != 0) {
+                vx = kv[0];
+                vy = kv[1];
+                clamped = true;
+            }
         }
         boxClampedNow = clamped;
         if (!clamped) {
@@ -766,9 +846,13 @@ public class DashboardDriveTeleOp extends OpMode {
                 : "OFF");
         telemetry.addData("X-lock (X)", xLock);
         telemetry.addData("field oriented (BACK)", driveFieldOriented);
-        telemetry.addData("box", boxValid
-                ? String.format(Locale.US, "ARMED x[%.1f, %.1f] y[%.1f, %.1f]%s",
-                        boxMinX, boxMaxX, boxMinY, boxMaxY, boxClampedNow ? "  CLAMPING" : "")
+        telemetry.addData("box", boxRefusal != null ? "REFUSED - NOT DRIVING"
+                : boxValid
+                ? String.format(Locale.US, "ARMED %s x[%.1f, %.1f] y[%.1f, %.1f]%s%s",
+                        boxKind, boxMinX, boxMaxX, boxMinY, boxMaxY,
+                        boxBoundary ? String.format(Locale.US, " robot %.1fx%.1f, %d keep-outs",
+                                fenceRobotL, fenceRobotW, keepOuts.size()) : "",
+                        boxClampedNow ? "  CLAMPING" : "")
                 : "not armed");
         telemetry.addData("pose", headingOk
                 ? String.format(Locale.US, "x %.1f  y %.1f in  h %.1f deg",
