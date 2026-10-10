@@ -507,6 +507,10 @@ public class Swerve implements Drivetrain {
      * geometry, rotation epsilon and taper as {@link #applyDrive}, so the scaling Foresight plans
      * with matches what the pods are given. X-lock is omitted: it only ever produces zero
      * vectors, and this is only read for magnitudes.
+     *
+     * <p>Known limitation (as upstream, less severe): {@link #maxScaling} assumes these vectors are
+     * linear in {@code powers}, and the epsilon taper is not, so a sub-epsilon delta is
+     * understated and over-granted - by at most epsilon of pod magnitude. See RUCKUS_PATCHES.md.
      */
     public Vector2D[] computePodPowers(DrivePowers powers) {
         double forward = powers.forward();
