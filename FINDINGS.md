@@ -601,3 +601,23 @@ Found while building it (shipped code, not changed here): `gate.openPos/closePos
 `scoopula.scoopPos/unscoopPos` are all 0, so the gate and scoopula never move; and
 `shootingRegression` returns `(int) distance` in inches as the flywheel ticks/s target, a
 placeholder far below any shooting speed.
+
+## 2026-10-10 — bring-up: Pinpoint read every loop in DRIVE and FOLLOW (rule 9 declaration)
+
+Diagnostic only (`diagnostics/swerve/SwerveBringUp.java`), no data taken, untested on hardware.
+`readHeading` used to call `pinpoint.update()` every loop only in HEADING and in DRIVE with heading
+hold on; everywhere else it ran on the 5 Hz idle path. So in FOLLOW, and in DRIVE with heading hold
+off, `applyBoxLimit` and the FOLLOW breach backstop clamped on pose, velocity and heading up to
+200 ms old - about 9 in of travel at 45 in/s. Both modes now read the Pinpoint every loop
+(`poseInUse()`).
+
+Expected effect on measurement:
+- DRIVE with heading hold ON (the default, and every DRIVE number in CLAUDE.md §6): no change - it
+  already read every loop.
+- DRIVE with heading hold OFF: one more Pinpoint I2C read per loop. Compare against `msHeading`
+  1.81 ms (isolated read, CLAUDE.md §2) / 5.42 ms (incl. idle-path current and battery, §0.1
+  above); expect loop dt to grow by roughly that read (estimated, not measured).
+- FOLLOW: one more Pinpoint read per loop on top of the follower localizer's own read inside
+  `pedro.update()`. No FOLLOW loop rate is recorded in this file, so there is no pre-change
+  baseline; the first `pedrocheck.py` session should record `1/mean(dt)` in FOLLOW and label it
+  post-2026-10-10.

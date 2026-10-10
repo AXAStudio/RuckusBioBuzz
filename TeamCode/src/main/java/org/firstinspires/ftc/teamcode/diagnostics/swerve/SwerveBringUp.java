@@ -1292,6 +1292,16 @@ public class SwerveBringUp extends OpMode {
     }
 
     /**
+     * True while the robot can translate under the box/fence: applyBoxLimit (DRIVE) and the
+     * FOLLOW breach backstop act on pose, velocity and heading. On the 5 Hz idle path those are
+     * up to 200 ms old - about 9 in at 45 in/s - so these modes read the Pinpoint every loop
+     * whether or not heading hold is on (2026-10-10; it used to be heading-hold DRIVE only).
+     */
+    private boolean poseInUse() {
+        return mode == Mode.DRIVE || mode == Mode.FOLLOW;
+    }
+
+    /**
      * When set, the servo rail current is read every loop instead of on the 5 Hz idle path.
      *
      * <p>Off by default and deliberately so: each read is three Lynx transactions, which is
@@ -1404,7 +1414,7 @@ public class SwerveBringUp extends OpMode {
             headingOk = false;
             return;
         }
-        if (!headingInUse() && !refreshIdleSensors) {
+        if (!headingInUse() && !poseInUse() && !refreshIdleSensors) {
             return;
         }
         try {
