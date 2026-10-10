@@ -5,10 +5,13 @@ its own heading hold (kD, sign feed-forward), its own mixer config, no Foresight
 for SEARCHING gains and say nothing reliable about how the robot follows a path. Every gain is
 accepted only on what this script measures. See TUNING_TASK.md.
 
-    python pedrocheck.py suite --pods live|shipped --surface tiles --label NAME [--n 3]
-                         [--arms arms.json] [--only hold,turn,line,curve] [--power 0.5]
-    python pedrocheck.py path FILE.pp --line NAME|INDEX --pods shipped --surface tiles --label NAME
-                         [--power 0.5] [--n 3]
+    python pedrocheck.py suite --pods live|shipped --surface tiles --confirmed-floor --label NAME
+                         [--n 3] [--arms arms.json] [--only hold,turn,line,curve] [--power 0.5]
+    python pedrocheck.py path FILE.pp --line NAME|INDEX --pods shipped --surface tiles
+                         --confirmed-floor --label NAME [--power 0.5] [--n 3]
+
+--surface is the label on every result; the follower moves the robot, so the operator's
+confirmation must also be passed explicitly: --confirmed-floor with tiles, --on-blocks with blocks.
     python pedrocheck.py report [--label NAME]
 
 --pods live    the follower runs the TOOL's live pod calibration (validate before exporting)
@@ -223,9 +226,29 @@ def verdict(kind: str, m: dict) -> list[str]:
 
 # ---- running trials -----------------------------------------------------------------------
 
+def stop_follower():
+    """pedroStop straight to /cmd, retried. It used to go through cmd(), whose state() read comes
+    first - if that read failed the stop was never sent at all, from a finally block whose whole
+    job is to stop the robot. pedroStop is idempotent, so retries are safe."""
+    try:
+        _get("/cmd", {"action": "pedroStop"}, timeout=2.0, retries=4)
+    except BenchError as e:
+        print(f"could not send pedroStop ({e}) - operator: STOP on the Driver Station.")
+
+
 class Session:
     def __init__(self, a):
         self.a = a
+        # --surface is a label for the record; the follower drives the robot, so the operator's
+        # confirmation of where it is must be asserted explicitly, as robot.py drive requires
+        # (CLAUDE.md rule 8), and it must agree with the label.
+        if a.confirmed_floor == a.on_blocks:
+            raise SystemExit("REFUSED: pass exactly one of --confirmed-floor (operator confirmed "
+                             "THIS session: on the floor, inside the fence, area clear) or "
+                             "--on-blocks (operator confirmed: on blocks, strapped, hands clear).")
+        if (a.surface == "tiles") != bool(a.confirmed_floor):
+            raise SystemExit(f"REFUSED: --surface {a.surface} contradicts "
+                             f"{'--confirmed-floor' if a.confirmed_floor else '--on-blocks'}.")
         code, st, reason = gates(need_box=True)
         if code != EXIT_OK:
             raise SystemExit(f"NOT READY: {reason}")
@@ -351,10 +374,7 @@ def run_blocks(a, trials, arms):
                     print(f"[{tag}] {label}  " + (r.get("refused") or "; ".join(r["fails"])
                                                     or "all thresholds met"))
     finally:
-        try:
-            cmd("pedroStop")
-        except BenchError:
-            pass
+        stop_follower()
     summarize(results)
     return EXIT_OK if all(not r.get("fails") and "refused" not in r for r in results) \
         else EXIT_REFUSED
@@ -466,10 +486,7 @@ def cmd_path(a) -> int:
             print(f"[{'PASS' if not r.get('fails') and 'refused' not in r else 'FAIL'}] {label} "
                   + (r.get("refused") or "; ".join(r.get("fails", [])) or "all thresholds met"))
     finally:
-        try:
-            cmd("pedroStop")
-        except BenchError:
-            pass
+        stop_follower()
     summarize(results)
     return EXIT_OK if all(not r.get("fails") and "refused" not in r for r in results) \
         else EXIT_REFUSED
@@ -503,6 +520,12 @@ def main() -> int:
         p.add_argument("--pods", choices=["live", "shipped"], required=True)
         p.add_argument("--surface", choices=["tiles", "blocks"], required=True,
                        help="CLAUDE.md rule 7 - every result carries it")
+        p.add_argument("--confirmed-floor", action="store_true",
+                       help="operator confirmed THIS session: on the floor, in the fence, clear "
+                            "(required with --surface tiles; CLAUDE.md rule 8)")
+        p.add_argument("--on-blocks", action="store_true",
+                       help="operator confirmed: on blocks, strapped (required with --surface "
+                            "blocks)")
         p.add_argument("--label", required=True)
         p.add_argument("--n", type=int, default=3, help="blocks (repeats of every trial)")
         p.add_argument("--power", type=float, default=0.5,

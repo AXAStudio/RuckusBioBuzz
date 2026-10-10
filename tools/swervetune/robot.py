@@ -6,7 +6,9 @@ API with those rules built in, so the same checks run every time.
 
     python robot.py check                 gates: reachable / live / started / pose / box; exit code says which failed
     python robot.py state [--json]        compact snapshot (or the raw /state JSON)
-    python robot.py cmd ACTION [k=v ...]  send one command, then report what the OpMode said about it
+    python robot.py cmd ACTION [k=v ...] [--confirmed-floor | --on-blocks]
+                                          send one command, then report what the OpMode said about
+                                          it (motion actions need one of the two surface flags)
     python robot.py drive --f F [--s S] [--t T] --sec SEC (--confirmed-floor | --on-blocks) [--cap 0.30] [--rec LABEL]
     python robot.py pull LABEL            fetch the recorder CSV into runs/ and print true loop rate
     python robot.py stop                  zero the drive and put the OpMode in IDLE (OpMode keeps running)
@@ -37,9 +39,10 @@ import time
 
 from swervebench import BASE, BenchError, _archive, _get, _mean, parse_csv
 
-# Actions the OpMode itself treats as motion (SwerveBringUp.isMotionCommand), plus pedroChain,
-# which starts the follower on a path. These are sent exactly once: a retried drive or rawServo
-# lands late and restarts a timer, and a duplicate is worse than a dropped packet.
+# Actions the OpMode itself treats as motion (SwerveBringUp.isMotionCommand - keep the two in
+# step). These are sent exactly once: a retried drive or rawServo lands late and restarts a
+# timer, and a duplicate is worse than a dropped packet. Every one needs the floor/blocks
+# confirmation (surface_refusal) and, off blocks, the box gate.
 MOTION = {
     "wireScan", "sweep", "pulseMotor", "spinServo", "nudge", "pidStep", "pidStepAll", "rawServo",
     "autoTune", "headingStep", "headingGoto", "drive", "calGoto", "calHome", "calPositional",
@@ -243,10 +246,21 @@ def cmd_cmd(a) -> int:
               "and put 're-mark corners A and B' in the next OPS REQUEST.")
         return EXIT_REFUSED
     if a.action in MOTION:
-        code, _, reason = gates(need_box=a.action.startswith("pedro") or a.action == "headingGoto")
+        # The same gates `drive` uses (CLAUDE.md rule 8). headingStep is an open-loop 0.35
+        # spin and pulseMotor drives a wheel; the follower commands translate the robot - none
+        # of them is safer than a drive, and they used to pass with no floor confirmation (and
+        # headingStep / pulseMotor with no box either).
+        refusal = surface_refusal(a)
+        if refusal:
+            print(f"REFUSED {a.action}: {refusal}")
+            return EXIT_REFUSED
+        # Off blocks the box is mandatory. The follower needs it even on blocks (the OpMode
+        # refuses pedroStart without one), so it is checked here rather than discovered there.
+        code, _, reason = gates(need_box=not a.on_blocks or a.action.startswith("pedro"))
         if code != EXIT_OK:
             print(f"REFUSED {a.action}: {reason}")
             return code
+        print(f"surface={'blocks' if a.on_blocks else 'floor'}")
     try:
         before = state().get("message", "")
         send(a.action, **params)
@@ -258,11 +272,20 @@ def cmd_cmd(a) -> int:
     return EXIT_OK if ok else EXIT_REFUSED
 
 
-def cmd_drive(a) -> int:
+def surface_refusal(a) -> str | None:
+    """None when exactly one surface confirmation was passed, else why not. Every motion command
+    (`drive` and the MOTION set through `cmd`) goes through this."""
     if a.confirmed_floor == a.on_blocks:
-        print("REFUSED: pass exactly one of --confirmed-floor (operator confirmed THIS session: on "
-              "the floor, inside the taped box, area clear) or --on-blocks (operator confirmed: on "
-              "blocks, chassis strapped, hands and leads clear of the wheels).")
+        return ("pass exactly one of --confirmed-floor (operator confirmed THIS session: on the "
+                "floor, inside the taped box, area clear) or --on-blocks (operator confirmed: on "
+                "blocks, chassis strapped, hands and leads clear of the wheels).")
+    return None
+
+
+def cmd_drive(a) -> int:
+    refusal = surface_refusal(a)
+    if refusal:
+        print(f"REFUSED: {refusal}")
         return EXIT_REFUSED
     cap = a.cap
     if cap > HARD_CAP and not a.allow_fast:
@@ -682,6 +705,10 @@ def main() -> int:
     p.add_argument("params", nargs="*")
     p.add_argument("--clears-box-ok", action="store_true")
     p.add_argument("--pose-from-operator", action="store_true")
+    p.add_argument("--confirmed-floor", action="store_true",
+                   help="motion actions: operator confirmed on the floor, in the box, area clear")
+    p.add_argument("--on-blocks", action="store_true",
+                   help="motion actions: operator confirmed on blocks, strapped, hands clear")
     p.set_defaults(fn=cmd_cmd)
     p = sub.add_parser("drive")
     p.add_argument("--f", type=float, default=0.0, help="forward, robot frame, [-1, 1]")

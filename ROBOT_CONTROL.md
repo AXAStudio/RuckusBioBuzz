@@ -72,6 +72,7 @@ same from PowerShell or the Bash tool.
 python robot.py check                      # the gates; exit code says which failed
 python robot.py state [--json]             # compact snapshot / raw JSON
 python robot.py cmd ACTION k=v ...         # one command + what the OpMode said about it
+                                           #   motion actions: + --confirmed-floor | --on-blocks
 python robot.py drive --f 0.15 --sec 1.5 --confirmed-floor [--s S] [--t T] [--cap 0.30] [--rec LABEL]
 python robot.py pull LABEL                 # recorder CSV -> runs/, prints loop_hz_true
 python robot.py stop                       # drive 0,0,0 then stop -> IDLE (OpMode keeps running)
@@ -226,7 +227,9 @@ After "ready":
 3. Only then run the real experiment.
 
 Pass `--confirmed-floor` **only** if this session's operator reply said the robot is on the floor.
-That is CLAUDE.md rule 8, and the flag exists so you have to assert it every time. For steering
+That is CLAUDE.md rule 8, and the flag exists so you have to assert it every time - on `drive`,
+on every motion action through `cmd` (`headingStep`, `pulseMotor`, `pedro*`, ...), and on
+`pedrocheck.py`. For steering
 checks with the wheels in the air, pass `--on-blocks` instead. It skips the box and pose gates,
 since the pose cannot move, and is valid only after the operator has confirmed the chassis is
 strapped and hands and leads are clear. You must pass exactly one of the two flags.
@@ -256,7 +259,10 @@ parameter `pod=N` also **changes the selected pod** as a side effect. An unknown
 ### Commands (the switch is `SwerveBringUp.handleCommand`, about line 2730; grep `case "`)
 
 **Motion.** These are refused before START, and `robot.py` sends each of them once, with no
-retry:
+retry. `robot.py cmd` gates every one exactly like `robot.py drive`: exactly one of
+`--confirmed-floor` / `--on-blocks` (§3.5), and the box gate unless `--on-blocks` (the `pedro*`
+commands need the box either way). `pedrocheck.py` likewise needs `--confirmed-floor` with
+`--surface tiles` (or `--on-blocks` with `blocks`):
 
 | Action | Params | Notes |
 |---|---|---|

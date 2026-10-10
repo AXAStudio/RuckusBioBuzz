@@ -179,7 +179,9 @@ public class SwerveBringUp extends OpMode {
                 || "pedroStart".equals(action)
                 || "pedroLine".equals(action)
                 || "pedroHold".equals(action)
-                || "pedroCurve".equals(action);
+                || "pedroCurve".equals(action)
+                // Starts the follower on a whole path; was missing (robot.py's MOTION had it).
+                || "pedroChain".equals(action);
     }
 
     // ---------------------------------------------------------------- state
