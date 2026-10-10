@@ -34,6 +34,9 @@ public class shooter {
         intake.setAlliance(alliance);
 
     }
+    public boolean shooting(){
+        return state == states.SHOOT;
+    }
 
     public void update() {
         inZone = zone.predictedInZone();
@@ -58,7 +61,6 @@ public class shooter {
                 }
                 if (state == states.SHOOT) {
                     shooterGate.openGate();
-                    intake.update(false,true);
 
                 } else {
                     shooterGate.closeGate();
