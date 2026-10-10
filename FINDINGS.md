@@ -583,3 +583,21 @@ and it now deletes the hub box file like `resetImu` does - before, a reloaded bo
 was caught only by the origin/witness check. Odometry differences from Constants.java appear in
 `errors[]` and `/state` `odo`. The bring-up tool and DashboardDriveTeleOp now take the Pinpoint's
 device name from `Constants.pinpointConfig` (was a literal "pinpoint"; same value today).
+
+## 2026-10-10 — Mechanism Tuner and operator banners (rule 9 declaration)
+
+Diagnostic only, no data taken. New OpMode `Mechanism Tuner` (`diagnostics/tuning/`) and
+`tools/mechtune/mechtune.py` for flywheels, turrets, gate, scoopula and the intake color sensor;
+procedure in `MECHANISM_TUNING_TASK.md`. It never builds the drivetrain.
+
+The only change to the swerve tool: `diagnostics/swerve/dashboard.html` now loads
+`/tune/notify.js`, which polls `/tune/notes` once a second from the browser. That is one small
+extra HTTP request per second on the RC web server, on NanoHTTPD worker threads; nothing in the
+Swerve Bring-Up loop, `/swerve/state` or the recorder changes. Expected effect on any swerve
+measurement: none measurable (estimated, not measured). If a loop-rate comparison ever needs to
+rule it out, close the /swerve tab and drive from `robot.py`, which never loads the page.
+
+Found while building it (shipped code, not changed here): `gate.openPos/closePos` and
+`scoopula.scoopPos/unscoopPos` are all 0, so the gate and scoopula never move; and
+`shootingRegression` returns `(int) distance` in inches as the flywheel ticks/s target, a
+placeholder far below any shooting speed.
