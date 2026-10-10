@@ -212,8 +212,11 @@ footprint + heading indicator.
 
 ### Statistics rule (this repo has been burned by it three times)
 
-`loopHz` in the trace is **instantaneous 1/dt**. `mean(loopHz)` overweights fast
-loops and inflates the reported rate by **1.78–1.89×** across the whole archive.
+`loopHz` in traces recorded before **2026-08-13** (commit `06b0a97`) is an EMA of
+the instantaneous `1/dt` — rate-averaged, so it and `mean(loopHz)` overweight fast
+loops and inflate the reported rate by **1.78–1.89×** across that archive. Since
+`06b0a97`, `SwerveBringUp` records `1/EMA(dt)` (time-averaged, not inflated, but
+smoothed and lagging). Either way it is a display column, not a statistic.
 
 > Always report `loop_hz_true = 1 / mean(dt)`, plus `loop_dt_mean_ms` and
 > `loop_dt_p90_ms`. Never report `mean(loopHz)` without the word "inflated"
@@ -255,13 +258,17 @@ Swerve.epsilonTaper = true;  Swerve.demandSlewDegPerSec = 214;   // vendored, 20
   `turnServo.setPower()` only when `|turnPower − lastTurnPower| > 0.01`
   (dimensionless power units), plus a forced write at zero. It is **not** a pod
   encoder-read interval and **not** LynxModule bulk caching.
-  Why it matters: the PID takes error in **radians**, so at `turnKP = 0.200` a
-  0.01 command step ≈ `0.05 rad = 2.86°`. Inside `turnKSBandDeg = 2.0` the kS
-  relay is forced to zero, so the output is `kP·err ≤ 0.0070` — under the
-  threshold, so the command goes **stale** instead of updating. 2.86° sits
-  inside the measured 2.65–3.01° residual. Not a hard floor (kS = 0.045
-  measured 1.48°, also under threshold) — a stale CRServo command is a latched
-  *speed*. Treat it as a live criterion-3 hypothesis, not a footnote.
+  Why it was suspected: the PID takes error in **radians**, so at
+  `turnKP = 0.200` a 0.01 command step ≈ `0.05 rad = 2.86°`, inside the
+  measured 2.65–3.01° residual, and a stale CRServo command is a latched
+  *speed*. **Corrected 2026-10-10:** this bullet used to say the kS term is
+  forced to zero inside `turnKSBandDeg = 2.0`, so output ≤ `kP·err ≤ 0.0070`.
+  The code does not do that: inside 2° only the *sign input to the kF relay*
+  is zeroed (and kF = 0), while kS is continuous, `kS·tanh(err/band)`
+  (`CoaxialPod` "continuous static-friction feed-forward"). At the shipped
+  gains a 2° error commands ≈ 0.38·0.035 + 0.022·0.76 ≈ **0.030**, well above
+  the deadband, and at rest the 6° pulsed approach owns the pod anyway. The
+  hypothesis was A/B-tested 2026-08-16 and **not supported** — see §6.
 
 ## 6. Measured baseline (2026-08-13, ~12.2–12.5 V, on FTC tiles)
 

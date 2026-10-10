@@ -403,7 +403,8 @@ public class Constants {
     // as the mean of an instantaneous 1/dt column, which overweights short loops and reads ~1.8x
     // optimistic on every trace in tools/swervetune/runs. True throughput is 1/mean(dt). The
     // "33 Hz" and "~100 Hz" above are that inflated statistic; the honest pair is roughly 18 Hz
-    // and 50 Hz. The direction and the ranking of the fixes are unaffected - the absolute numbers
+    // and 50 Hz. So are DriveTeleOp's "30.7 Hz" and "75.8 Hz"; its first honest measurement was
+    // 99.3 Hz true (2026-08-16, CLAUDE.md section 6). The direction and the ranking of the fixes are unaffected - the absolute numbers
     // were wrong. The scorer now records loop_hz_true alongside the old figure.
     //
     // Known not met, off the ground: 90 degree settle to +/-2.0 deg is ~0.5 s against a 350 ms
@@ -452,6 +453,8 @@ public class Constants {
     //   feed-forward parks a cold pod slightly short; too much feeds the wide mode. Pod 0 takes
     //   the wider band (0/15 wide, 0 wobbles, |e3| 0.79 on the hot plant), pods 1-2 take kS
     //   0.024 (pod 2: 0/15 wide, 0 wobbles), measured per pod, not assumed transferable.
+    //   SUPERSEDED: that per-pod assignment is history. The arrays in TUNED VALUES at the top are
+    //   uniform again - kS 0.022 and band 2.0 deg on every pod (CLAUDE.md section 5).
     public static final double turnKP = 0.320;
     public static final double turnKD = 0.022;
 
