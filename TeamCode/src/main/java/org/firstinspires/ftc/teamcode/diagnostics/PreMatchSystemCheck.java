@@ -5,15 +5,34 @@ import com.pedropathing.follower.Follower;
 import com.pedropathing.math.Pose;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
+import com.qualcomm.robotcore.hardware.ColorSensor;
+import com.qualcomm.robotcore.hardware.DcMotor;
+import com.qualcomm.robotcore.hardware.DcMotorEx;
+import com.qualcomm.robotcore.hardware.DcMotorSimple;
+import com.qualcomm.robotcore.hardware.Servo;
 import com.qualcomm.robotcore.hardware.VoltageSensor;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
+import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
+import org.firstinspires.ftc.teamcode.systems.flywheel;
+import org.firstinspires.ftc.teamcode.systems.gate;
+import org.firstinspires.ftc.teamcode.systems.scoopula;
+import org.firstinspires.ftc.teamcode.systems.turret;
 
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+/**
+ * Pre-match check: drivetrain response first (needs floor space), then every mechanism.
+ *
+ * Mechanism checks only answer "is it connected, does its encoder count, does it turn the way the
+ * shipped code expects". Motors are judged by encoder velocity and current; positional servos have
+ * no feedback, so they are moved and flagged LOOK for the operator to confirm by eye. The
+ * mechanisms are not built yet (2026-10-10): the thresholds below are placeholders, and the gate
+ * and scoopula are skipped with a warning while their positions are still unset.
+ */
 @Autonomous(name = "PreMatchSystemCheck", group = "Diagnostics")
 public class PreMatchSystemCheck extends OpMode {
     private static final Pose START_POSE = new Pose(0.0, 0.0, 0.0);
@@ -32,6 +51,13 @@ public class PreMatchSystemCheck extends OpMode {
 
     /** Pods Swerve.debug() must report, one nested map each. */
     private static final int EXPECTED_PODS = 4;
+
+    // Mechanism thresholds - placeholders until the mechanisms exist. They separate "connected and
+    // turning the configured way" from "unplugged / encoder unplugged / reversed", nothing finer.
+    private static final double FLYWHEEL_CHECK_POWER = 0.40;
+    private static final double MIN_FLYWHEEL_TPS = 100.0;
+    private static final double INTAKE_CHECK_POWER = 0.50;
+    private static final double MIN_MOTOR_AMPS = 0.05;
 
     private static final CheckStep[] STEPS = new CheckStep[] {
             new CheckStep("Settle before checks", CheckType.SETTLE, 0.0, 0.0, 0.0, 0.40),
@@ -55,17 +81,20 @@ public class PreMatchSystemCheck extends OpMode {
                     0.0, 0.0, -CHECK_POWER, DRIVE_SECONDS)
     };
 
+    private static final MechStep[] MECH_STEPS = MechStep.values();
+
     private final ElapsedTime stepTimer = new ElapsedTime();
     private final List<String> failures = new ArrayList<>();
     private final List<String> warnings = new ArrayList<>();
+    /** One line per mechanism, shown under "Mechanisms" - PASS / FAIL / LOOK / SKIPPED. */
+    private final List<String> mechanismResults = new ArrayList<>();
 
     private Follower follower;
     /** The sensor Pedro 2's Swerve.getVoltage() read; Pedro 3's Drivetrain has no accessor. */
     private VoltageSensor voltageSensor;
     private Pose stepStartPose = START_POSE;
     private int stepIndex;
-    private boolean running;
-    private boolean complete;
+    private Phase phase = Phase.WAITING;
     private boolean batteryChecked;
     private String fatalInitError;
     private String lastStepResult = "Waiting for start";
@@ -73,6 +102,23 @@ public class PreMatchSystemCheck extends OpMode {
     private double maxVelocityThisStep;
     private double maxDrivePowerThisStep;
     private double maxServoPowerThisStep;
+
+    // Mechanisms - null when missing from the active config (already recorded as a failure).
+    private DcMotorEx pollenFlywheel;
+    private DcMotorEx nectarFlywheel;
+    private DcMotorEx intakeLeft;
+    private DcMotorEx intakeRight;
+    private Servo pollenTurretServo;
+    private Servo nectarTurretServo;
+    private ColorSensor colorSensor;
+    private gate shooterGate;
+    private scoopula scoopula;
+
+    private int mechIndex;
+    /** Signed velocity of largest magnitude seen this step, ticks/s. */
+    private double peakVelocityThisStep;
+    private final double[] maxAmpsThisStep = new double[2];
+    private boolean servoReturned;
 
     @Override
     public void init() {
@@ -89,6 +135,7 @@ public class PreMatchSystemCheck extends OpMode {
             addFailure("Follower failed to initialize. Check hardware names and Pedro constants.");
         }
 
+        initMechanisms();
         updateTelemetry();
     }
 
@@ -104,8 +151,11 @@ public class PreMatchSystemCheck extends OpMode {
 
     @Override
     public void start() {
+        checkBatteryVoltage();
+
         if (follower == null) {
-            complete = true;
+            // No drivetrain to test; the mechanisms still get checked.
+            beginMechanismPhase();
             return;
         }
 
@@ -113,22 +163,35 @@ public class PreMatchSystemCheck extends OpMode {
         follower.manual(DrivePowers.zero());
         follower.update();
 
-        checkBatteryVoltage();
-
         stepIndex = 0;
-        complete = false;
-        running = true;
+        phase = Phase.DRIVE;
         beginStep();
     }
 
     @Override
     public void loop() {
-        if (follower == null || complete) {
-            stopFollower();
-            updateTelemetry();
-            return;
+        switch (phase) {
+            case DRIVE:
+                runDriveStep();
+                break;
+            case MECHANISMS:
+                runMechanismStep();
+                break;
+            default:
+                stopFollower();
+                break;
         }
 
+        updateTelemetry();
+    }
+
+    @Override
+    public void stop() {
+        stopFollower();
+        stopMechanisms();
+    }
+
+    private void runDriveStep() {
         CheckStep step = STEPS[stepIndex];
         follower.manual(new DrivePowers(step.forward, step.strafe, step.turn));
         follower.update();
@@ -140,23 +203,12 @@ public class PreMatchSystemCheck extends OpMode {
             stepIndex++;
 
             if (stepIndex >= STEPS.length) {
-                complete = true;
-                running = false;
-                lastStepResult = failures.isEmpty()
-                        ? "All autonomous checks completed"
-                        : "Autonomous checks completed with issues";
                 stopFollower();
+                beginMechanismPhase();
             } else {
                 beginStep();
             }
         }
-
-        updateTelemetry();
-    }
-
-    @Override
-    public void stop() {
-        stopFollower();
     }
 
     private void beginStep() {
@@ -273,12 +325,305 @@ public class PreMatchSystemCheck extends OpMode {
         maxServoPowerThisStep = Math.max(maxServoPowerThisStep, maxAbsPodValue(debug, "servoPower"));
     }
 
+    // ------------------------------------------------------------------------- mechanisms
+
+    /** Looks every mechanism device up by the names systems/ uses. Writes nothing. */
+    private void initMechanisms() {
+        pollenFlywheel = device(DcMotorEx.class, "pollenTurret", "pollen flywheel");
+        nectarFlywheel = device(DcMotorEx.class, "nectarTurret", "nectar flywheel");
+        intakeLeft = device(DcMotorEx.class, "intakeLeft", "intake");
+        intakeRight = device(DcMotorEx.class, "intakeRight", "intake");
+        pollenTurretServo = device(Servo.class, "pollenTurretServo", "pollen turret");
+        nectarTurretServo = device(Servo.class, "nectarTurretServo", "nectar turret");
+        colorSensor = device(ColorSensor.class, "colorSensor", "intake color sensor");
+        if (device(Servo.class, "turretGate", "shooter gate") != null) {
+            shooterGate = new gate(hardwareMap);
+        }
+        if (device(Servo.class, "scoopula", "scoopula") != null) {
+            scoopula = new scoopula(hardwareMap);
+        }
+
+        checkTurretTravel("Pollen", turret.POLLEN_TURRET_GEAR_RATIO);
+        checkTurretTravel("Nectar", turret.NECTAR_TURRET_GEAR_RATIO);
+    }
+
+    private <T> T device(Class<T> type, String name, String what) {
+        T d = hardwareMap.tryGet(type, name);
+        if (d == null) {
+            addFailure("Missing " + what + " \"" + name + "\" (" + type.getSimpleName()
+                    + ") in the active config.");
+        }
+        return d;
+    }
+
+    /** turret.track can only reach every heading if the turret covers a full turn. */
+    private void checkTurretTravel(String name, double[] gearRatio) {
+        double range = turret.SERVO_RANGE_DEG * gearRatio[1] / gearRatio[0];
+        if (!isFinite(range) || range < 360.0) {
+            addWarning(name + " turret covers " + format(range) + " deg over the servo's travel; "
+                    + "under 360 it cannot aim at every heading.");
+        }
+    }
+
+    private void beginMechanismPhase() {
+        phase = Phase.MECHANISMS;
+        checkColorSensor();
+        mechIndex = 0;
+        beginMechanismStep();
+    }
+
+    private void checkColorSensor() {
+        if (colorSensor == null) {
+            mechanismResults.add("Color sensor: SKIPPED (missing)");
+            return;
+        }
+        try {
+            int r = colorSensor.red();
+            int g = colorSensor.green();
+            int b = colorSensor.blue();
+            int a = colorSensor.alpha();
+            String reading = "r " + r + " g " + g + " b " + b + " a " + a;
+            if (r == 0 && g == 0 && b == 0 && a == 0) {
+                addFailure("Color sensor reads all zeros. Check its cable, and that the config's "
+                        + "device type matches the fitted sensor.");
+                mechanismResults.add("Color sensor: FAIL (" + reading + ")");
+            } else {
+                mechanismResults.add("Color sensor: PASS (" + reading + ")");
+            }
+        } catch (RuntimeException e) {
+            addFailure("Color sensor read threw " + e.getClass().getSimpleName() + ".");
+            mechanismResults.add("Color sensor: FAIL (read threw)");
+        }
+    }
+
+    private void beginMechanismStep() {
+        MechStep step = MECH_STEPS[mechIndex];
+        peakVelocityThisStep = 0.0;
+        maxAmpsThisStep[0] = 0.0;
+        maxAmpsThisStep[1] = 0.0;
+        servoReturned = false;
+        lastStepResult = "Running: " + step.label;
+        stepTimer.reset();
+
+        switch (step) {
+            case POLLEN_FLYWHEEL:
+                startFlywheel(pollenFlywheel, flywheel.POLLEN_FLYWHEEL_REVERSED);
+                break;
+            case NECTAR_FLYWHEEL:
+                startFlywheel(nectarFlywheel, flywheel.NECTAR_FLYWHEEL_REVERSED);
+                break;
+            case INTAKE:
+                // Same sign systems/intake uses for INTAKE.
+                setPower(intakeLeft, INTAKE_CHECK_POWER);
+                setPower(intakeRight, INTAKE_CHECK_POWER);
+                break;
+            case TURRETS:
+                if (pollenTurretServo != null) {
+                    pollenTurretServo.setPosition(turret.POLLEN_TURRET_CENTER);
+                }
+                if (nectarTurretServo != null) {
+                    nectarTurretServo.setPosition(turret.NECTAR_TURRET_CENTER);
+                }
+                break;
+            case GATE:
+                if (shooterGate != null && shooterGate.positionsSet()) {
+                    shooterGate.openGate();
+                }
+                break;
+            case SCOOPULA:
+                if (scoopula != null && scoopula.positionsSet()) {
+                    scoopula.update(true);
+                }
+                break;
+        }
+    }
+
+    private void runMechanismStep() {
+        MechStep step = MECH_STEPS[mechIndex];
+
+        switch (step) {
+            case POLLEN_FLYWHEEL:
+                sampleMotor(pollenFlywheel, 0, true);
+                break;
+            case NECTAR_FLYWHEEL:
+                sampleMotor(nectarFlywheel, 0, true);
+                break;
+            case INTAKE:
+                sampleMotor(intakeLeft, 0, false);
+                sampleMotor(intakeRight, 1, false);
+                break;
+            case GATE:
+                // Open for the first half, closed for the second, so it ends where TeleOp starts.
+                if (!servoReturned && stepTimer.seconds() >= step.seconds / 2
+                        && shooterGate != null && shooterGate.positionsSet()) {
+                    shooterGate.closeGate();
+                    servoReturned = true;
+                }
+                break;
+            case SCOOPULA:
+                if (!servoReturned && stepTimer.seconds() >= step.seconds / 2
+                        && scoopula != null && scoopula.positionsSet()) {
+                    scoopula.update(false);
+                    servoReturned = true;
+                }
+                break;
+            default:
+                break;
+        }
+
+        if (stepTimer.seconds() >= step.seconds) {
+            finishMechanismStep(step);
+            mechIndex++;
+            if (mechIndex >= MECH_STEPS.length) {
+                stopMechanisms();
+                phase = Phase.DONE;
+                lastStepResult = failures.isEmpty()
+                        ? "All checks completed"
+                        : "Checks completed with issues";
+            } else {
+                beginMechanismStep();
+            }
+        }
+    }
+
+    private void finishMechanismStep(MechStep step) {
+        switch (step) {
+            case POLLEN_FLYWHEEL:
+                setPower(pollenFlywheel, 0.0);
+                judgeFlywheel("Pollen flywheel", pollenFlywheel, "POLLEN_FLYWHEEL_REVERSED");
+                break;
+            case NECTAR_FLYWHEEL:
+                setPower(nectarFlywheel, 0.0);
+                judgeFlywheel("Nectar flywheel", nectarFlywheel, "NECTAR_FLYWHEEL_REVERSED");
+                break;
+            case INTAKE:
+                setPower(intakeLeft, 0.0);
+                setPower(intakeRight, 0.0);
+                judgeCurrent("Intake left", intakeLeft, maxAmpsThisStep[0]);
+                judgeCurrent("Intake right", intakeRight, maxAmpsThisStep[1]);
+                break;
+            case TURRETS:
+                mechanismResults.add(pollenTurretServo == null && nectarTurretServo == null
+                        ? "Turrets: SKIPPED (missing)"
+                        : "Turrets: LOOK - both should have moved to their centre position");
+                break;
+            case GATE:
+                judgeServo("Gate", shooterGate != null, shooterGate != null && shooterGate.positionsSet(),
+                        "should have opened, then closed");
+                break;
+            case SCOOPULA:
+                judgeServo("Scoopula", scoopula != null, scoopula != null && scoopula.positionsSet(),
+                        "should have scooped, then stowed");
+                break;
+        }
+        lastStepResult = step.label + " done";
+    }
+
+    private void startFlywheel(DcMotorEx motor, boolean reversed) {
+        if (motor == null) {
+            return;
+        }
+        // The direction systems/flywheel applies, open loop: this checks wiring, encoder and
+        // direction without depending on the (untuned) velocity PIDF.
+        motor.setDirection(reversed ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD);
+        motor.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
+        motor.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
+        motor.setPower(FLYWHEEL_CHECK_POWER);
+    }
+
+    private void sampleMotor(DcMotorEx motor, int slot, boolean trackVelocity) {
+        if (motor == null) {
+            return;
+        }
+        double amps = motor.getCurrent(CurrentUnit.AMPS);
+        if (isFinite(amps)) {
+            maxAmpsThisStep[slot] = Math.max(maxAmpsThisStep[slot], amps);
+        }
+        if (trackVelocity) {
+            double v = motor.getVelocity();
+            if (isFinite(v) && Math.abs(v) > Math.abs(peakVelocityThisStep)) {
+                peakVelocityThisStep = v;
+            }
+        }
+    }
+
+    private void judgeFlywheel(String name, DcMotorEx motor, String reversedFlag) {
+        if (motor == null) {
+            mechanismResults.add(name + ": SKIPPED (missing)");
+            return;
+        }
+        double v = peakVelocityThisStep;
+        double amps = maxAmpsThisStep[0];
+        String reading = format(v) + " ticks/s, " + format(amps) + " A";
+        if (v <= -MIN_FLYWHEEL_TPS) {
+            // shooter targets are positive and atSpeed compares against them, so this never shoots.
+            addFailure(name + " turns backwards for positive power (" + reading + "). Flip "
+                    + "flywheel." + reversedFlag + ", or the encoder is reversed.");
+            mechanismResults.add(name + ": FAIL reversed (" + reading + ")");
+        } else if (v < MIN_FLYWHEEL_TPS) {
+            if (amps < MIN_MOTOR_AMPS) {
+                addFailure(name + " drew no current at power " + format(FLYWHEEL_CHECK_POWER)
+                        + ". Motor unplugged or on the wrong port?");
+            } else {
+                addFailure(name + " draws " + format(amps) + " A but its encoder reads "
+                        + format(v) + " ticks/s. Encoder cable unplugged, or the wheel is jammed?");
+            }
+            mechanismResults.add(name + ": FAIL (" + reading + ")");
+        } else {
+            mechanismResults.add(name + ": PASS (" + reading + ")");
+        }
+    }
+
+    private void judgeCurrent(String name, DcMotorEx motor, double amps) {
+        if (motor == null) {
+            mechanismResults.add(name + ": SKIPPED (missing)");
+        } else if (amps < MIN_MOTOR_AMPS) {
+            addFailure(name + " drew no current at power " + format(INTAKE_CHECK_POWER)
+                    + ". Motor unplugged or on the wrong port?");
+            mechanismResults.add(name + ": FAIL (" + format(amps) + " A)");
+        } else {
+            mechanismResults.add(name + ": PASS (" + format(amps) + " A) - LOOK: did it intake?");
+        }
+    }
+
+    private void judgeServo(String name, boolean present, boolean positionsSet, String expected) {
+        if (!present) {
+            mechanismResults.add(name + ": SKIPPED (missing)");
+        } else if (!positionsSet) {
+            addWarning(name + " positions are still placeholders (both ends equal); not moved. "
+                    + "Set them with the Mechanism Tuner.");
+            mechanismResults.add(name + ": SKIPPED (positions not set)");
+        } else {
+            mechanismResults.add(name + ": LOOK - " + expected);
+        }
+    }
+
+    private void setPower(DcMotorEx motor, double power) {
+        if (motor != null) {
+            motor.setPower(power);
+        }
+    }
+
+    private void stopMechanisms() {
+        setPower(pollenFlywheel, 0.0);
+        setPower(nectarFlywheel, 0.0);
+        setPower(intakeLeft, 0.0);
+        setPower(intakeRight, 0.0);
+    }
+
+    // ------------------------------------------------------------------------- shared
+
     private void checkBatteryVoltage() {
-        if (batteryChecked || follower == null) {
+        if (batteryChecked) {
             return;
         }
 
         batteryChecked = true;
+        if (voltageSensor == null) {
+            voltageSensor = hardwareMap.voltageSensor.iterator().hasNext()
+                    ? hardwareMap.voltageSensor.iterator().next()
+                    : null;
+        }
         double voltage = readVoltage();
         if (!isFinite(voltage)) {
             addFailure("Battery voltage reading is invalid.");
@@ -367,13 +712,18 @@ public class PreMatchSystemCheck extends OpMode {
         telemetry.addData("Overall", overallStatus());
         telemetry.addData("Last Step", lastStepResult);
 
-        if (running && !complete) {
+        if (phase == Phase.DRIVE) {
             CheckStep step = STEPS[stepIndex];
-            telemetry.addData("Step", "%d/%d %s", stepIndex + 1, STEPS.length, step.name);
+            telemetry.addData("Step", "drive %d/%d %s", stepIndex + 1, STEPS.length, step.name);
             telemetry.addData("Step Time", "%.2f / %.2f s", stepTimer.seconds(),
                     step.durationSeconds);
             telemetry.addData("Command", "f %.2f | s %.2f | t %.2f",
                     step.forward, step.strafe, step.turn);
+        } else if (phase == Phase.MECHANISMS) {
+            MechStep step = MECH_STEPS[mechIndex];
+            telemetry.addData("Step", "mechanism %d/%d %s", mechIndex + 1, MECH_STEPS.length,
+                    step.label);
+            telemetry.addData("Step Time", "%.2f / %.2f s", stepTimer.seconds(), step.seconds);
         }
 
         if (follower != null) {
@@ -384,9 +734,12 @@ public class PreMatchSystemCheck extends OpMode {
             telemetry.addData("Max Velocity This Step", "%.2f", maxVelocityThisStep);
             telemetry.addData("Max Drive Power This Step", "%.2f", maxDrivePowerThisStep);
             telemetry.addData("Max Servo Power This Step", "%.2f", maxServoPowerThisStep);
-            telemetry.addData("Battery (V)", "%.2f", readVoltage());
         }
+        telemetry.addData("Battery (V)", "%.2f", readVoltage());
 
+        for (int i = 0; i < mechanismResults.size(); i++) {
+            telemetry.addData("Mechanism " + (i + 1), mechanismResults.get(i));
+        }
         addIssueTelemetry("Failures", failures);
         addIssueTelemetry("Warnings", warnings);
         telemetry.addData("Swerve Debug", lastDebugString);
@@ -414,11 +767,11 @@ public class PreMatchSystemCheck extends OpMode {
             return "FAIL";
         }
 
-        if (!running && !complete) {
+        if (phase == Phase.WAITING) {
             return "READY";
         }
 
-        if (!complete) {
+        if (phase != Phase.DONE) {
             return "RUNNING";
         }
 
@@ -465,6 +818,13 @@ public class PreMatchSystemCheck extends OpMode {
         return String.format("%.2f", value);
     }
 
+    private enum Phase {
+        WAITING,
+        DRIVE,
+        MECHANISMS,
+        DONE
+    }
+
     private enum CheckType {
         SETTLE,
         FORWARD_POSITIVE,
@@ -473,6 +833,23 @@ public class PreMatchSystemCheck extends OpMode {
         STRAFE_NEGATIVE,
         TURN_POSITIVE,
         TURN_NEGATIVE
+    }
+
+    private enum MechStep {
+        POLLEN_FLYWHEEL("Pollen flywheel spin", 1.0),
+        NECTAR_FLYWHEEL("Nectar flywheel spin", 1.0),
+        INTAKE("Intake run", 0.6),
+        TURRETS("Turrets to centre", 0.8),
+        GATE("Gate open / close", 0.8),
+        SCOOPULA("Scoopula scoop / stow", 0.8);
+
+        final String label;
+        final double seconds;
+
+        MechStep(String label, double seconds) {
+            this.label = label;
+            this.seconds = seconds;
+        }
     }
 
     private static class CheckStep {

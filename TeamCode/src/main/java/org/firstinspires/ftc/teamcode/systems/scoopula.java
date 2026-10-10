@@ -18,5 +18,9 @@ public class scoopula {
             scoopula.setPosition(unscoopPos);
         }
     }
+    /** False while scoop and unscoop are still the same placeholder value. */
+    public boolean positionsSet() {
+        return scoopPos != unscoopPos;
+    }
 
 }

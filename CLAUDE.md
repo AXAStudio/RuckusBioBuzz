@@ -69,7 +69,7 @@ TeamCode/src/main/java/org/firstinspires/ftc/teamcode/
 ├── helpers/                             HivePosition, Alliance, PoseStorage (autos clear at init + save in stop(), TeleOp init take()s it once)
 ├── field/biobuzz_field.json             BIOBUZZ obstacles - ONE source: the visualizer imports it, the bring-up field fence loads it
 ├── fieldview/                           http://192.168.43.1:8080/field - live field, robot, predicted pose, zone (TeleOp publishes at 20 Hz)
-├── diagnostics/                         PreMatchSystemCheck, motorbreakin
+├── diagnostics/                         PreMatchSystemCheck (drive response, then every mechanism), motorbreakin
 ├── diagnostics/tests/                   blobDetectionTest, colorTunerTest, rangeTest, spinUpTest
 ├── diagnostics/tuning/                  DIAGNOSTIC ONLY — "Mechanism Tuner" OpMode + /tune dashboard: flywheel PIDF
 │                                         (step / kick / shot recovery / ff sweep), turrets, gate, scoopula, intake color;

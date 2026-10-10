@@ -18,4 +18,8 @@ public class gate {
     public void closeGate(){
         gate.setPosition(closePos);
     }
+    /** False while open and close are still the same placeholder value. */
+    public boolean positionsSet(){
+        return openPos != closePos;
+    }
 }
