@@ -399,7 +399,17 @@ public class CoaxialPod implements SwervePod {
         // worst on the stiff pod. Straight lines and parking never showed it (their demand
         // holds still); arcs need the continuous loop.
         lastMovePulsed = false;
-        if (pulsedApproach && Math.abs(drivePower) < PULSE_DRIVE_GATE
+        if (ignoreAngleChanges) {
+            // RUCKUS PATCH: a released pod is not being steered - the servo is forced to 0 below -
+            // so the pulse state machine must not run. Left running, it "fired" pulses the servo
+            // never received, the pod never moved, every one counted as stalled, and the ladder
+            // climbed 0.035 -> 0.13 in ~0.5 s of release; the first REAL pulse afterwards fired
+            // at the cap. End the episode instead: no pending pulse or coast, stall history
+            // cleared, fire power back to base.
+            pulseEndNano = 0;
+            pulseLastAbsErr = Double.NaN;
+            pulseFirePower = pulsePower;
+        } else if (pulsedApproach && Math.abs(drivePower) < PULSE_DRIVE_GATE
                 && Math.abs(errorRad) < pulseBandRad) {
             lastMovePulsed = true;
             if (nowNano < pulseEndNano) {
