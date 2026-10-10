@@ -153,7 +153,7 @@ class ForwardVelocity extends TuningOpMode<Double> {
 
         waitForStart();
 
-        while (!end) {
+        while (!end && !isStopRequested()) {
             localizer.update();
             if (Math.abs(localizer.pose().x()) > distance) {
                 end = true;
@@ -208,7 +208,7 @@ class StrafeVelocity extends TuningOpMode<Double> {
 
         waitForStart();
 
-        while (!end) {
+        while (!end && !isStopRequested()) {
             localizer.update();
             if (Math.abs(localizer.pose().y()) > distance) {
                 end = true;
@@ -266,9 +266,11 @@ class ForwardDeceleration extends TuningOpMode<Double> {
         DrivePowers power = new DrivePowers(1, 0, 0);
         waitForStart();
 
-        drivetrain.drive(power, false);
-
-        while (!stopping) {
+        // Swerve pods only steer inside drive() (CoaxialPod.move), so the command must be
+        // re-sent every loop; a single call latches each CRServo at its first speed and the pods
+        // spin. Upstream Quickstart assumes a set-and-forget mecanum drivetrain.
+        while (!stopping && !isStopRequested()) {
+            drivetrain.drive(power, false);
             localizer.update();
             double currentVelocity = localizer.twist().toVector2D().x();
             if (currentVelocity > velocity) {
@@ -282,7 +284,7 @@ class ForwardDeceleration extends TuningOpMode<Double> {
 
         boolean end = false;
 
-        while (!end) {
+        while (!end && !isStopRequested()) {
             localizer.update();
             double currentVelocity = localizer.twist().toVector2D().x();
             long currentTimeNano = System.nanoTime();
@@ -354,9 +356,11 @@ class StrafeDeceleration extends TuningOpMode<Double> {
         DrivePowers power = new DrivePowers(0, 1, 0);
         waitForStart();
 
-        drivetrain.drive(power, false);
-
-        while (!stopping) {
+        // Swerve pods only steer inside drive() (CoaxialPod.move), so the command must be
+        // re-sent every loop; a single call latches each CRServo at its first speed and the pods
+        // spin. Upstream Quickstart assumes a set-and-forget mecanum drivetrain.
+        while (!stopping && !isStopRequested()) {
+            drivetrain.drive(power, false);
             localizer.update();
             double currentVelocity = localizer.twist().toVector2D().y();
             if (currentVelocity > velocity) {
@@ -370,7 +374,7 @@ class StrafeDeceleration extends TuningOpMode<Double> {
 
         boolean end = false;
 
-        while (!end) {
+        while (!end && !isStopRequested()) {
             localizer.update();
             double currentVelocity = localizer.twist().toVector2D().y();
             long currentTimeNano = System.nanoTime();
@@ -592,9 +596,10 @@ class HeadingTuner extends TuningOpMode<Double> {
         waitForStart();
         timer.reset();
         lastTime = timer.seconds();
-        drivetrain.drive(new DrivePowers(0.0, 0.0, POWER), false);
 
         while (!done && !isStopRequested()) {
+            // Re-sent every loop: swerve pods only steer inside drive().
+            drivetrain.drive(new DrivePowers(0.0, 0.0, POWER), false);
             double now = timer.seconds();
             double dt = now - lastTime;
             if (dt <= 0) dt = 1e-6;
@@ -1034,9 +1039,10 @@ class ForwardTranslational extends TuningOpMode<List<Double>> {
         waitForStart();
         timer.reset();
         lastTime = timer.seconds();
-        drivetrain.drive(new DrivePowers(POWER, 0.0, 0.0), false);
 
         while (!done && !isStopRequested()) {
+            // Re-sent every loop: swerve pods only steer inside drive().
+            drivetrain.drive(new DrivePowers(POWER, 0.0, 0.0), false);
             double now = timer.seconds();
             double dt = now - lastTime;
             if (dt <= 0) dt = 1e-6;
@@ -1149,9 +1155,10 @@ class StrafeTranslational extends TuningOpMode<List<Double>> {
         waitForStart();
         timer.reset();
         lastTime = timer.seconds();
-        drivetrain.drive(new DrivePowers(0.0, POWER, 0.0), false);
 
         while (!done && !isStopRequested()) {
+            // Re-sent every loop: swerve pods only steer inside drive().
+            drivetrain.drive(new DrivePowers(0.0, POWER, 0.0), false);
             double now = timer.seconds();
             double dt = now - lastTime;
             if (dt <= 0) dt = 1e-6;
