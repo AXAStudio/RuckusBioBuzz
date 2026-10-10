@@ -208,6 +208,7 @@
       is exactly what makes FTC Dashboard's gamepad cut out. If the axes below move, the controller
       is reaching the browser fine.
     </div>
+    <div id="padWarn" class="issue" style="display:none;margin-bottom:10px"></div>
     <table class="pods">
       <thead><tr><th>Axis</th><th>Raw</th><th>Sent</th></tr></thead>
       <tbody id="padRows"><tr><td colspan="3" class="dim">Waiting for a controller&hellip;</td></tr></tbody>
@@ -599,13 +600,26 @@ function focFlag() {
   return b && b.checked ? 1 : 0;
 }
 
-function drive(f, s, t) {
-  drivePending = {f: f, s: s, t: t, foc: focFlag()};
+// foc: omitted = the checkbox; the circle test passes 0 to stay robot-frame as it always was.
+function drive(f, s, t, foc) {
+  drivePending = {f: f, s: s, t: t, foc: foc === undefined ? focFlag() : foc};
   pumpDrive();
 }
 
+// Set by STOP ALL while a drive request is still on the wire: that request can reach the robot
+// AFTER the stop and put it back into DRIVE (any drive, zero included, re-enters DRIVE), so a
+// second stop follows it once it has landed.
+var stopAfterDrive = false;
+
 function pumpDrive() {
-  if (driveInFlight || drivePending === null) return;
+  if (driveInFlight) return;
+  if (drivePending === null) {
+    if (stopAfterDrive) {
+      stopAfterDrive = false;
+      cmd('stop');
+    }
+    return;
+  }
   var p = drivePending;
   drivePending = null;
   driveInFlight = true;
@@ -618,10 +632,18 @@ function pumpDrive() {
 // One stop to rule out every sender: the pad loop, the hold-buttons and the circle test all
 // re-send within 60-150 ms, so a bare cmd('stop') used to be overridden almost immediately -
 // STOP ALL visibly did not stop the robot while gamepad driving was on.
+//
+// `stop` must be the LAST thing the robot hears. Stopping each sender the normal way queues a
+// final zero drive, which could land after `stop` and re-enter DRIVE (X-lock, heading hold), so
+// here every sender is halted silently, anything queued is dropped, and `stop` goes out now and
+// again behind any drive already in flight. The server is deliberately left alone: bench scripts
+// (pulsedab.py) use a zero drive to enter DRIVE on purpose.
 function stopEverything() {
-  if (typeof padDriving !== 'undefined' && padDriving) setPadDriving(false);
-  if (typeof circleTimer !== 'undefined' && circleTimer !== null) toggleCircle();
-  driveStop();
+  if (typeof padDriving !== 'undefined' && padDriving) setPadDriving(false, true);
+  if (typeof circleTimer !== 'undefined' && circleTimer !== null) stopCircle(true);
+  driveStop(true);
+  drivePending = null;
+  if (driveInFlight) stopAfterDrive = true;
   cmd('stop');
 }
 
@@ -638,12 +660,13 @@ function driveStart(f, s, t) {
   driveTimer = setInterval(function () { drive(f, s, t); }, 150);
 }
 
-function driveStop() {
+// silent: halt without the final zero drive (STOP ALL sends `stop` instead).
+function driveStop(silent) {
   // Guarded so an ordinary click elsewhere on the page does not push the robot into drive mode.
   if (driveTimer === null) return;
   clearInterval(driveTimer);
   driveTimer = null;
-  drive(0, 0, 0);
+  if (silent !== true) drive(0, 0, 0);
 }
 
 (function buildDriveButtons() {
@@ -757,12 +780,41 @@ var PAD_SEND_MS = 60;
 var padDriving = false;
 var padLastSend = 0;
 
-function setPadDriving(on) {
+// The axis indices below (0 left X, 1 left Y, 2 right X) are only defined for the Standard
+// Gamepad mapping. On any other mapping axes[2] can be a trigger that rests at -1 - a full-power
+// turn the moment driving starts - so pad driving is refused, not guessed at.
+function padRefusal(p) {
+  if (!p) return null;
+  if (p.mapping !== 'standard') {
+    return 'Pad driving refused: this controller reports mapping "' + (p.mapping || '(none)')
+      + '", not "standard", so its axes cannot be trusted (a trigger resting at -1 would read as '
+      + 'a full turn). Try another browser, or another controller / connection mode.';
+  }
+  return null;
+}
+
+function padWarn(text) {
+  var w = document.getElementById('padWarn');
+  if (!w) return;
+  w.textContent = text || '';
+  w.style.display = text ? '' : 'none';
+}
+
+// silent: halt without the final zero drive (STOP ALL sends `stop` instead).
+function setPadDriving(on, silent) {
+  if (on) {
+    var why = padRefusal(firstPad());
+    if (why) {
+      padWarn(why);
+      on = false;
+      if (!padDriving) return;
+    }
+  }
   padDriving = on;
   var b = document.getElementById('padBtn');
   b.textContent = on ? 'Stop gamepad driving' : 'Drive with gamepad';
   b.className = on ? 'stop' : 'primary';
-  if (!on) drive(0, 0, 0);
+  if (!on && silent !== true) drive(0, 0, 0);
 }
 
 function togglePadDrive() {
@@ -795,11 +847,17 @@ function pollPad() {
     rows.innerHTML = '<tr><td colspan="3" class="dim">Press a button on the controller, with this tab focused.</td></tr>';
     // Controller vanished mid-drive: stop rather than let the last command latch.
     if (padDriving) setPadDriving(false);
+    padWarn(null);
     return;
   }
 
   dot.className = 'dot on';
   name.textContent = p.id.length > 44 ? p.id.slice(0, 44) + '…' : p.id;
+
+  // Re-checked every poll: a controller can be swapped (or re-enumerate) mid-drive.
+  var refusal = padRefusal(p);
+  padWarn(refusal);
+  if (refusal && padDriving) setPadDriving(false);
 
   // Standard mapping: 0 = left X, 1 = left Y, 2 = right X.
   //
@@ -1081,11 +1139,21 @@ var hdgDirty = false;
 var circleTimer = null;
 var circleStart = 0;
 
+// silent: halt without the final zero drive (STOP ALL sends `stop` instead).
+function stopCircle(silent) {
+  if (circleTimer === null) return;
+  clearInterval(circleTimer);
+  circleTimer = null;
+  if (silent !== true) drive(0, 0, 0);
+  var b = document.getElementById('circleBtn');
+  b.textContent = 'Start circle';
+  b.className = '';
+}
+
 function toggleCircle() {
   if (circleTimer !== null) {
-    clearInterval(circleTimer);
-    circleTimer = null;
-    drive(0, 0, 0);
+    stopCircle(false);
+    return;
   } else {
     // The circle test owns the drive stream while it runs; a live pad loop or a held button
     // would interleave conflicting commands with it at 60-150 ms.
@@ -1095,9 +1163,12 @@ function toggleCircle() {
     var period = Math.max(0.5, parseFloat(document.getElementById('circPeriod').value) || 3.0);
     circleStart = Date.now();
     // Re-sent well inside the robot's 400 ms drive watchdog, so closing this tab stops the robot.
+    // Through the single-in-flight sender like every other drive stream: fire-and-forget
+    // fetches queue up in a WiFi stall and flush seconds-old commands when the link revives.
+    // foc 0: the circle test has always been robot-frame.
     circleTimer = setInterval(function () {
       var th = 2 * Math.PI * ((Date.now() - circleStart) / 1000) / period;
-      cmd('drive', {f: (amp * Math.cos(th)).toFixed(3), s: (amp * Math.sin(th)).toFixed(3), t: 0});
+      drive((amp * Math.cos(th)).toFixed(3), (amp * Math.sin(th)).toFixed(3), 0, 0);
     }, 90);
   }
   var b = document.getElementById('circleBtn');
@@ -1106,10 +1177,8 @@ function toggleCircle() {
 }
 
 function stopAllTests() {
-  if (circleTimer !== null) toggleCircle();
-  if (padDriving) setPadDriving(false);
-  driveStop();
-  cmd('stop');
+  // Same race as STOP ALL: a final zero drive landing after `stop` re-enters DRIVE.
+  stopEverything();
 }
 
 function applyHeadingPidf() {

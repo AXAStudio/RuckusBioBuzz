@@ -632,3 +632,12 @@ centre bounds + `FenceGeometry.clampKeepOut`). A box file it cannot parse, or of
 now refuses all motion (it used to drive unfenced). Expected effect: none with a marked box
 (identical clamp); with a field/border fence, more clamping near walls and keep-outs. No session
 has driven this OpMode under a field fence, so no earlier data is affected.
+
+## 2026-10-10 — dashboard.html circle test through the single-in-flight sender (rule 9 declaration)
+
+Diagnostic only, untested on hardware. The circle test sent `drive` fire-and-forget every 90 ms;
+it now goes through the same single-in-flight sender as the pad and hold-buttons, so at most one
+drive request is on the wire and stale intermediates are dropped. Expected effect: none while the
+round trip is under 90 ms (same commands, same rate, still robot-frame `foc=0`); under WiFi
+latency the robot now sees fewer, fresher commands instead of a backlog flushed late. Circle-test
+heading numbers taken before this date on a laggy link are not directly comparable.
