@@ -62,13 +62,6 @@ public class turret{
         nectarAimed = nectarTurret.track(aimNectar().theta, NECTAR_TURRET_CENTER, NECTAR_TURRET_REVERSED, NECTAR_TURRET_GEAR_RATIO);
     }
 
-    public void center(){
-        pollenTurret.center(POLLEN_TURRET_CENTER);
-        nectarTurret.center(NECTAR_TURRET_CENTER);
-        pollenAimed = false;
-        nectarAimed = false;
-    }
-
     public boolean unwinding(){
         return pollenTurret.unwinding() || nectarTurret.unwinding();
     }
@@ -126,10 +119,6 @@ public class turret{
             }
             servo.setPosition(position);
             return aimed && System.nanoTime() >= settleUntilNanos;
-        }
-        public void center(double center){
-            position = center;
-            servo.setPosition(center);
         }
 
         boolean unwinding() {
