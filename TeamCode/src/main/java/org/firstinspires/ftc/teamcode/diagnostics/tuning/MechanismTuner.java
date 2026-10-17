@@ -17,6 +17,7 @@ import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
 import org.firstinspires.ftc.teamcode.systems.flywheel;
 import org.firstinspires.ftc.teamcode.systems.intake;
+import org.firstinspires.ftc.teamcode.systems.shooter;
 import org.firstinspires.ftc.teamcode.systems.turret;
 
 import java.util.ArrayList;
@@ -30,10 +31,12 @@ import java.util.Map;
  * ships.
  *
  * <p>Covers everything that is not the drivetrain: both flywheels (hub velocity PIDF, step
- * response, shot / synthetic-disturbance recovery, feed-forward sweep), both turret servos
- * (center, direction, gear ratio), the gate and scoopula servo positions, and the intake color
- * sensor (labelled samples, threshold suggestion, live reject check through the shipped
- * {@link intake} class). The drivetrain is never touched: swerve tuning stays in Swerve Bring-Up.
+ * response, shot / synthetic-disturbance recovery, feed-forward sweep, idle fraction), the
+ * shooting sequence ({@code shooter.java}'s gate logic: entry band, hold band, minimum open time,
+ * fed by the shipped intake), both turret servos (center, direction, gear ratio, mount offset),
+ * the gate and scoopula servo positions, and the intake (color thresholds with labelled samples,
+ * reverse brake, live reject check through the shipped {@link intake} class). The drivetrain is
+ * never touched: swerve tuning stays in Swerve Bring-Up.
  *
  * <p>Starting values are read from the shipped statics at init, and anything changed here is
  * exported as declarations for the shipped files; shipped statics the tool has to write so the
@@ -59,6 +62,10 @@ public class MechanismTuner extends OpMode {
     static final long DIP_TIMEOUT_NS = 3_000_000_000L;
     static final long POST_WINDOW_NS = 300_000_000L;
     static final int MAX_EVENTS = 60;
+
+    // Shoot sequence: give up if the wheels never reach the entry band.
+    static final long SHOOT_READY_TIMEOUT_NS = 8_000_000_000L;
+    static final int MAX_SHOOT_WINDOWS = 30;
 
     static final int MODE_OFF = 0, MODE_VEL = 1, MODE_POWER = 2;
     static final String[] MODE_NAMES = {"OFF", "VEL", "POWER"};
@@ -89,6 +96,9 @@ public class MechanismTuner extends OpMode {
     private String colorSummary = "{}";
 
     private double atSpeedFrac;
+    // Tool copies of the shooter statics; the tool runs its own copy of the SHOOT logic with them.
+    private double holdFrac, minGateOpenS, idleFrac;
+    private long sessionId;
     private final FlyRecorder recorder = new FlyRecorder();
     private boolean recCurrent;
     private final List<String> events = new ArrayList<>();
@@ -105,7 +115,21 @@ public class MechanismTuner extends OpMode {
 
     // Shipped statics the tool writes so the shipped intake class runs with them; restored on stop.
     private int origThrRed, origThrBlue;
-    private double origDominance;
+    private double origDominance, origBrakeMs;
+
+    /** Export values as they stood at init (the shipped statics), keyed "file#name". */
+    private final Map<String, String> shippedValues = new LinkedHashMap<>();
+
+    // Shoot sequence (mirrors shooter.java TRACK/SHOOT without aiming or zone): 0 off, 1 TRACK
+    // (waiting for both wheels in the entry band), 2 SHOOT (gate open, intake feeding).
+    private int shootState;
+    private int shootLeft;
+    private boolean shootFeed, shootOwnsRec, shootHeldByTime;
+    private long shootPhaseNs, shootOpenNs;
+    private double shootReadyMs, shootWorstP, shootWorstN;
+    private String shootEnd = "";
+    private int shootSeq;
+    private final List<String> shootWindows = new ArrayList<>();
 
     // ------------------------------------------------------------------------- lifecycle
 
@@ -118,16 +142,22 @@ public class MechanismTuner extends OpMode {
         voltageSensor = hardwareMap.voltageSensor.iterator().hasNext()
                 ? hardwareMap.voltageSensor.iterator().next() : null;
 
+        sessionId = System.currentTimeMillis();
         atSpeedFrac = flywheel.AT_SPEED_FRACTION;
+        idleFrac = flywheel.IDLE_FRACTION;
+        holdFrac = shooter.HOLD_SPEED_FRACTION;
+        minGateOpenS = shooter.MIN_GATE_OPEN_S;
         wheels[0] = new Wheel("pollen", "pollenTurret", flywheel.POLLEN_FLYWHEEL_REVERSED,
                 flywheel.POLLEN_PIDF);
         wheels[1] = new Wheel("nectar", "nectarTurret", flywheel.NECTAR_FLYWHEEL_REVERSED,
                 flywheel.NECTAR_PIDF);
 
         turrets[0] = new TurretCal("pollen", "pollenTurretServo", turret.POLLEN_TURRET_CENTER,
-                turret.POLLEN_TURRET_REVERSED, turret.POLLEN_TURRET_GEAR_RATIO);
+                turret.POLLEN_TURRET_REVERSED, turret.POLLEN_TURRET_GEAR_RATIO,
+                turret.pollenTurretOffset);
         turrets[1] = new TurretCal("nectar", "nectarTurretServo", turret.NECTAR_TURRET_CENTER,
-                turret.NECTAR_TURRET_REVERSED, turret.NECTAR_TURRET_GEAR_RATIO);
+                turret.NECTAR_TURRET_REVERSED, turret.NECTAR_TURRET_GEAR_RATIO,
+                turret.nectarTurretOffset);
 
         servos[0] = new ServoCal("gate", "turretGate", "systems/gate.java",
                 new String[]{"open", "openPos", "close", "closePos"});
@@ -137,6 +167,7 @@ public class MechanismTuner extends OpMode {
         origThrRed = intake.thresholdRed;
         origThrBlue = intake.thresholdBlue;
         origDominance = intake.DOMINANCE;
+        origBrakeMs = intake.REVERSE_BRAKE_MS;
         try {
             intakeSys = new intake(hardwareMap);
             intakeSys.setAlliance(alliance);
@@ -151,6 +182,9 @@ public class MechanismTuner extends OpMode {
         TuningHub.INSTANCE.setRecorder(recorder);
         lastLoopNs = System.nanoTime();
         rebuildColorSummary();
+        for (String[] e : exportEntries()) {
+            shippedValues.put(e[0] + "#" + e[1], e[2]);
+        }
     }
 
     @Override
@@ -176,6 +210,7 @@ public class MechanismTuner extends OpMode {
         intake.thresholdRed = origThrRed;
         intake.thresholdBlue = origThrBlue;
         intake.DOMINANCE = origDominance;
+        intake.REVERSE_BRAKE_MS = origBrakeMs;
         TuningHub.INSTANCE.markStopped();
     }
 
@@ -210,6 +245,7 @@ public class MechanismTuner extends OpMode {
             w.update(now);
             anythingMoving |= w.mode != MODE_OFF;
         }
+        updateShoot(now);
         if (anythingMoving && TuningHub.INSTANCE.msSinceClient() > CLIENT_TIMEOUT_MS) {
             stopAll();
             watchdogTripped = true;
@@ -217,7 +253,10 @@ public class MechanismTuner extends OpMode {
                     + " s - everything stopped.";
         }
 
-        if (intakeSys != null && !"OFF".equals(intakeMode)) {
+        if (intakeSys != null && shootState != 0 && shootFeed) {
+            // As TeleOp: the intake feeds while SHOOT holds, and idles (reject logic still live) otherwise.
+            intakeSys.update(false, shootState == 2);
+        } else if (intakeSys != null && !"OFF".equals(intakeMode)) {
             intakeSys.update("OUT".equals(intakeMode), "IN".equals(intakeMode));
         }
 
@@ -284,6 +323,10 @@ public class MechanismTuner extends OpMode {
             telemetry.addData(w.name, MODE_NAMES[w.mode] + "  tgt " + FlyRecorder.r(w.target, 0)
                     + "  vel " + FlyRecorder.r(w.vel, 0));
         }
+        if (shootState != 0) {
+            telemetry.addData("Shoot", (shootState == 2 ? "SHOOT (gate open)" : "TRACK (waiting for speed)")
+                    + "  windows left " + shootLeft);
+        }
         telemetry.addData("Message", message);
         telemetry.update();
     }
@@ -294,6 +337,18 @@ public class MechanismTuner extends OpMode {
         switch (action) {
             case "fly": case "flyPower": case "step": case "kick": case "ffSweep":
             case "turretPos": case "turretDeg": case "servoPos": case "gatePulse": case "intake":
+            case "shoot":
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /** Commands that take over a wheel, the gate or the intake, so a running shoot sequence ends first. */
+    private static boolean endsShoot(String action) {
+        switch (action) {
+            case "flyPower": case "flyOff": case "step": case "ffSweep": case "servoPos":
+            case "gatePulse": case "intake": case "shoot":
                 return true;
             default:
                 return false;
@@ -309,6 +364,9 @@ public class MechanismTuner extends OpMode {
         }
         if (isMotion(action)) {
             watchdogTripped = false;
+        }
+        if (shootState != 0 && endsShoot(action)) {
+            endShoot("interrupted by " + action);
         }
         try {
             dispatch(action, cmd);
@@ -366,6 +424,24 @@ public class MechanismTuner extends OpMode {
             case "atSpeed":
                 atSpeedFrac = clamp(num(c, "frac", atSpeedFrac), 0.005, 0.5);
                 message = "At-speed band now " + FlyRecorder.r(atSpeedFrac * 100, 1) + "%.";
+                break;
+            case "shooterParams":
+                atSpeedFrac = clamp(num(c, "entry", atSpeedFrac), 0.005, 0.5);
+                holdFrac = clamp(num(c, "hold", holdFrac), 0.005, 0.9);
+                minGateOpenS = clamp(num(c, "minOpen", minGateOpenS), 0, 5);
+                idleFrac = clamp(num(c, "idle", idleFrac), 0, 1);
+                message = "Shooter values: entry " + FlyRecorder.r(atSpeedFrac * 100, 1) + "%, hold "
+                        + FlyRecorder.r(holdFrac * 100, 1) + "%, min open " + FlyRecorder.r(minGateOpenS, 3)
+                        + " s, idle " + FlyRecorder.r(idleFrac * 100, 0) + "% (tool only until exported).";
+                break;
+            case "shoot":
+                startShoot(num(c, "pollen", wheels[0].target), num(c, "nectar", wheels[1].target),
+                        (int) clamp(num(c, "count", 1), 1, 20), num(c, "feed", 1) != 0);
+                break;
+            case "shootStop":
+                if (shootState != 0) {
+                    endShoot("stopped from the dashboard");
+                }
                 break;
             case "step": {
                 Wheel w = oneWheel(c);
@@ -426,6 +502,8 @@ public class MechanismTuner extends OpMode {
                     t.gearA = num(c, "grA", t.gearA);
                     t.gearB = num(c, "grB", t.gearB);
                     t.servoRange = num(c, "servoRange", t.servoRange);
+                    t.offset[0] = num(c, "offX", t.offset[0]);
+                    t.offset[1] = num(c, "offY", t.offset[1]);
                 }
                 message = "Turret calibration updated (tool only until exported).";
                 break;
@@ -515,6 +593,11 @@ public class MechanismTuner extends OpMode {
                 message = "Color samples cleared" + (label == null ? "." : " for " + label + ".");
                 break;
             }
+            case "intakeParams":
+                intake.REVERSE_BRAKE_MS = clamp(num(c, "brakeMs", intake.REVERSE_BRAKE_MS), 0, 1000);
+                message = "Intake REVERSE_BRAKE_MS " + FlyRecorder.r(intake.REVERSE_BRAKE_MS, 0)
+                        + " applied live (restored on STOP unless exported).";
+                break;
             case "colorParams":
                 intake.thresholdRed = (int) num(c, "red", intake.thresholdRed);
                 intake.thresholdBlue = (int) num(c, "blue", intake.thresholdBlue);
@@ -542,6 +625,9 @@ public class MechanismTuner extends OpMode {
     }
 
     private void stopAll() {
+        if (shootState != 0) {
+            endShoot("everything stopped");
+        }
         for (Wheel w : wheels) {
             w.cancelTests();
             w.off();
@@ -557,6 +643,143 @@ public class MechanismTuner extends OpMode {
         intakeSys.setAlliance(null);
         intakeSys.update(false, false);
         intakeSys.setAlliance(alliance);
+    }
+
+    // ------------------------------------------------------------------------- shoot sequence
+
+    /**
+     * The gate half of {@code shooter.java} with the tool's values: TRACK until both wheels are
+     * inside the entry band (AT_SPEED_FRACTION), then SHOOT - gate open and, as TeleOp does, the
+     * intake fed - held while the gate has been open less than MIN_GATE_OPEN_S or both wheels are
+     * inside HOLD_SPEED_FRACTION. Aiming and the zone are not modelled: the turrets do not move.
+     */
+    private void startShoot(double pollenTps, double nectarTps, int count, boolean feed) {
+        ServoCal g = servos[0];
+        if (wheels[0].motor == null || wheels[1].motor == null) {
+            message = "REFUSED shoot: both flywheels are needed (shooter.java waits on both).";
+            return;
+        }
+        if (g.servo == null || g.marks.get("open") == null || g.marks.get("close") == null) {
+            message = "REFUSED shoot: mark the gate 'open' and 'close' first (Turrets & servos tab).";
+            return;
+        }
+        if (pollenTps <= 0 || nectarTps <= 0) {
+            message = "REFUSED shoot: both targets must be positive ticks/s (shooter.java needs target > 0).";
+            return;
+        }
+        if (feed && intakeSys == null) {
+            message = "REFUSED shoot with feed: intake unavailable (" + intakeError + ").";
+            return;
+        }
+        for (Wheel w : wheels) {
+            w.cancelTests();
+        }
+        wheels[0].setVelocity(pollenTps);
+        wheels[1].setVelocity(nectarTps);
+        g.setPosition(g.marks.get("close"));
+        shootFeed = feed;
+        if (feed) {
+            intakeMode = "OFF";
+        }
+        shootLeft = count;
+        shootEnd = "";
+        shootOwnsRec = !recorder.isRecording();
+        if (shootOwnsRec) {
+            recorder.start("shoot-" + (shootSeq + 1));
+        }
+        shootState = 1;
+        shootPhaseNs = System.nanoTime();
+        message = "Shoot sequence: waiting for both wheels in the entry band.";
+    }
+
+    private void updateShoot(long now) {
+        if (shootState == 0) return;
+        Wheel p = wheels[0], n = wheels[1];
+        if (p.mode != MODE_VEL || n.mode != MODE_VEL || p.target <= 0 || n.target <= 0) {
+            endShoot("a flywheel left velocity mode");
+            return;
+        }
+        ServoCal g = servos[0];
+        if (shootState == 1) {
+            if (inBand(p, atSpeedFrac) && inBand(n, atSpeedFrac)) {
+                g.setPosition(g.marks.get("open"));
+                shootState = 2;
+                shootOpenNs = now;
+                shootReadyMs = (now - shootPhaseNs) / 1e6;
+                shootWorstP = 0;
+                shootWorstN = 0;
+                shootHeldByTime = true;
+                recorder.mark(5);
+            } else if (now - shootPhaseNs > SHOOT_READY_TIMEOUT_NS) {
+                endShoot("wheels never reached the entry band in "
+                        + SHOOT_READY_TIMEOUT_NS / 1_000_000_000L + " s");
+            }
+            return;
+        }
+        shootWorstP = Math.min(shootWorstP, 100 * (p.vel - p.target) / p.target);
+        shootWorstN = Math.min(shootWorstN, 100 * (n.vel - n.target) / n.target);
+        boolean byTime = (now - shootOpenNs) / 1e9 < minGateOpenS;
+        boolean byBand = inBand(p, holdFrac) && inBand(n, holdFrac);
+        if (byTime || byBand) {
+            shootHeldByTime = byTime;
+            return;
+        }
+        g.setPosition(g.marks.get("close"));
+        recorder.mark(6);
+        logShootWindow((now - shootOpenNs) / 1e6,
+                shootHeldByTime ? "min open time ended" : "speed left the hold band");
+        if (--shootLeft > 0) {
+            shootState = 1;
+            shootPhaseNs = now;
+        } else {
+            endShoot("done");
+        }
+    }
+
+    private boolean inBand(Wheel w, double frac) {
+        return w.target > 0 && Math.abs(w.vel - w.target) <= frac * w.target;
+    }
+
+    private void logShootWindow(double openMs, String closedBy) {
+        StringBuilder sb = new StringBuilder(260);
+        sb.append("{\"id\":").append(++shootSeq)
+                .append(",\"readyMs\":").append(FlyRecorder.r(shootReadyMs, 0))
+                .append(",\"openMs\":").append(FlyRecorder.r(openMs, 0))
+                .append(",\"closedBy\":\"").append(closedBy)
+                .append("\",\"pWorstPct\":").append(FlyRecorder.r(shootWorstP, 1))
+                .append(",\"nWorstPct\":").append(FlyRecorder.r(shootWorstN, 1))
+                .append(",\"pTarget\":").append(FlyRecorder.r(wheels[0].target, 0))
+                .append(",\"nTarget\":").append(FlyRecorder.r(wheels[1].target, 0))
+                .append(",\"entry\":").append(FlyRecorder.r(atSpeedFrac, 4))
+                .append(",\"hold\":").append(FlyRecorder.r(holdFrac, 4))
+                .append(",\"minOpenS\":").append(FlyRecorder.r(minGateOpenS, 3))
+                .append(",\"feed\":").append(shootFeed)
+                .append(",\"volts\":").append(FlyRecorder.r(volts, 2)).append('}');
+        shootWindows.add(sb.toString());
+        while (shootWindows.size() > MAX_SHOOT_WINDOWS) {
+            shootWindows.remove(0);
+        }
+        message = "Gate window " + shootSeq + ": ready after " + (int) shootReadyMs + " ms, open "
+                + (int) openMs + " ms, " + closedBy + ".";
+    }
+
+    /** Closes the gate if it is open and hands the intake back; the wheels keep spinning. */
+    private void endShoot(String reason) {
+        ServoCal g = servos[0];
+        if (shootState == 2 && g.servo != null && g.marks.get("close") != null) {
+            g.setPosition(g.marks.get("close"));
+            recorder.mark(6);
+        }
+        shootState = 0;
+        if (shootFeed && intakeSys != null) {
+            stopIntake();
+        }
+        if (shootOwnsRec) {
+            recorder.stop();
+            shootOwnsRec = false;
+        }
+        shootEnd = reason;
+        message = "Shoot sequence ended: " + reason + ".";
     }
 
     private Wheel[] wheelsFor(Map<String, String> c) {
@@ -603,6 +826,7 @@ public class MechanismTuner extends OpMode {
         double target, power, vel;
         double cur = Double.NaN;
         double kP, kI, kD, kF;
+        final double[] shippedPidf;
         String hubPidf = "";
 
         // dip detector: 0 arming, 1 armed, 2 in dip, 3 post-recovery window
@@ -619,6 +843,7 @@ public class MechanismTuner extends OpMode {
         long phaseEndNs;
         double stepTo, stepSec;
         int stepStartIdx;
+        int stepSeq;
         boolean stepOwnsRec;
         String stepLabel;
         String lastStep = "null";
@@ -641,6 +866,7 @@ public class MechanismTuner extends OpMode {
             kI = shipped.I;
             kD = shipped.D;
             kF = shipped.F;
+            shippedPidf = new double[]{kP, kI, kD, kF};
             motor = hardwareMap.tryGet(DcMotorEx.class, device);
             if (motor == null) {
                 error = "no motor named " + device;
@@ -959,8 +1185,9 @@ public class MechanismTuner extends OpMode {
     private String analyseStep(Wheel w, int from, int to, double tgt) {
         double[] vel = w == wheels[0] ? recorder.pVel : recorder.nVel;
         int n = to - from;
+        int seq = ++w.stepSeq;
         if (n < 5) {
-            return "{\"error\":\"too few samples (" + n + ")\"}";
+            return "{\"seq\":" + seq + ",\"error\":\"too few samples (" + n + ")\"}";
         }
         double t0 = recorder.t[from];
         double v0 = vel[from];
@@ -1005,7 +1232,10 @@ public class MechanismTuner extends OpMode {
         double ssStd = ns < 2 ? Double.NaN : Math.sqrt(Math.max(0, sq / ns - ssMean * ssMean));
         double span = recorder.t[to - 1] - recorder.t[from];
         StringBuilder sb = new StringBuilder(400);
-        sb.append("{\"label\":\"").append(TuningHub.esc(w.stepLabel))
+        sb.append("{\"seq\":").append(seq)
+                .append(",\"startIdx\":").append(from)
+                .append(",\"endIdx\":").append(to)
+                .append(",\"label\":\"").append(TuningHub.esc(w.stepLabel))
                 .append("\",\"wheel\":\"").append(w.name)
                 .append("\",\"from\":").append(FlyRecorder.r(v0, 1))
                 .append(",\"to\":").append(FlyRecorder.r(tgt, 1))
@@ -1039,9 +1269,13 @@ public class MechanismTuner extends OpMode {
         boolean reversed;
         double gearA, gearB;
         double servoRange = turret.SERVO_RANGE_DEG;
+        /** Turret pivot from the robot's pose center, inches, robot frame {forward, left}. */
+        final double[] offset;
 
-        TurretCal(String name, String device, double center, boolean reversed, double[] gear) {
+        TurretCal(String name, String device, double center, boolean reversed, double[] gear,
+                  double[] offset) {
             this.name = name;
+            this.offset = offset.clone();
             this.device = device;
             this.center = center;
             this.reversed = reversed;
@@ -1271,7 +1505,8 @@ public class MechanismTuner extends OpMode {
         Arrays.sort(dts);
         double dtSum = 0;
         for (double d : dts) dtSum += d;
-        sb.append("{\"live\":true,\"started\":").append(started)
+        sb.append("{\"live\":true,\"sessionId\":").append(sessionId)
+                .append(",\"started\":").append(started)
                 .append(",\"message\":\"").append(TuningHub.esc(message))
                 .append("\",\"cmdSeq\":").append(cmdSeq)
                 .append(",\"volts\":").append(FlyRecorder.r(volts, 2))
@@ -1304,6 +1539,9 @@ public class MechanismTuner extends OpMode {
                     .append(",\"kicking\":").append(w.kicking)
                     .append(",\"pidf\":[").append(w.kP).append(',').append(w.kI).append(',')
                     .append(w.kD).append(',').append(w.kF).append(']')
+                    .append(",\"shippedPidf\":[").append(w.shippedPidf[0]).append(',')
+                    .append(w.shippedPidf[1]).append(',').append(w.shippedPidf[2]).append(',')
+                    .append(w.shippedPidf[3]).append(']')
                     .append(",\"hubPidf\":\"").append(w.hubPidf)
                     .append("\",\"dipState\":").append(w.dip)
                     .append(",\"stepPhase\":").append(w.stepPhase)
@@ -1328,6 +1566,28 @@ public class MechanismTuner extends OpMode {
                 .append(",\"capacity\":").append(FlyRecorder.CAPACITY)
                 .append(",\"current\":").append(recCurrent).append('}');
 
+        ServoCal g = servos[0];
+        boolean gateOpen = shootState == 2;
+        sb.append(",\"shoot\":{\"state\":\"").append(shootState == 0 ? "OFF" : shootState == 1 ? "TRACK" : "SHOOT")
+                .append("\",\"gateOpen\":").append(gateOpen)
+                .append(",\"gateReady\":").append(g.servo != null && g.marks.get("open") != null
+                        && g.marks.get("close") != null)
+                .append(",\"left\":").append(shootState == 0 ? 0 : shootLeft)
+                .append(",\"feed\":").append(shootFeed)
+                .append(",\"phaseMs\":").append(shootState == 0 ? "null"
+                        : FlyRecorder.r((System.nanoTime() - (gateOpen ? shootOpenNs : shootPhaseNs)) / 1e6, 0))
+                .append(",\"end\":\"").append(TuningHub.esc(shootEnd))
+                .append("\",\"entry\":").append(FlyRecorder.r(atSpeedFrac, 4))
+                .append(",\"hold\":").append(FlyRecorder.r(holdFrac, 4))
+                .append(",\"minOpenS\":").append(FlyRecorder.r(minGateOpenS, 3))
+                .append(",\"idle\":").append(FlyRecorder.r(idleFrac, 4))
+                .append(",\"windows\":[");
+        for (int i = 0; i < shootWindows.size(); i++) {
+            if (i > 0) sb.append(',');
+            sb.append(shootWindows.get(i));
+        }
+        sb.append("]}");
+
         sb.append(",\"turrets\":[");
         for (int i = 0; i < turrets.length; i++) {
             TurretCal t = turrets[i];
@@ -1342,7 +1602,9 @@ public class MechanismTuner extends OpMode {
                     .append(",\"grA\":").append(t.gearA)
                     .append(",\"grB\":").append(t.gearB)
                     .append(",\"servoRange\":").append(t.servoRange)
-                    .append(",\"rangeDeg\":").append(FlyRecorder.r(t.range(), 2)).append('}');
+                    .append(",\"rangeDeg\":").append(FlyRecorder.r(t.range(), 2))
+                    .append(",\"offX\":").append(t.offset[0])
+                    .append(",\"offY\":").append(t.offset[1]).append('}');
         }
         sb.append(']');
 
@@ -1369,7 +1631,8 @@ public class MechanismTuner extends OpMode {
         sb.append(",\"intake\":{\"ok\":").append(intakeSys != null)
                 .append(",\"error\":\"").append(TuningHub.esc(intakeError))
                 .append("\",\"mode\":\"").append(intakeMode)
-                .append("\",\"alliance\":\"").append(alliance).append("\"}");
+                .append("\",\"alliance\":\"").append(alliance)
+                .append("\",\"brakeMs\":").append(FlyRecorder.r(intake.REVERSE_BRAKE_MS, 1)).append('}');
 
         int[] live = {cr, cg, cb, ca};
         sb.append(",\"color\":{\"ok\":").append(color != null)
@@ -1394,16 +1657,35 @@ public class MechanismTuner extends OpMode {
     }
 
     /**
-     * Every value this tool owns, as {file, name, value} with value written as Java source. The
-     * host splicer (tools/mechtune/mechtune.py export --write) replaces the right-hand side of
-     * that declaration by name. Unmarked servo positions are left out rather than exported as 0.
+     * Every value this tool owns, as {file, name, value, shipped} with values written as Java
+     * source; shipped is the value at init, or null when the tool cannot read it (the gate and
+     * scoopula positions are instance fields). The host splicer (tools/mechtune/mechtune.py export
+     * --write) replaces the right-hand side of that declaration by name. Unmarked servo positions
+     * are left out rather than exported as 0.
      */
     private String exportJson() {
+        List<String[]> out = exportEntries();
+        StringBuilder sb = new StringBuilder(2048).append('[');
+        for (int i = 0; i < out.size(); i++) {
+            String[] e = out.get(i);
+            String shipped = shippedValues.get(e[0] + "#" + e[1]);
+            if (i > 0) sb.append(',');
+            sb.append("{\"file\":\"").append(e[0])
+                    .append("\",\"name\":\"").append(e[1])
+                    .append("\",\"value\":\"").append(TuningHub.esc(e[2]))
+                    .append("\",\"shipped\":").append(shipped == null ? "null"
+                            : "\"" + TuningHub.esc(shipped) + "\"").append('}');
+        }
+        return sb.append(']').toString();
+    }
+
+    private List<String[]> exportEntries() {
         List<String[]> out = new ArrayList<>();
         String fw = "systems/flywheel.java";
         out.add(new String[]{fw, "POLLEN_FLYWHEEL_REVERSED", Boolean.toString(wheels[0].reversed)});
         out.add(new String[]{fw, "NECTAR_FLYWHEEL_REVERSED", Boolean.toString(wheels[1].reversed)});
         out.add(new String[]{fw, "AT_SPEED_FRACTION", Double.toString(atSpeedFrac)});
+        out.add(new String[]{fw, "IDLE_FRACTION", Double.toString(idleFrac)});
         out.add(new String[]{fw, "POLLEN_PIDF", pidfSource(wheels[0])});
         out.add(new String[]{fw, "NECTAR_PIDF", pidfSource(wheels[1])});
         String tu = "systems/turret.java";
@@ -1414,10 +1696,16 @@ public class MechanismTuner extends OpMode {
         out.add(new String[]{tu, "POLLEN_TURRET_GEAR_RATIO", gearSource(turrets[0])});
         out.add(new String[]{tu, "NECTAR_TURRET_GEAR_RATIO", gearSource(turrets[1])});
         out.add(new String[]{tu, "SERVO_RANGE_DEG", trim(turrets[0].servoRange)});
+        out.add(new String[]{tu, "pollenTurretOffset", arraySource(turrets[0].offset)});
+        out.add(new String[]{tu, "nectarTurretOffset", arraySource(turrets[1].offset)});
+        String sh = "systems/shooter.java";
+        out.add(new String[]{sh, "MIN_GATE_OPEN_S", Double.toString(minGateOpenS)});
+        out.add(new String[]{sh, "HOLD_SPEED_FRACTION", Double.toString(holdFrac)});
         String in = "systems/intake.java";
         out.add(new String[]{in, "thresholdRed", Integer.toString(intake.thresholdRed)});
         out.add(new String[]{in, "thresholdBlue", Integer.toString(intake.thresholdBlue)});
         out.add(new String[]{in, "DOMINANCE", Double.toString(intake.DOMINANCE)});
+        out.add(new String[]{in, "REVERSE_BRAKE_MS", trim(intake.REVERSE_BRAKE_MS)});
         for (ServoCal s : servos) {
             for (Map.Entry<String, Double> m : s.marks.entrySet()) {
                 if (m.getValue() != null) {
@@ -1426,14 +1714,7 @@ public class MechanismTuner extends OpMode {
                 }
             }
         }
-        StringBuilder sb = new StringBuilder(1024).append('[');
-        for (int i = 0; i < out.size(); i++) {
-            if (i > 0) sb.append(',');
-            sb.append("{\"file\":\"").append(out.get(i)[0])
-                    .append("\",\"name\":\"").append(out.get(i)[1])
-                    .append("\",\"value\":\"").append(TuningHub.esc(out.get(i)[2])).append("\"}");
-        }
-        return sb.append(']').toString();
+        return out;
     }
 
     private static String pidfSource(Wheel w) {
@@ -1445,6 +1726,10 @@ public class MechanismTuner extends OpMode {
         return "{" + trim(t.gearA) + ", " + trim(t.gearB) + "}";
     }
 
+    private static String arraySource(double[] v) {
+        return "{" + trim(v[0]) + ", " + trim(v[1]) + "}";
+    }
+
     private static String trim(double v) {
         return v == Math.rint(v) && Math.abs(v) < 1e9 ? Long.toString((long) v) : Double.toString(v);
     }
@@ -1454,11 +1739,18 @@ public class MechanismTuner extends OpMode {
     private static double num(Map<String, String> c, String key, double fallback) {
         String v = c.get(key);
         if (v == null || v.trim().isEmpty()) return fallback;
+        double d;
         try {
-            return Double.parseDouble(v.trim());
+            d = Double.parseDouble(v.trim());
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException(key + "=" + v + " is not a number");
         }
+        // parseDouble accepts "NaN" (what an empty number box sends): it would reach the hub as a
+        // gain and break the state JSON, so it is refused like any other non-number.
+        if (Double.isNaN(d) || Double.isInfinite(d)) {
+            throw new IllegalArgumentException(key + "=" + v + " is not a number");
+        }
+        return d;
     }
 
     private static double[] parseList(String s, double[] fallback) {

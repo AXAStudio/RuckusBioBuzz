@@ -75,7 +75,8 @@ TeamCode/src/main/java/org/firstinspires/ftc/teamcode/
 ├── diagnostics/                         PreMatchSystemCheck (drive response, then every mechanism), motorbreakin
 ├── diagnostics/tests/                   blobDetectionTest, colorTunerTest, rangeTest, spinUpTest
 ├── diagnostics/tuning/                  DIAGNOSTIC ONLY — "Mechanism Tuner" OpMode + /tune dashboard: flywheel PIDF
-│                                         (step / kick / shot recovery / ff sweep), turrets, gate, scoopula, intake color;
+│                                         (step / kick / shot recovery / ff sweep, step-trial overlay), shooter gate
+│                                         sequence + idle fraction, turrets (+offsets), gate, scoopula, intake color + brake;
 │                                         app-level operator banners (/tune/notify, notify.js - also on /swerve)
 ├── diagnostics/swerve/                  DIAGNOSTIC ONLY — never ships
 │   ├── SwerveBringUp.java               (~193 KB) bring-up OpMode + HTTP server

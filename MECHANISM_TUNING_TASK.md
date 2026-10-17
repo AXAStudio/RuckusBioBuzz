@@ -154,4 +154,12 @@ Turrets are positional servos: there is no PID. What can be wrong is the angle â
 4. **Gate / scoopula**: `gate.openPos/closePos` and `scoopula.scoopPos/unscoopPos` are **0 / 0**
    in shipped code. The operator moves each with the slider and presses Mark; `gatePulse ms=250`
    then checks the gate feeds one staged piece.
-5. `export --only turret,gate,scoopula --write`, build, commit.
+5. **Turret offsets** (`pollenTurretOffset` / `nectarTurretOffset`): tape-measured, inches, robot
+   frame {forward, left} from the pose center. `turretCal which=pollen offX=.. offY=..`.
+6. **Shooting sequence** (`shoot pollen=.. nectar=.. count=N feed=1`, `shootStop`,
+   `shooterParams entry= hold= minOpen= idle=`): the gate logic of `shooter.java` with the tool's
+   values, fed by the shipped intake. Each gate window is logged in `/tune/state` `shoot.windows`
+   (ready ms, open ms, why it closed, worst dip per wheel). Needs the gate marked. Tunes
+   `MIN_GATE_OPEN_S` and `HOLD_SPEED_FRACTION`; `IDLE_FRACTION` from a step `from = idle Ã— target`.
+   Intake `REVERSE_BRAKE_MS` via `intakeParams brakeMs=..`.
+7. `export --only turret,gate,scoopula,shooter --write`, build, commit.

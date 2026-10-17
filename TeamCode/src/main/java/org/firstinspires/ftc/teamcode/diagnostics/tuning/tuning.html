@@ -27,10 +27,12 @@
     border-radius: 7px; padding: 7px 12px; cursor: pointer; }
   button:hover { border-color: var(--accent); }
   button:active { transform: translateY(1px); }
+  button:disabled { opacity: .45; cursor: default; }
   button.primary { background: #14395f; border-color: #1f5c99; }
   button.stop { background: #5c1a1a; border-color: var(--bad); font-weight: 700; padding: 9px 20px; }
   button.small { padding: 4px 9px; font-size: 12px; }
   button.on { background: #123122; border-color: var(--good); }
+  button.dirty { border-color: var(--warn); box-shadow: inset 0 0 0 1px var(--warn); }
   nav { display: flex; gap: 4px; padding: 8px 16px 0; max-width: 1500px; margin: 0 auto; flex-wrap: wrap; }
   nav button { border-radius: 8px 8px 0 0; border-bottom: none; background: var(--panel); color: var(--muted); }
   nav button.sel { background: var(--panel2); color: var(--text); border-color: var(--accent); }
@@ -42,17 +44,18 @@
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(340px, 100%), 1fr)); gap: 14px; }
   .grid > *, .row > * { min-width: 0; }
   .card { background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; }
-  .card h3 { margin: 0 0 6px; font-size: 15px; display: flex; gap: 8px; align-items: center; }
+  .card h3 { margin: 0 0 6px; font-size: 15px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
   .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin: 6px 0; }
   .kv { display: flex; justify-content: space-between; gap: 10px; font-size: 13px; padding: 1px 0;
     font-variant-numeric: tabular-nums; }
   .kv span:first-child { color: var(--muted); }
   .big { font-size: 28px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .badge { font-size: 11px; padding: 2px 7px; border-radius: 5px; background: #10151c;
-    border: 1px solid var(--line); color: var(--muted); }
+    border: 1px solid var(--line); color: var(--muted); white-space: nowrap; }
   .badge.bad { background: #3a1414; border-color: var(--bad); color: #ffb4ae; }
   .badge.good { background: #123122; border-color: var(--good); color: #7ee095; }
   .badge.warn { background: #2a2416; border-color: var(--warn); color: #f0c674; }
+  .badge.link { cursor: pointer; }
   input[type=number], input[type=text], select { font: inherit; background: #0c1015; color: var(--text);
     border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; width: 86px;
     font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
@@ -61,12 +64,19 @@
   label.inline { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); }
   .msg { padding: 9px 12px; border-radius: 7px; background: var(--panel2); border-left: 3px solid var(--accent); }
   .msg.bad { border-left-color: var(--bad); background: #2a1616; }
+  .msg.warn { border-left-color: var(--warn); background: #2a2416; }
   .hint { color: var(--muted); font-size: 12px; }
+  .tip { padding: 6px 10px; border-radius: 6px; font-size: 12px; margin-top: 6px; background: #10151c;
+    border-left: 3px solid var(--line); }
+  .tip.good { border-left-color: var(--good); } .tip.warn { border-left-color: var(--warn); } .tip.bad { border-left-color: var(--bad); }
   canvas { width: 100%; height: 230px; background: #0c1015; border-radius: 8px; border: 1px solid var(--line); display: block; }
+  canvas.short { height: 160px; margin-top: 8px; }
   table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
   th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
   th:first-child, td:first-child { text-align: left; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  tr.changed td { background: #2a2416; }
+  tr.best td { background: #123122; }
   .tablewrap { overflow-x: auto; }
   pre, textarea { background: #0c1015; color: var(--text); border: 1px solid var(--line); border-radius: 8px;
     padding: 10px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; white-space: pre-wrap; margin: 0; }
@@ -74,12 +84,30 @@
   .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 6px 0; }
   .legend i { display: inline-block; width: 22px; height: 0; border-top: 3px solid; vertical-align: middle; margin-right: 5px; }
   .legend i.dash { border-top-style: dashed; }
+  .legend i.box { height: 10px; border: none; vertical-align: middle; }
+  .sw { display: inline-block; width: 12px; height: 12px; border-radius: 3px; vertical-align: middle; }
   .swatch { width: 64px; height: 64px; border-radius: 10px; border: 1px solid var(--line); flex: none; }
   .notehist { max-height: 300px; overflow-y: auto; }
   .notehist div { padding: 5px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
   .notehist .meta { color: var(--muted); font-size: 12px; }
+  .checks h3 { font-size: 14px; margin: 14px 0 4px; display: flex; gap: 8px; align-items: center; }
+  .checks h3:first-child { margin-top: 0; }
+  .ck { display: grid; grid-template-columns: 24px 1fr auto; gap: 2px 10px; align-items: start;
+    padding: 7px 0; border-bottom: 1px solid var(--line); }
+  .ck input { margin-top: 3px; }
+  .ck .how { grid-column: 2; color: var(--muted); font-size: 12px; }
+  .ck.done .what { color: var(--muted); text-decoration: line-through; }
+  .ck .side { display: flex; gap: 6px; align-items: center; grid-row: 1 / span 2; grid-column: 3; }
+  .progress { height: 6px; background: #0c1015; border-radius: 3px; overflow: hidden; flex: 1; min-width: 120px; max-width: 320px; }
+  .progress > div { height: 100%; background: var(--good); }
+  details { margin-top: 10px; }
+  details > summary { cursor: pointer; color: var(--accent); font-size: 13px; }
+  details .body { padding: 8px 0 0; font-size: 13px; }
+  details .body p { margin: 6px 0; }
+  code { font-size: 12px; }
   a { color: var(--accent); }
-  @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } header { gap: 10px; } }
+  @media (max-width: 600px) { .grid { grid-template-columns: 1fr; } header { gap: 10px; }
+    .ck { grid-template-columns: 24px 1fr; } .ck .side { grid-row: auto; grid-column: 2; } }
 </style>
 </head>
 <body>
@@ -88,27 +116,48 @@
   <span class="stat"><span id="liveDot" class="dot off"></span><span id="liveText">offline</span></span>
   <span class="stat">Battery <b id="hdrVolts">–</b></span>
   <span class="stat">Loop <b id="hdrLoop">–</b> <span class="hint">(1/mean dt)</span></span>
+  <span id="hdrChanged"></span>
   <span class="stat" id="hdrMsg"></span>
   <span class="spacer"></span>
   <button class="stop" onclick="cmd('stopAll')">STOP ALL</button>
 </header>
 <nav id="nav">
-  <button data-tab="overview" class="sel">Overview</button>
+  <button data-tab="overview" class="sel">Start here</button>
   <button data-tab="fly">Flywheels</button>
+  <button data-tab="shoot">Shooting</button>
   <button data-tab="turret">Turrets &amp; servos</button>
-  <button data-tab="color">Color sensor</button>
+  <button data-tab="color">Intake &amp; color</button>
   <button data-tab="swerve">Swerve</button>
   <button data-tab="export">Export</button>
 </nav>
 <main>
 <div id="tn-dock"></div>
 
-<!-- ======================================================== OVERVIEW -->
+<!-- ======================================================== START HERE -->
 <div class="tab sel" id="tab-overview">
   <section>
     <h2>Status</h2>
     <div id="ovStatus" class="msg">Waiting for the robot…</div>
     <div class="grid" style="margin-top:12px" id="ovCards"></div>
+  </section>
+  <section>
+    <h2>Everything to tune, in order</h2>
+    <div class="row" style="margin-top:0">
+      <div class="progress"><div id="ckBar" style="width:0"></div></div>
+      <span class="stat" id="ckCount"></span>
+      <span class="spacer"></span>
+      <button class="small" onclick="if(confirm('Untick every item?')){CK={};lsSet('tuneChecks',CK);renderChecks();}">Reset ticks</button>
+    </div>
+    <p class="hint" style="margin-top:0">Work top to bottom — later steps depend on earlier ones (no shooting test until the
+      gate is marked, no shot A/B until the wheels spin the right way). The status on the right comes from the robot:
+      <span class="badge bad">not set yet</span> nothing usable in code, <span class="badge warn">changed this run</span>
+      waiting on Export, <span class="badge">shipped value</span> what the code already has. Ticks are yours and are
+      kept in this browser only.</p>
+    <div class="checks" id="checks"></div>
+  </section>
+  <section>
+    <h2>Not tuned on this page</h2>
+    <div class="tablewrap"><table id="notHere"></table></div>
   </section>
   <section>
     <h2>Messages from Claude</h2>
@@ -125,10 +174,10 @@
   <section>
     <h2>How this fits</h2>
     <p class="hint" style="margin:0">Run <b>Mechanism Tuner</b> (Diagnostics group) on the Driver Station for
-      flywheels, turrets, gate, scoopula and the intake color sensor; nothing moves until START, and
+      flywheels, the shooting sequence, turrets, gate, scoopula and the intake; nothing moves until START, and
       everything stops if no browser or Claude session has talked to the robot for 30 s. The
-      drivetrain is tuned in the separate <b>Swerve Bring-Up</b> OpMode — see the Swerve tab. Values found
-      here only reach competition code through the Export tab.</p>
+      drivetrain is tuned in the separate <b>Swerve Bring-Up</b> OpMode — see the Swerve tab. Every value here is
+      tool-only until it goes through the Export tab: stopping the OpMode throws it away.</p>
   </section>
 </div>
 
@@ -142,16 +191,56 @@
       <span><i style="border-color:var(--nectar)"></i>nectar velocity</span>
       <span><i class="dash" style="border-color:var(--nectar)"></i>nectar target</span>
       <span>shaded = at-speed band (gate may open)</span>
+      <span><i class="box" style="background:rgba(63,185,80,.25)"></i>gate open</span>
     </div>
     <canvas id="flyChart"></canvas>
+    <div class="legend" style="margin-top:8px">
+      <span><b style="color:var(--text)">Speed error, % of target</b> — zoomed in, so a shot dip and its recovery are easy to see</span>
+      <span><i class="dash" style="border-color:var(--good)"></i>entry band (gate opens)</span>
+      <span><i class="dash" style="border-color:var(--warn)"></i>hold band (gate stays open)</span>
+    </div>
+    <canvas id="errChart" class="short"></canvas>
     <div class="row">
-      <label class="inline">Window <select id="chartWin"><option>5</option><option selected>10</option><option>20</option><option>40</option></select> s</label>
+      <label class="inline">Window <select class="winSel"><option>5</option><option selected>10</option><option>20</option><option>40</option></select> s</label>
       <label class="inline">At-speed band <input type="number" id="atSpeed" step="0.5" min="0.5" max="50"> %</label>
-      <button class="small" onclick="cmd('atSpeed',{frac:num('atSpeed')/100})">Apply band</button>
+      <button class="small" onclick="cmd('atSpeed',{frac:num('atSpeed')/100}).then(function(){filled.shoot=false})">Apply band</button>
       <span class="hint">The band is <code>flywheel.AT_SPEED_FRACTION</code>: the shooter opens the gate only inside it.</span>
     </div>
   </section>
   <div class="grid" id="wheelCards"></div>
+  <section>
+    <h2>How to tune the flywheels</h2>
+    <p class="hint" style="margin-top:0">The four numbers go to the Control Hub's own velocity controller
+      (<code>RUN_USING_ENCODER</code>), exactly as <code>flywheel.java</code> runs it. Do it in this order:</p>
+    <ol style="margin:6px 0 0 18px;padding:0;font-size:13px">
+      <li><b>Direction.</b> Open loop 0.3 on each wheel. If it spins the wrong way, tick <i>reversed</i>.</li>
+      <li><b>F</b> (feed-forward: power per ticks/s). Run the <i>Feed-forward sweep</i>, press <i>Use sweep F</i>,
+        then <i>FIRST start</i> for a first P and I, and <i>Write</i>. With F right the wheel already sits close to
+        target with P alone.</li>
+      <li><b>P</b> (push back against error). Run a step from 0 to your shooting speed. Raise P until the rise stops
+        getting faster; back off if it overshoots or never settles.</li>
+      <li><b>I</b> (removes a steady offset) — only if steps settle consistently above or below target.
+        <b>D</b> (damps overshoot) — usually 0 on a flywheel.</li>
+      <li><b>Recovery.</b> Kick (synthetic) to search, then real shots to accept. The <i>Recovery by gain set</i>
+        table below lines every set you tried up side by side.</li>
+    </ol>
+    <p class="hint">If the wheel is at full power for the whole rise, no gain makes it faster — the motor is the limit.
+      The verdict under each step is a rule of thumb, not a measurement.</p>
+  </section>
+  <section>
+    <h2>Step trials — compare gains</h2>
+    <p class="hint" style="margin-top:0">Every step you run lands here with the gains it ran on, plotted on top of the
+      others. Tick the ones to compare; <i>Use</i> loads that trial's gains back into the wheel's boxes.
+      Kept in this browser (last 40).</p>
+    <div class="row">
+      <label class="inline"><input type="checkbox" id="trialNorm" onchange="drawTrials()"> normalise (% of step)</label>
+      <label class="inline"><input type="checkbox" id="trialOnlyLast" onchange="renderTrials()"> only the last 4</label>
+      <span class="spacer"></span>
+      <button class="small" onclick="if(confirm('Delete all stored step trials?')){TR=[];saveTrials();renderTrials();}">Clear trials</button>
+    </div>
+    <canvas id="trialChart"></canvas>
+    <div class="tablewrap" style="margin-top:8px"><table id="trialTable"></table></div>
+  </section>
   <section>
     <h2>Shots and disturbances</h2>
     <p class="hint" style="margin-top:0">With a wheel in VEL mode and inside its band for 0.3 s (badge
@@ -163,6 +252,12 @@
       <span class="hint" id="evSummary"></span>
     </div>
     <div class="tablewrap"><table id="evTable"></table></div>
+    <h2 style="margin-top:16px">Recovery by gain set</h2>
+    <p class="hint" style="margin-top:0">Every shot and kick seen from this browser, grouped by the gains that were on
+      the wheel. Lower <i>back at speed</i> = the next shot can fire sooner. Do not call a winner below
+      <b>n = 5</b> per set, and alternate sets (A, B, A, B…) — the battery sags as you go. Green = lowest median with n ≥ 5.</p>
+    <div class="tablewrap"><table id="groupTable"></table></div>
+    <div class="row"><button class="small" onclick="if(confirm('Forget every stored shot/kick?')){EV=[];EVK={};saveEvents();renderGroups();}">Forget stored events</button></div>
   </section>
   <section>
     <h2>Recorder</h2>
@@ -174,7 +269,8 @@
       <a href="/tune/rec.csv" target="_blank">rec.csv</a>
       <span class="hint" id="recInfo"></span>
     </div>
-    <p class="hint">One sample per loop, 6000 samples, stops when full. Steps record themselves. Color reads pause while recording.</p>
+    <p class="hint">One sample per loop, 6000 samples, stops when full. Steps and shoot sequences record themselves.
+      Color reads pause while recording. Event column: 1 step, 2 kick, 3 dip, 4 ff level, 5 gate open, 6 gate close.</p>
   </section>
   <section>
     <h2>Claude prompt — flywheel PIDF</h2>
@@ -185,6 +281,94 @@
   </section>
 </div>
 
+<!-- ======================================================== SHOOTING -->
+<div class="tab" id="tab-shoot">
+  <section>
+    <h2>The shooting sequence</h2>
+    <p class="hint" style="margin-top:0">This runs the gate logic of <code>shooter.java</code> with the values below,
+      fed by the shipped intake exactly as TeleOp feeds it:</p>
+    <ol style="margin:6px 0 0 18px;padding:0;font-size:13px">
+      <li><b>Wait</b> until <i>both</i> wheels are within the <b>entry band</b> of their target.</li>
+      <li><b>Open</b> the gate and run the intake forward.</li>
+      <li><b>Keep it open</b> while it has been open less than the <b>minimum open time</b>, <i>or</i> while both wheels
+        are still inside the wider <b>hold band</b> (a ball hitting the wheel dips it — the hold band stops that
+        dip from slamming the gate on the ball).</li>
+      <li><b>Close</b> and go back to 1.</li>
+    </ol>
+    <p class="hint">Not modelled: aiming and the shooting zone (the turrets stay where they are). Needs the gate's open and
+      close positions marked on the Turrets &amp; servos tab first.</p>
+    <div id="shootGateWarn"></div>
+  </section>
+  <div class="grid">
+    <section style="margin-top:14px">
+      <h2>Values</h2>
+      <div class="kv"><span>entry band <code>flywheel.AT_SPEED_FRACTION</code></span>
+        <span><input type="number" id="shEntry" step="0.5" min="0.5" max="50" oninput="dirtyShoot()"> %</span></div>
+      <div class="kv"><span>hold band <code>shooter.HOLD_SPEED_FRACTION</code></span>
+        <span><input type="number" id="shHold" step="1" min="0.5" max="90" oninput="dirtyShoot()"> %</span></div>
+      <div class="kv"><span>min open <code>shooter.MIN_GATE_OPEN_S</code></span>
+        <span><input type="number" id="shMinOpen" step="0.05" min="0" max="5" oninput="dirtyShoot()"> s</span></div>
+      <div class="kv"><span>idle speed <code>flywheel.IDLE_FRACTION</code></span>
+        <span><input type="number" id="shIdle" step="5" min="0" max="100" oninput="dirtyShoot()"> %</span></div>
+      <div class="row">
+        <button class="small primary" id="shApply" onclick="applyShoot()">Apply</button>
+        <button class="small" onclick="filled.shoot=false">Reload from robot</button>
+        <span class="hint" id="shDirty"></span>
+      </div>
+      <p class="hint">Tool only until exported. Idle speed is what the wheels drop to outside the shooting zone.</p>
+    </section>
+    <section style="margin-top:14px">
+      <h2>Run it</h2>
+      <div class="row">
+        <label class="inline">pollen <input type="number" id="shP" value="2000" step="50"> ticks/s</label>
+        <label class="inline">nectar <input type="number" id="shN" value="2000" step="50"> ticks/s</label>
+      </div>
+      <div class="row">
+        <label class="inline"><input type="checkbox" id="shFeed" checked> feed with the intake</label>
+        <label class="inline">windows <input type="number" id="shCount" value="3" min="1" max="20" style="width:56px"></label>
+      </div>
+      <div class="row">
+        <button class="primary" onclick="shoot(1)">Shoot once</button>
+        <button class="primary" onclick="shoot(num('shCount'))">Shoot × windows</button>
+        <button onclick="cmd('shootStop')">Stop sequence</button>
+        <button onclick="cmd('flyOff',{wheel:'both'})">Wheels off</button>
+      </div>
+      <div id="shootStatus" class="msg" style="margin-top:8px">–</div>
+    </section>
+  </div>
+  <section>
+    <h2>Live</h2>
+    <div class="legend">
+      <span><i style="border-color:var(--pollen)"></i>pollen</span>
+      <span><i style="border-color:var(--nectar)"></i>nectar</span>
+      <span><i class="box" style="background:rgba(63,185,80,.25)"></i>gate open</span>
+      <span><i class="dash" style="border-color:var(--good)"></i>entry band</span>
+      <span><i class="dash" style="border-color:var(--warn)"></i>hold band</span>
+      <label class="inline">Window <select class="winSel"><option>5</option><option selected>10</option><option>20</option><option>40</option></select> s</label>
+    </div>
+    <canvas id="shootErrChart"></canvas>
+    <canvas id="shootChart" class="short"></canvas>
+  </section>
+  <section>
+    <h2>Gate windows</h2>
+    <p class="hint" style="margin-top:0"><b>Ready</b> = wait before the gate opened. <b>Open</b> = how long it stayed open.
+      <b>Worst dip</b> = lowest speed while open. What good looks like: every loaded piece leaves inside one window;
+      no window closes on <i>speed left the hold band</i> while a ball is still in the wheels.</p>
+    <div class="tablewrap"><table id="shootTable"></table></div>
+  </section>
+  <section>
+    <h2>Zone-entry test (idle speed)</h2>
+    <p class="hint" style="margin-top:0">Outside the zone the wheels idle at <i>idle speed × target</i>. This holds both
+      wheels there for 3 s, then steps to the targets above and times how long until each is in the entry band —
+      the wait before the first shot after driving into the zone. Lower idle = less wear and current, longer wait.</p>
+    <div class="row">
+      <button class="small primary" onclick="zoneTest()">Run zone-entry test</button>
+      <span class="hint">uses the pollen/nectar targets from <i>Run it</i></span>
+    </div>
+    <div id="zoneResult"></div>
+  </section>
+</div>
+
 <!-- ======================================================== TURRETS & SERVOS -->
 <div class="tab" id="tab-turret">
   <section>
@@ -192,8 +376,9 @@
     <p class="hint" style="margin-top:0">The turrets are positional servos, so there is no PID to tune — only the
       mapping from angle to servo position that <code>turret.java</code> uses:
       <code>pos = center ± deg / (servoRange × grB / grA)</code>. Find <b>center</b> (turret straight ahead), check
-      <b>reversed</b> (+deg must turn the way the code expects), then verify the ratio by pointing at ±90° and
-      measuring. Wrong ratio → aim error grows with angle.</p>
+      <b>reversed</b> (+45° must turn to the robot's left, counter-clockwise from above), then verify the ratio by
+      pointing at ±90° and measuring. Wrong ratio → aim error grows with angle. <b>Offset</b> is where the turret pivot
+      sits relative to the robot's pose center (inches, x forward, y left) — measure it with a tape.</p>
     <div class="grid" id="turretCards"></div>
   </section>
   <section>
@@ -204,7 +389,7 @@
   </section>
 </div>
 
-<!-- ======================================================== COLOR -->
+<!-- ======================================================== INTAKE & COLOR -->
 <div class="tab" id="tab-color">
   <section>
     <h2>Live intake color sensor</h2>
@@ -232,6 +417,12 @@
       <button class="small" onclick="cmd('alliance',{side:'RED'})">RED</button>
       <button class="small" onclick="cmd('alliance',{side:'BLUE'})">BLUE</button>
       <span class="stat" id="intakeInfo"></span>
+    </div>
+    <div class="row">
+      <label class="inline">reverse brake <code>REVERSE_BRAKE_MS</code> <input type="number" id="brakeMs" step="10" min="0" max="1000"> ms</label>
+      <button class="small primary" onclick="cmd('intakeParams',{brakeMs:num('brakeMs')})">Apply live</button>
+      <span class="hint">When the intake flips direction (a reject while intaking) it cuts power this long first, so
+        the motors do not slam from +1 to −1. Use the shortest value that does not jerk or stall.</span>
     </div>
   </section>
   <section>
@@ -267,6 +458,11 @@
     </div>
     <p class="hint">Applied to the shipped <code>intake</code> statics for this run only; restored when the OpMode stops. Ship them from the Export tab.</p>
   </section>
+  <section>
+    <h2>Claude prompt — color sensor</h2>
+    <textarea id="promptColor" readonly style="min-height:150px"></textarea>
+    <div class="row"><button class="primary" onclick="copy('promptColor', this)">Copy prompt</button></div>
+  </section>
 </div>
 
 <!-- ======================================================== SWERVE -->
@@ -291,17 +487,17 @@
 <div class="tab" id="tab-export">
   <section>
     <h2>Values to ship</h2>
-    <p class="hint" style="margin-top:0">What this run currently holds, as the declarations in the shipped files.
-      <b>Changing these files is a shipped change</b>: build, then commit each value with its evidence.
-      From a laptop: <code>python tools/mechtune/mechtune.py export</code> (dry run) then <code>--write</code>.</p>
+    <p class="hint" style="margin-top:0">Everything this run holds next to what the code had when the OpMode started.
+      Highlighted rows changed. <b>Changing these files is a shipped change</b>: build, then commit each value with
+      its evidence. Nothing here survives STOP unless it is exported.</p>
     <div class="tablewrap"><table id="exportTable"></table></div>
+    <div class="msg" style="margin-top:10px">From a laptop on the robot WiFi, while this OpMode is still running:<br>
+      <code id="exportCmd">python tools/mechtune/mechtune.py export</code> (dry run), then the same with <code>--write</code>.</div>
     <pre id="exportJava" style="margin-top:10px"></pre>
-    <div class="row"><button class="small" onclick="copy('exportJava', this)">Copy as Java</button></div>
-  </section>
-  <section>
-    <h2>Claude prompt — color sensor</h2>
-    <textarea id="promptColor" readonly style="min-height:150px"></textarea>
-    <div class="row"><button class="primary" onclick="copy('promptColor', this)">Copy prompt</button></div>
+    <div class="row">
+      <button class="small" onclick="copy('exportJava', this)">Copy as Java</button>
+      <label class="inline"><input type="checkbox" id="exportAll" onchange="htmlCache={};render()"> show unchanged values too</label>
+    </div>
   </section>
 </div>
 
@@ -310,10 +506,14 @@
 <script>
 'use strict';
 var S = null;            // last /tune/state
-var hist = [];           // chart history: [tSec, pT, pV, nT, nV, band]
+var hist = [];           // live chart history, one object per poll
 var t0 = performance.now();
 var lastSeq = 0;
 var filled = {};         // inputs pre-filled once from the robot, so typing is never overwritten
+var htmlCache = {};      // last HTML written per element id
+var WIN = 10;            // live chart window, s
+var COL = {pollen: '#e3a72f', nectar: '#4da3ff', good: '#3fb950', warn: '#d29922', muted: '#8b98a8', grid: '#1f2731'};
+var PAL = ['#f0b429', '#58a6ff', '#3fb950', '#ff7b72', '#bc8cff', '#39c5cf', '#f778ba', '#c9d1d9'];
 
 function $(id) { return document.getElementById(id); }
 function val(id) { return $(id).value.trim(); }
@@ -322,13 +522,25 @@ function chk(id) { return $(id).checked; }
 function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) {
   return {'&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;'}[c]; }); }
 function f(v, d) { return v == null || isNaN(v) ? '–' : Number(v).toFixed(d == null ? 0 : d); }
+function median(xs) { if (!xs.length) return null; var s = xs.slice().sort(function (a, b) { return a - b; });
+  var m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+// Browser storage is a per-viewer convenience here; the page works without it.
+function lsGet(k, d) { try { var v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } }
+function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
 
 function cmd(action, params) {
-  var q = new URLSearchParams(Object.assign({action: action}, params || {}));
-  return fetch('/tune/cmd?' + q.toString(), {cache: 'no-store'}).then(function (r) { return r.json(); })
+  var p = {action: action};
+  // An empty number box is NaN: leave it out (the robot keeps its value) rather than send "NaN".
+  Object.keys(params || {}).forEach(function (k) {
+    var v = params[k];
+    if (v == null || (typeof v === 'number' && !isFinite(v))) return;
+    p[k] = v;
+  });
+  return fetch('/tune/cmd?' + new URLSearchParams(p).toString(), {cache: 'no-store'}).then(function (r) { return r.json(); })
     .then(function (j) { lastSeq = j.seq; return j; })
     .catch(function () { $('hdrMsg').textContent = 'Command not delivered (robot offline?)'; });
 }
+function say(t) { $('hdrMsg').textContent = t; }
 
 function copy(id, btn) {
   var el = $(id);
@@ -345,20 +557,122 @@ function copy(id, btn) {
 }
 
 // ---------------------------------------------------------------- tabs
-$('nav').addEventListener('click', function (e) {
-  var b = e.target.closest('button'); if (!b) return;
+function gotoTab(name) {
+  var b = document.querySelector('nav button[data-tab="' + name + '"]'); if (!b) return;
   Array.prototype.forEach.call($('nav').children, function (x) { x.classList.toggle('sel', x === b); });
   Array.prototype.forEach.call(document.querySelectorAll('.tab'), function (t) {
-    t.classList.toggle('sel', t.id === 'tab-' + b.dataset.tab); });
-  try { localStorage.setItem('tuneTab', b.dataset.tab); } catch (err) {}
-  drawChart();
+    t.classList.toggle('sel', t.id === 'tab-' + name); });
+  try { localStorage.setItem('tuneTab', name); } catch (err) {}
+  drawCharts(); drawTrials();
+}
+$('nav').addEventListener('click', function (e) {
+  var b = e.target.closest('button'); if (b) gotoTab(b.dataset.tab);
 });
-try { var savedTab = location.hash.slice(1) || localStorage.getItem('tuneTab');
-  if (savedTab) { var sb = document.querySelector('nav button[data-tab="' + savedTab + '"]'); if (sb) sb.click(); } } catch (err) {}
+Array.prototype.forEach.call(document.querySelectorAll('.winSel'), function (s) {
+  s.addEventListener('change', function () {
+    WIN = parseFloat(s.value);
+    Array.prototype.forEach.call(document.querySelectorAll('.winSel'), function (o) { o.value = s.value; });
+    drawCharts();
+  });
+});
+
+// ---------------------------------------------------------------- checklist
+var CK = lsGet('tuneChecks', {});
+var CHECKS = [
+  {g: 'Flywheels', tab: 'fly', items: [
+    {id: 'fdir', what: 'Spin direction', f: ['POLLEN_FLYWHEEL_REVERSED', 'NECTAR_FLYWHEEL_REVERSED'],
+      how: 'Open loop 0.3 on each wheel: positive must spin the shooting way. Wrong → tick “reversed”.'},
+    {id: 'ff', what: 'F (feed-forward) from the sweep', f: ['POLLEN_PIDF', 'NECTAR_PIDF'],
+      how: '“Feed-forward sweep” on each wheel, then “Use sweep F”, “FIRST start”, Write.'},
+    {id: 'pid', what: 'P, I, D from steps', f: ['POLLEN_PIDF', 'NECTAR_PIDF'],
+      how: 'Steps from 0 to the shooting speed; Step trials plots every gain set on one chart.'},
+    {id: 'shots', what: 'Accept the gains on real shots', f: [],
+      how: 'Shooting tab, or feed by hand. “Recovery by gain set” compares sets; n ≥ 5 each, alternating.'}
+  ]},
+  {g: 'Shooting sequence', tab: 'shoot', items: [
+    {id: 'gate', what: 'Gate open / closed positions', f: ['openPos', 'closePos'], tab: 'turret',
+      how: 'Turrets & servos tab: slide the gate, Mark open, Mark close, then Pulse open to check it feeds one piece.'},
+    {id: 'entry', what: 'Entry band — how close to target before the gate opens', f: ['AT_SPEED_FRACTION'],
+      how: 'Narrower = more consistent shots but a longer wait. Watch the error chart while shooting.'},
+    {id: 'hold', what: 'Minimum open time and hold band — how long the gate stays open', f: ['MIN_GATE_OPEN_S', 'HOLD_SPEED_FRACTION'],
+      how: 'Load pieces, Shoot × windows: every piece must leave in one window and no window may close on a ball.'},
+    {id: 'idle', what: 'Idle speed outside the zone', f: ['IDLE_FRACTION'],
+      how: 'Zone-entry test: the time from idle to the entry band is the wait before the first shot.'}
+  ]},
+  {g: 'Turrets', tab: 'turret', items: [
+    {id: 'tc', what: 'Center (straight ahead)', f: ['POLLEN_TURRET_CENTER', 'NECTAR_TURRET_CENTER'],
+      how: 'Nudge until each turret points straight forward, then “Center = current position”.'},
+    {id: 'tr', what: 'Direction', f: ['POLLEN_TURRET_REVERSED', 'NECTAR_TURRET_REVERSED'],
+      how: 'Point +45°: it must turn to the robot\'s left (counter-clockwise from above). Otherwise tick reversed, Apply.'},
+    {id: 'tg', what: 'Gear ratio / servo range', f: ['POLLEN_TURRET_GEAR_RATIO', 'NECTAR_TURRET_GEAR_RATIO', 'SERVO_RANGE_DEG'],
+      how: 'Point −90° and +90° and measure the real angles; adjust grB until they match. 3+ measurements a side.'},
+    {id: 'to', what: 'Mount offsets', f: ['pollenTurretOffset', 'nectarTurretOffset'],
+      how: 'Tape-measure each turret pivot from the robot\'s pose center: inches, x forward, y left.'}
+  ]},
+  {g: 'Scoopula', tab: 'turret', items: [
+    {id: 'sc', what: 'Scoop / unscoop positions', f: ['scoopPos', 'unscoopPos'], how: 'Slide it, then Mark scoop and Mark unscoop.'}
+  ]},
+  {g: 'Intake', tab: 'color', items: [
+    {id: 'col', what: 'Color thresholds and DOMINANCE', f: ['thresholdRed', 'thresholdBlue', 'DOMINANCE'],
+      how: 'Capture RED, BLUE, EMPTY and anything else the sensor sees; apply the suggestion once it calls every sample right.'},
+    {id: 'rej', what: 'Live reject check, both alliances', f: [],
+      how: 'Watch mode, alliance RED then BLUE: a wrong-alliance piece must be spat out, a right one kept.'},
+    {id: 'brk', what: 'Reverse brake', f: ['REVERSE_BRAKE_MS'],
+      how: 'Intake, then feed a wrong-alliance piece: the shortest brake where the flip does not jerk or stall.'}
+  ]},
+  {g: 'Ship it', tab: 'export', items: [
+    {id: 'exp', what: 'Export, build, commit', f: [],
+      how: 'Export tab: mechtune.py export (dry run), then --write, build, one commit per value with its evidence.'}
+  ]}
+];
+var NOT_HERE = [
+  ['Swerve drivetrain gains', 'Swerve Bring-Up OpMode at /swerve (Swerve tab). Ends in pedroPathing/Constants.java.'],
+  ['Shot speed vs distance (modules/shootingRegression.java)', 'Still a stub. Needs shots from known distances on the field.'],
+  ['predictiveAiming.PREDICT_MS', 'Lead time for shooting on the move: needs the robot driving (TeleOp).'],
+  ['turret UNWIND_HYSTERESIS_DEG / UNWIND_SETTLE_S', 'Only act while a turret tracks a target in TeleOp; this tool points turrets directly.'],
+  ['zoneCheck.ZONE_Y', 'Field geometry from the game manual, not a tuning value.']
+];
+setHtml('notHere', '<tr><th>value</th><th style="text-align:left">where it gets tuned instead</th></tr>' + NOT_HERE.map(function (r) {
+  return '<tr><td>' + esc(r[0]) + '</td><td style="text-align:left;white-space:normal">' + esc(r[1]) + '</td></tr>'; }).join(''));
+
+function sameValue(a, b) {
+  var n = function (s) { return String(s).replace(/\s+/g, '').replace(/\.0(?=[,)}]|$)/g, ''); };
+  if (n(a) === n(b)) return true;
+  var x = Number(a), y = Number(b);
+  return isFinite(x) && isFinite(y) && x === y;
+}
+function exportMap() { var m = {}; (S && S.export || []).forEach(function (e) { m[e.name] = e; }); return m; }
+function entryStatus(e) { return !e ? 'unset' : e.shipped == null ? 'new' : sameValue(e.value, e.shipped) ? 'shipped' : 'changed'; }
+function itemStatus(it, m) {
+  if (!S || !S.live) return ['', '–'];
+  if (!it.f.length) return ['', 'your check'];
+  var st = it.f.map(function (n) { return entryStatus(m[n]); });
+  if (st.indexOf('unset') >= 0) return ['bad', 'not set yet'];
+  if (st.indexOf('changed') >= 0 || st.indexOf('new') >= 0) return ['warn', 'changed this run — export'];
+  return ['', 'shipped value'];
+}
+function toggleCheck(id, on) { if (on) CK[id] = true; else delete CK[id]; lsSet('tuneChecks', CK); renderChecks(); }
+function renderChecks() {
+  var m = exportMap(), total = 0, done = 0;
+  var h = CHECKS.map(function (g) {
+    return '<h3>' + esc(g.g) + '</h3>' + g.items.map(function (it) {
+      total++; if (CK[it.id]) done++;
+      var st = itemStatus(it, m), tab = it.tab || g.tab;
+      return '<div class="ck' + (CK[it.id] ? ' done' : '') + '"><input type="checkbox" ' + (CK[it.id] ? 'checked ' : '') +
+        'onchange="toggleCheck(\'' + it.id + '\',this.checked)"><div class="what">' + esc(it.what) + '</div>' +
+        '<div class="side"><span class="badge ' + st[0] + '">' + st[1] + '</span><button class="small" onclick="gotoTab(\'' + tab + '\')">Open</button></div>' +
+        '<div class="how">' + esc(it.how) + '</div></div>';
+    }).join('');
+  }).join('');
+  setHtml('checks', h);
+  $('ckBar').style.width = (100 * done / total).toFixed(0) + '%';
+  setText('ckCount', done + ' / ' + total + ' done');
+}
 
 // ---------------------------------------------------------------- static card scaffolding
 function buildWheelCards() {
-  $('wheelCards').innerHTML = ['pollen', 'nectar'].map(function (w, i) {
+  $('wheelCards').innerHTML = ['pollen', 'nectar'].map(function (w) {
+    var o = w === 'pollen' ? 'nectar' : 'pollen';
     return '<section class="card" style="margin:0"><h3><span style="color:var(--' + w + ')">●</span>' +
       w + ' flywheel <span class="badge" id="' + w + 'Mode">–</span><span class="badge" id="' + w + 'Speed">–</span>' +
       '<span class="badge" id="' + w + 'Arm">–</span></h3>' +
@@ -369,27 +683,55 @@ function buildWheelCards() {
       '<div class="row"><label class="inline">ticks/s <input type="number" id="' + w + 'VelIn" value="2000" step="50"></label>' +
       '<button class="small primary" onclick="cmd(\'fly\',{wheel:\'' + w + '\',vel:num(\'' + w + 'VelIn\')})">Spin</button>' +
       '<button class="small" onclick="cmd(\'flyOff\',{wheel:\'' + w + '\'})">Off</button>' +
-      '<label class="inline">power <input type="number" id="' + w + 'PwrIn" value="0.5" step="0.05"></label>' +
+      '<label class="inline">power <input type="number" id="' + w + 'PwrIn" value="0.3" step="0.05"></label>' +
       '<button class="small" onclick="cmd(\'flyPower\',{wheel:\'' + w + '\',p:num(\'' + w + 'PwrIn\')})">Open loop</button></div>' +
       '<div class="row"><label class="inline">reversed <input type="checkbox" id="' + w + 'Rev" onchange="cmd(\'flyDir\',{wheel:\'' + w + '\',reversed:this.checked?1:0})"></label>' +
       '<span class="hint">positive ticks/s must be the shooting direction</span></div>' +
       '<div class="row"><b style="font-size:12px">Hub PIDF</b>' +
       ['p', 'i', 'd', 'f'].map(function (k) { return '<label class="inline">' + k.toUpperCase() +
-        ' <input type="number" step="any" id="' + w + 'K' + k + '"></label>'; }).join('') +
-      '<button class="small primary" onclick="applyPidf(\'' + w + '\')">Write</button></div>' +
-      '<div class="hint">hub reads back: <span id="' + w + 'Hub">–</span></div>' +
+        ' <input type="number" step="any" id="' + w + 'K' + k + '" oninput="markPidf()"></label>'; }).join('') + '</div>' +
+      '<div class="row"><button class="small primary" id="' + w + 'Write" onclick="applyPidf(\'' + w + '\',false)">Write</button>' +
+      '<button class="small" onclick="applyPidf(\'' + w + '\',true)">Write to both</button>' +
+      '<button class="small" onclick="loadPidf(\'' + w + '\',shippedPidf(\'' + w + '\'))" title="Put the values from flywheel.java back in the boxes">Shipped</button>' +
+      '<button class="small" onclick="loadPidf(\'' + o + '\',readPidf(\'' + w + '\'))">Copy → ' + o + '</button>' +
+      '<span class="hint" id="' + w + 'Dirty"></span></div>' +
+      '<div class="row"><button class="small" id="' + w + 'UseF" onclick="useSweepF(\'' + w + '\')" disabled>Use sweep F</button>' +
+      '<button class="small" onclick="firstStart(\'' + w + '\')" title="FIRST\'s hub PIDF guide: P = 0.1·F, I = 0.1·P, D = 0">FIRST start from F</button>' +
+      '<span class="hint">hub reads back: <span id="' + w + 'Hub">–</span></span></div>' +
       '<div class="row"><b style="font-size:12px">Step</b><label class="inline">from <input type="number" id="' + w + 'From" value="0" step="50"></label>' +
       '<label class="inline">to <input type="number" id="' + w + 'To" value="2000" step="50"></label>' +
       '<label class="inline">sec <input type="number" id="' + w + 'Sec" value="3" step="0.5"></label>' +
-      '<button class="small" onclick="cmd(\'step\',{wheel:\'' + w + '\',from:num(\'' + w + 'From\'),to:num(\'' + w + 'To\'),sec:num(\'' + w + 'Sec\')})">Run step</button></div>' +
+      '<button class="small primary" onclick="cmd(\'step\',{wheel:\'' + w + '\',from:num(\'' + w + 'From\'),to:num(\'' + w + 'To\'),sec:num(\'' + w + 'Sec\')})">Run step</button></div>' +
       '<div class="row"><b style="font-size:12px">Disturb</b><label class="inline">kick ms <input type="number" id="' + w + 'Kick" value="120" step="10"></label>' +
       '<button class="small" onclick="cmd(\'kick\',{wheel:\'' + w + '\',ms:num(\'' + w + 'Kick\')})">Kick</button>' +
       '<button class="small" onclick="cmd(\'ffSweep\',{wheel:\'' + w + '\'})">Feed-forward sweep</button></div>' +
-      '<div id="' + w + 'Step"></div><div id="' + w + 'Ff"></div></section>';
+      '<div id="' + w + 'Step"></div><div id="' + w + 'Diag"></div><div id="' + w + 'Ff"></div></section>';
   }).join('');
 }
-function applyPidf(w) {
-  cmd('pidf', {wheel: w, p: num(w + 'Kp'), i: num(w + 'Ki'), d: num(w + 'Kd'), f: num(w + 'Kf')});
+function readPidf(w) { return ['p', 'i', 'd', 'f'].map(function (k) { return num(w + 'K' + k); }); }
+function loadPidf(w, v) { if (!v) return; ['p', 'i', 'd', 'f'].forEach(function (k, i) { $(w + 'K' + k).value = v[i]; }); markPidf(); say('Loaded into the ' + w + ' boxes — press Write to send them.'); }
+function wheelState(w) { return S && S.wheels ? S.wheels.filter(function (x) { return x.name === w; })[0] : null; }
+function shippedPidf(w) { var s = wheelState(w); return s && s.shippedPidf; }
+function applyPidf(w, both) {
+  var v = readPidf(w);
+  if (v.some(function (x) { return !isFinite(x); })) { say('Fill in all four PIDF numbers first.'); return; }
+  if (both) loadPidf(w === 'pollen' ? 'nectar' : 'pollen', v);
+  cmd('pidf', {wheel: both ? 'both' : w, p: v[0], i: v[1], d: v[2], f: v[3]});
+}
+function useSweepF(w) { var s = wheelState(w); if (s && s.ff && s.ff.fFromFit != null) { $(w + 'Kf').value = s.ff.fFromFit; markPidf(); } }
+function firstStart(w) {
+  var F = num(w + 'Kf');
+  if (!(F > 0)) { say('Set F first (feed-forward sweep → Use sweep F).'); return; }
+  var P = +(0.1 * F).toFixed(4);
+  loadPidf(w, [P, +(0.1 * P).toFixed(5), 0, F]);
+}
+function markPidf() {
+  ['pollen', 'nectar'].forEach(function (w) {
+    var s = wheelState(w), v = readPidf(w);
+    var dirty = s && s.pidf && v.some(function (x, i) { return !isFinite(x) || Math.abs(x - s.pidf[i]) > 1e-9; });
+    $(w + 'Write').classList.toggle('dirty', !!dirty);
+    setText(w + 'Dirty', dirty ? 'boxes differ from the robot — not written yet' : '');
+  });
 }
 
 function buildTurretCards() {
@@ -405,13 +747,16 @@ function buildTurretCards() {
       [-0.01, -0.001, 0.001, 0.01].map(function (d) { return '<button class="small" onclick="nudge(\'' + w + '\',' + d + ')">' + (d > 0 ? '+' : '') + d + '</button>'; }).join('') + '</div>' +
       '<div class="row"><label class="inline">point at <input type="number" id="' + id + 'DegIn" value="0" step="5"> deg</label>' +
       '<button class="small" onclick="cmd(\'turretDeg\',{which:\'' + w + '\',deg:num(\'' + id + 'DegIn\')})">Point</button>' +
-      [-90, 0, 90].map(function (d) { return '<button class="small" onclick="cmd(\'turretDeg\',{which:\'' + w + '\',deg:' + d + '})">' + d + '°</button>'; }).join('') + '</div>' +
+      [-90, -45, 0, 45, 90].map(function (d) { return '<button class="small" onclick="cmd(\'turretDeg\',{which:\'' + w + '\',deg:' + d + '})">' + d + '°</button>'; }).join('') + '</div>' +
       '<div class="row"><b style="font-size:12px">Calibration</b>' +
       '<label class="inline">center <input type="number" step="0.001" id="' + id + 'Center"></label>' +
       '<label class="inline">grA <input type="number" step="any" id="' + id + 'GrA"></label>' +
       '<label class="inline">grB <input type="number" step="any" id="' + id + 'GrB"></label>' +
       '<label class="inline">servo° <input type="number" step="any" id="' + id + 'Range"></label>' +
       '<label class="inline">reversed <input type="checkbox" id="' + id + 'Rev"></label></div>' +
+      '<div class="row"><b style="font-size:12px">Offset</b>' +
+      '<label class="inline">x fwd <input type="number" step="0.01" id="' + id + 'OffX"> in</label>' +
+      '<label class="inline">y left <input type="number" step="0.01" id="' + id + 'OffY"> in</label></div>' +
       '<div class="row"><button class="small primary" onclick="turretCal(\'' + w + '\')">Apply</button>' +
       '<button class="small" onclick="cmd(\'turretCal\',{which:\'' + w + '\',here:1}).then(function(){filled.t' + w + '=false})">Center = current position</button>' +
       '<span class="hint" id="' + id + 'RangeInfo"></span></div></div>';
@@ -425,7 +770,7 @@ function nudge(w, d) {
 function turretCal(w) {
   var id = 't' + w;
   cmd('turretCal', {which: w, center: num(id + 'Center'), grA: num(id + 'GrA'), grB: num(id + 'GrB'),
-    servoRange: num(id + 'Range'), reversed: chk(id + 'Rev') ? 1 : 0});
+    servoRange: num(id + 'Range'), reversed: chk(id + 'Rev') ? 1 : 0, offX: num(id + 'OffX'), offY: num(id + 'OffY')});
 }
 
 function buildServoCards() {
@@ -449,6 +794,32 @@ function buildServoCards() {
 function sample(label) {
   if (!label) return;
   cmd('colorSample', {label: label, n: num('sampleN')});
+}
+
+// ---------------------------------------------------------------- shooting
+function shootInputs() { return {entry: num('shEntry') / 100, hold: num('shHold') / 100, minOpen: num('shMinOpen'), idle: num('shIdle') / 100}; }
+function applyShoot() {
+  var v = shootInputs();
+  if (v.hold < v.entry) { say('The hold band should be at least as wide as the entry band, or the gate shuts the moment a ball touches the wheel.'); }
+  cmd('shooterParams', v).then(function () { filled.atSpeed = false; });
+}
+function dirtyShoot() {
+  if (!S || !S.shoot) return;
+  var v = shootInputs(), s = S.shoot;
+  var dirty = [[v.entry, s.entry], [v.hold, s.hold], [v.minOpen, s.minOpenS], [v.idle, s.idle]]
+    .some(function (p) { return !isFinite(p[0]) || Math.abs(p[0] - p[1]) > 1e-6; });
+  $('shApply').classList.toggle('dirty', dirty);
+  setText('shDirty', dirty ? 'not applied yet' : '');
+}
+function shoot(count) {
+  cmd('shoot', {pollen: num('shP'), nectar: num('shN'), count: count, feed: chk('shFeed') ? 1 : 0});
+}
+function zoneTest() {
+  if (!S || !S.shoot) return;
+  var idle = S.shoot.idle;
+  [['pollen', num('shP')], ['nectar', num('shN')]].forEach(function (p) {
+    cmd('step', {wheel: p[0], from: Math.round(p[1] * idle), to: p[1], pre: 3, sec: 3, label: 'zone-' + p[0]});
+  });
 }
 
 // ---------------------------------------------------------------- prompts
@@ -520,49 +891,236 @@ color:
 buildWheelCards(); buildTurretCards(); buildServoCards();
 prompts();
 
-// ---------------------------------------------------------------- chart
-function drawChart() {
-  var c = $('flyChart');
-  if (!c || !c.offsetParent) return;
-  var dpr = window.devicePixelRatio || 1;
-  var W = c.clientWidth, H = c.clientHeight;
-  if (c.width !== W * dpr) { c.width = W * dpr; c.height = H * dpr; }
+// ---------------------------------------------------------------- live charts
+function prep(c) {
+  if (!c || !c.offsetParent) return null;
+  var dpr = window.devicePixelRatio || 1, W = c.clientWidth, H = c.clientHeight;
+  if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)) { c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); }
   var g = c.getContext('2d');
   g.setTransform(dpr, 0, 0, dpr, 0, 0);
   g.clearRect(0, 0, W, H);
-  var win = parseFloat($('chartWin').value);
+  g.font = '11px ui-monospace, Consolas, monospace';
+  return {g: g, W: W, H: H};
+}
+function windowPts() {
   var now = (performance.now() - t0) / 1000;
-  var pts = hist.filter(function (h) { return h[0] >= now - win; });
+  return {now: now, pts: hist.filter(function (h) { return h.t >= now - WIN; })};
+}
+function shadeGate(g, pts, x, top, h, now) {
+  g.fillStyle = 'rgba(63,185,80,0.16)';
+  for (var i = 0; i < pts.length; i++) {
+    if (!pts[i].gate) continue;
+    var x1 = i + 1 < pts.length ? x(pts[i + 1].t) : x(now);
+    g.fillRect(x(pts[i].t), top, Math.max(1, x1 - x(pts[i].t)), h);
+  }
+}
+function drawVel(id) {
+  var fr = prep($(id)); if (!fr) return;
+  var g = fr.g, W = fr.W, H = fr.H, wp = windowPts(), pts = wp.pts, now = wp.now;
   var maxV = 100;
-  pts.forEach(function (h) { maxV = Math.max(maxV, Math.abs(h[1]), Math.abs(h[2]), Math.abs(h[3]), Math.abs(h[4])); });
+  pts.forEach(function (h) { maxV = Math.max(maxV, Math.abs(h.pT), Math.abs(h.pV), Math.abs(h.nT), Math.abs(h.nV)); });
   maxV = Math.ceil(maxV * 1.1 / 250) * 250;
   var L = 48, R = 8, T = 8, B = 20;
-  var x = function (t) { return L + (t - (now - win)) / win * (W - L - R); };
+  var x = function (t) { return L + (t - (now - WIN)) / WIN * (W - L - R); };
   var y = function (v) { return T + (1 - v / maxV) * (H - T - B); };
-  g.font = '11px ui-monospace, Consolas, monospace'; g.fillStyle = '#8b98a8'; g.strokeStyle = '#1f2731'; g.lineWidth = 1;
+  shadeGate(g, pts, x, T, H - T - B, now);
+  g.fillStyle = COL.muted; g.strokeStyle = COL.grid; g.lineWidth = 1;
   for (var k = 0; k <= 4; k++) {
     var v = maxV * k / 4; g.beginPath(); g.moveTo(L, y(v)); g.lineTo(W - R, y(v)); g.stroke();
     g.fillText(String(Math.round(v)), 4, y(v) + 4);
   }
-  g.fillText('ticks/s · last ' + win + ' s', L + 4, H - 5);
+  g.fillText('ticks/s · last ' + WIN + ' s', L + 4, H - 5);
   if (pts.length < 2) return;
-  [[1, 'pollen'], [3, 'nectar']].forEach(function (s) {
-    var col = getComputedStyle(document.documentElement).getPropertyValue('--' + s[1]).trim();
-    // band
+  [['pT', 'pV', COL.pollen], ['nT', 'nV', COL.nectar]].forEach(function (s) {
+    var tk = s[0], vk = s[1], col = s[2];
     g.fillStyle = col + '22'; g.beginPath();
-    pts.forEach(function (h, i) { var b = Math.abs(h[s[0]]) * h[5]; (i ? g.lineTo : g.moveTo).call(g, x(h[0]), y(Math.abs(h[s[0]]) + b)); });
-    for (var i = pts.length - 1; i >= 0; i--) { var h = pts[i], b = Math.abs(h[s[0]]) * h[5]; g.lineTo(x(h[0]), y(Math.abs(h[s[0]]) - b)); }
+    pts.forEach(function (h, i) { var b = Math.abs(h[tk]) * h.band; (i ? g.lineTo : g.moveTo).call(g, x(h.t), y(Math.abs(h[tk]) + b)); });
+    for (var i = pts.length - 1; i >= 0; i--) { var h = pts[i], b = Math.abs(h[tk]) * h.band; g.lineTo(x(h.t), y(Math.abs(h[tk]) - b)); }
     g.closePath(); g.fill();
     g.strokeStyle = col; g.lineWidth = 1.5; g.setLineDash([6, 4]); g.beginPath();
-    pts.forEach(function (h, i) { (i ? g.lineTo : g.moveTo).call(g, x(h[0]), y(Math.abs(h[s[0]]))); }); g.stroke();
+    pts.forEach(function (h, i) { (i ? g.lineTo : g.moveTo).call(g, x(h.t), y(Math.abs(h[tk]))); }); g.stroke();
     g.setLineDash([]); g.lineWidth = 2; g.beginPath();
-    pts.forEach(function (h, i) { (i ? g.lineTo : g.moveTo).call(g, x(h[0]), y(Math.abs(h[s[0] + 1]))); }); g.stroke();
+    pts.forEach(function (h, i) { (i ? g.lineTo : g.moveTo).call(g, x(h.t), y(Math.abs(h[vk]))); }); g.stroke();
   });
+}
+function drawErr(id) {
+  var fr = prep($(id)); if (!fr) return;
+  var g = fr.g, W = fr.W, H = fr.H, wp = windowPts(), pts = wp.pts, now = wp.now;
+  var band = S && S.atSpeedFrac ? S.atSpeedFrac : 0.05, hold = S && S.shoot ? S.shoot.hold : band;
+  var Rg = Math.min(60, Math.max(10, Math.ceil(Math.max(band, hold) * 100 * 1.6 / 5) * 5));
+  var L = 48, R = 8, T = 8, B = 18;
+  var x = function (t) { return L + (t - (now - WIN)) / WIN * (W - L - R); };
+  var y = function (e) { e = Math.max(-Rg, Math.min(Rg, e)); return T + (1 - (e + Rg) / (2 * Rg)) * (H - T - B); };
+  shadeGate(g, pts, x, T, H - T - B, now);
+  g.fillStyle = COL.muted; g.strokeStyle = COL.grid; g.lineWidth = 1;
+  [-Rg, 0, Rg].forEach(function (e) { g.beginPath(); g.moveTo(L, y(e)); g.lineTo(W - R, y(e)); g.stroke();
+    g.fillText((e > 0 ? '+' : '') + e + '%', 4, y(e) + 4); });
+  [[band * 100, COL.good], [hold * 100, COL.warn]].forEach(function (b) {
+    g.strokeStyle = b[1]; g.setLineDash([4, 4]); g.lineWidth = 1;
+    [b[0], -b[0]].forEach(function (e) { g.beginPath(); g.moveTo(L, y(e)); g.lineTo(W - R, y(e)); g.stroke(); });
+  });
+  g.setLineDash([]);
+  g.fillText('speed error, % of target · clipped at ±' + Rg + '%', L + 4, H - 4);
+  [['pT', 'pV', 'pOn', COL.pollen], ['nT', 'nV', 'nOn', COL.nectar]].forEach(function (s) {
+    g.strokeStyle = s[3]; g.lineWidth = 2; g.beginPath();
+    var pen = false;
+    pts.forEach(function (h) {
+      if (!h[s[2]]) { pen = false; return; }
+      var e = 100 * (h[s[1]] - h[s[0]]) / Math.abs(h[s[0]]);
+      if (pen) g.lineTo(x(h.t), y(e)); else g.moveTo(x(h.t), y(e));
+      pen = true;
+    });
+    g.stroke();
+  });
+}
+function drawCharts() { drawVel('flyChart'); drawErr('errChart'); drawErr('shootErrChart'); drawVel('shootChart'); }
+
+// ---------------------------------------------------------------- step trials (kept in this browser)
+var TR = lsGet('tuneTrials', []);
+var trialPending = {};
+function saveTrials() { while (TR.length > 40) TR.shift(); lsSet('tuneTrials', TR); }
+function nextColor() { var last = TR[TR.length - 1]; return PAL[last ? (PAL.indexOf(last.color) + 1) % PAL.length : 0]; }
+function parseTrace(csv, a, b, col) {
+  var lines = csv.split('\n').filter(function (l) { return l && l.charAt(0) !== '#'; });
+  lines.shift();                                   // column header
+  var rows = lines.slice(a, b);
+  if (rows.length < 2) return null;
+  var t0r = parseFloat(rows[0].split(',')[0]), stepN = Math.max(1, Math.ceil(rows.length / 400)), out = [];
+  for (var i = 0; i < rows.length; i += stepN) {
+    var c = rows[i].split(','), v = parseFloat(c[col]);
+    if (isFinite(v)) out.push([+(parseFloat(c[0]) - t0r).toFixed(4), v]);
+  }
+  return out;
+}
+function captureTrials() {
+  S.wheels.forEach(function (w) {
+    var st = w.lastStep;
+    if (!st || st.seq == null) return;
+    var key = S.sessionId + ':' + w.name + ':' + st.seq;
+    if (trialPending[key] || TR.some(function (t) { return t.key === key; })) return;
+    trialPending[key] = true;
+    var tr = {key: key, wheel: w.name, at: Date.now(), st: st, pidf: st.pidf || w.pidf, show: true, color: nextColor(), trace: null};
+    var finish = function () { TR.push(tr); saveTrials(); renderTrials(); };
+    if (st.error || st.startIdx == null) { finish(); return; }
+    // The step's samples are rows startIdx..endIdx of the recorder; fetch now, before the next recording reuses it.
+    fetch('/tune/rec.csv', {cache: 'no-store'}).then(function (r) { return r.text(); })
+      .then(function (csv) { tr.trace = parseTrace(csv, st.startIdx, st.endIdx, w.name === 'pollen' ? 3 : 5); })
+      .catch(function () {}).then(finish);
+  });
+}
+function diagnose(st) {
+  if (!st || st.error) return [['bad', st ? st.error : '–']];
+  var out = [], half = st.band / 2;
+  if (st.settleS == null) {
+    out.push(st.ssErrStd != null && st.ssErrStd > half
+      ? ['bad', 'Never settled and the speed keeps swinging: P is too high. Try P × 0.7.']
+      : ['bad', 'Never stayed inside the band. Run a longer step or check the bias below.']);
+  }
+  if (st.ssErrMean != null && Math.abs(st.ssErrMean) > half) {
+    out.push(st.ssErrMean < 0 ? ['warn', 'Sits ' + f(-st.ssErrMean) + ' ticks/s below target: F too low (raise it ~5%) or add a little I.']
+      : ['warn', 'Sits ' + f(st.ssErrMean) + ' ticks/s above target: F too high (lower it ~5%).']);
+  }
+  if (st.overshootPct != null && st.overshootPct > 10) out.push(['warn', 'Overshoots ' + f(st.overshootPct, 1) + '% of the step: lower P, or add a small D.']);
+  if (st.firstInBandS != null && st.firstInBandS > 1.0 && (st.overshootPct || 0) < 3)
+    out.push(['warn', 'Slow to reach speed (' + f(st.firstInBandS, 2) + ' s) with no overshoot: raise P — unless the wheel is already at full power.']);
+  if (!out.length) out.push(['good', 'Clean step. Next: kick it, then confirm on real shots.']);
+  return out;
+}
+function renderTrials() {
+  var only = chk('trialOnlyLast');
+  if (only) TR.forEach(function (t, i) { t.show = i >= TR.length - 4; });
+  var rows = TR.map(function (t, i) { return [t, i]; }).reverse();
+  setHtml('trialTable', rows.length ? '<tr><th></th><th>show</th><th>wheel</th><th>label</th><th>P, I, D, F</th><th>step</th><th>rise 10–90</th><th>in band</th><th>settled</th>' +
+    '<th>overshoot</th><th>ss err ± std</th><th>V</th><th style="text-align:left">verdict (rule of thumb)</th><th></th></tr>' +
+    rows.map(function (r) {
+      var t = r[0], i = r[1], st = t.st || {}, d = diagnose(st)[0];
+      return '<tr><td><span class="sw" style="background:' + t.color + '"></span></td>' +
+        '<td><input type="checkbox" ' + (t.show ? 'checked ' : '') + 'onchange="TR[' + i + '].show=this.checked;saveTrials();drawTrials()"' + (t.trace ? '' : ' disabled title="no trace"') + '></td>' +
+        '<td>' + t.wheel + '</td><td>' + esc(st.label || '') + '</td><td>' + esc((t.pidf || []).join(', ')) + '</td>' +
+        '<td>' + f(st.from) + '→' + f(st.to) + '</td><td>' + f(st.rise10_90S, 3) + ' s</td><td>' + f(st.firstInBandS, 3) + ' s</td>' +
+        '<td>' + (st.error ? '–' : st.settleS == null ? '<span class="badge bad">never</span>' : f(st.settleS, 3) + ' s') + '</td>' +
+        '<td>' + f(st.overshootPct, 1) + '%</td><td>' + f(st.ssErrMean, 1) + ' ± ' + f(st.ssErrStd, 1) + '</td><td>' + f(st.volts, 2) + '</td>' +
+        '<td style="text-align:left;white-space:normal;min-width:220px"><span class="badge ' + d[0] + '">' + (d[0] === 'good' ? 'ok' : d[0] === 'bad' ? 'fix' : 'tweak') + '</span> ' + esc(d[1]) + '</td>' +
+        '<td><button class="small" onclick="loadPidf(\'' + t.wheel + '\',TR[' + i + '].pidf)">Use</button> ' +
+        '<button class="small" onclick="TR.splice(' + i + ',1);saveTrials();renderTrials()">×</button></td></tr>';
+    }).join('') : '<tr><td class="hint">No steps yet. Run a step on either wheel and it appears here.</td></tr>');
+  drawTrials();
+}
+function drawTrials() {
+  var fr = prep($('trialChart')); if (!fr) return;
+  var g = fr.g, W = fr.W, H = fr.H, norm = chk('trialNorm');
+  var shown = TR.filter(function (t) { return t.show && t.trace && t.trace.length > 1; });
+  var L = 52, R = 8, T = 8, B = 20, tMax = 1, lo = 0, hi = 100;
+  var yv = function (t, v) { var st = t.st, d = st.to - st.from; return norm ? (d ? 100 * (v - st.from) / d : 100) : v; };
+  shown.forEach(function (t) {
+    tMax = Math.max(tMax, t.trace[t.trace.length - 1][0]);
+    t.trace.forEach(function (p) { var v = yv(t, p[1]); hi = Math.max(hi, v); lo = Math.min(lo, v); });
+    if (!norm) hi = Math.max(hi, t.st.to);
+  });
+  if (norm) { hi = Math.max(120, Math.ceil(hi / 10) * 10); lo = Math.min(-10, Math.floor(lo / 10) * 10); }
+  else { hi = Math.ceil(hi * 1.08 / 250) * 250; lo = Math.min(0, Math.floor(lo / 250) * 250); }
+  var x = function (s) { return L + s / tMax * (W - L - R); };
+  var y = function (v) { return T + (1 - (v - lo) / (hi - lo)) * (H - T - B); };
+  g.fillStyle = COL.muted; g.strokeStyle = COL.grid; g.lineWidth = 1;
+  for (var k = 0; k <= 4; k++) {
+    var v = lo + (hi - lo) * k / 4; g.beginPath(); g.moveTo(L, y(v)); g.lineTo(W - R, y(v)); g.stroke();
+    g.fillText(norm ? Math.round(v) + '%' : String(Math.round(v)), 4, y(v) + 4);
+  }
+  g.fillText((norm ? '% of step' : 'ticks/s') + ' vs seconds since the step · 0–' + tMax.toFixed(1) + ' s', L + 4, H - 5);
+  if (!shown.length) { g.fillText('Run a step (or tick a trial below) to plot it here.', L + 10, T + 20); return; }
+  var last = shown[shown.length - 1], lst = last.st;
+  if (lst && lst.band != null) {
+    var d = lst.to - lst.from, bt = norm ? (d ? 100 * lst.band / Math.abs(d) : 0) : lst.band, c0 = norm ? 100 : lst.to;
+    g.fillStyle = 'rgba(63,185,80,0.12)'; g.fillRect(L, y(c0 + bt), W - L - R, y(c0 - bt) - y(c0 + bt));
+  }
+  shown.forEach(function (t) {
+    g.strokeStyle = t.color; g.lineWidth = 1; g.setLineDash([5, 4]); g.beginPath();
+    var c = norm ? 100 : t.st.to; g.moveTo(L, y(c)); g.lineTo(W - R, y(c)); g.stroke(); g.setLineDash([]);
+    g.lineWidth = 2; g.beginPath();
+    t.trace.forEach(function (p, i) { (i ? g.lineTo : g.moveTo).call(g, x(p[0]), y(yv(t, p[1]))); });
+    g.stroke();
+  });
+}
+
+// ---------------------------------------------------------------- shots and kicks, grouped by gains
+var EV = lsGet('tuneEvents', []);
+var EVK = {}; EV.forEach(function (e) { EVK[e.key] = true; });
+function saveEvents() { while (EV.length > 400) { delete EVK[EV.shift().key]; } lsSet('tuneEvents', EV); }
+function captureEvents() {
+  var added = false;
+  S.events.forEach(function (e) {
+    var key = S.sessionId + ':' + e.id;
+    if (EVK[key]) return;
+    EVK[key] = true; added = true;
+    EV.push({key: key, wheel: e.wheel, source: e.source, pidf: e.pidf, dipPct: e.dipPct, recoverMs: e.recoverMs, volts: e.volts, target: e.target});
+  });
+  if (added) { saveEvents(); renderGroups(); }
+}
+function renderGroups() {
+  var groups = {};
+  EV.forEach(function (e) {
+    var k = e.wheel + '|' + e.source + '|' + e.pidf.join(', ');
+    var gr = groups[k] = groups[k] || {wheel: e.wheel, source: e.source, pidf: e.pidf.join(', '), dip: [], rec: [], lost: 0, v: [], tgt: []};
+    gr.dip.push(e.dipPct); gr.v.push(e.volts); gr.tgt.push(e.target);
+    if (e.recoverMs >= 0) gr.rec.push(e.recoverMs); else gr.lost++;
+  });
+  var list = Object.keys(groups).map(function (k) { var gr = groups[k]; gr.n = gr.dip.length; gr.medRec = median(gr.rec); return gr; });
+  list.sort(function (a, b) { return a.wheel < b.wheel ? -1 : a.wheel > b.wheel ? 1 : a.source < b.source ? -1 : a.source > b.source ? 1 : (a.medRec == null ? 1e9 : a.medRec) - (b.medRec == null ? 1e9 : b.medRec); });
+  var best = {};
+  list.forEach(function (gr) { var k = gr.wheel + gr.source; if (gr.n >= 5 && gr.medRec != null && !best[k]) best[k] = gr; });
+  setHtml('groupTable', list.length ? '<tr><th>wheel</th><th>source</th><th>P, I, D, F</th><th>n</th><th>median dip</th><th>median back at speed</th>' +
+    '<th>slowest</th><th>never recovered</th><th>target</th><th>V (median)</th><th></th></tr>' + list.map(function (gr) {
+      var isBest = best[gr.wheel + gr.source] === gr;
+      return '<tr' + (isBest ? ' class="best"' : '') + '><td>' + gr.wheel + '</td><td>' + gr.source + '</td><td>' + esc(gr.pidf) + '</td><td>' + gr.n +
+        (gr.n < 5 ? ' <span class="badge">too few</span>' : '') + '</td><td>' + f(median(gr.dip), 1) + '%</td><td>' + f(gr.medRec) + ' ms</td><td>' +
+        (gr.rec.length ? f(Math.max.apply(null, gr.rec)) + ' ms' : '–') + '</td><td>' + (gr.lost ? '<span class="badge bad">' + gr.lost + '</span>' : '0') + '</td><td>' +
+        f(median(gr.tgt)) + '</td><td>' + f(median(gr.v), 2) + '</td><td><button class="small" onclick="loadPidf(\'' + gr.wheel + '\',[' + gr.pidf + '])">Use</button></td></tr>';
+    }).join('') : '<tr><td class="hint">No shots or kicks seen yet.</td></tr>');
 }
 
 // ---------------------------------------------------------------- render
 function setText(id, t) { var e = $(id); if (e && e.textContent !== t) e.textContent = t; }
-function setHtml(id, h) { var e = $(id); if (e && e.innerHTML !== h) e.innerHTML = h; }
+function setHtml(id, h) { var e = $(id); if (e && htmlCache[id] !== h) { e.innerHTML = h; htmlCache[id] = h; } }
 function fillOnce(key, fn) { if (!filled[key]) { fn(); filled[key] = true; } }
 
 function render() {
@@ -575,14 +1133,20 @@ function render() {
   $('swerveStatus').innerHTML = S && S.swerveLive
     ? '<span class="badge good">Swerve Bring-Up is running</span> — open <a href="/swerve" target="_blank">/swerve</a>.'
     : '<span class="badge">Swerve Bring-Up is not running</span> — select it on the Driver Station to tune the drivetrain.';
+  renderChecks();
   if (!live) {
     $('ovStatus').className = 'msg bad';
     setHtml('ovStatus', S ? 'Robot app reachable, but <b>Mechanism Tuner</b> is not running. Select it in the Diagnostics group and press INIT.' +
       (S.swerveLive ? ' (Swerve Bring-Up is running right now.)' : '') : 'Robot not reachable. Join the robot WiFi.');
+    setHtml('hdrChanged', '');
     return;
   }
   $('ovStatus').className = 'msg' + (S.watchdog || /REFUSED|ERROR|UNKNOWN/.test(S.message) ? ' bad' : '');
   setHtml('ovStatus', (S.started ? '<b>Running.</b> ' : '<b>INIT.</b> Press START on the Driver Station before anything can move. ') + esc(S.message));
+
+  var nChanged = S.export.filter(function (e) { var s = entryStatus(e); return s === 'changed' || s === 'new'; }).length;
+  setHtml('hdrChanged', nChanged ? '<span class="badge warn link" onclick="gotoTab(\'export\')" title="Lost on STOP unless exported">' +
+    nChanged + ' value' + (nChanged > 1 ? 's' : '') + ' changed — not shipped yet</span>' : '');
 
   var ov = [];
   S.wheels.forEach(function (w) {
@@ -590,6 +1154,9 @@ function render() {
       '<div class="kv"><span>mode</span><span>' + w.mode + '</span></div><div class="kv"><span>velocity / target</span><span>' +
       f(w.vel) + ' / ' + f(w.target) + '</span></div><div class="kv"><span>PIDF</span><span>' + w.pidf.join(', ') + '</span></div></div>');
   });
+  ov.push('<div class="card"><h3>Shooting sequence</h3><div class="kv"><span>state</span><span>' + S.shoot.state + '</span></div>' +
+    '<div class="kv"><span>gate marked</span><span>' + (S.shoot.gateReady ? 'yes' : '<span class="badge bad">no</span>') + '</span></div>' +
+    '<div class="kv"><span>gate windows logged</span><span>' + S.shoot.windows.length + '</span></div></div>');
   ov.push('<div class="card"><h3>Turrets &amp; servos</h3>' + S.turrets.concat(S.servos).map(function (t) {
     return '<div class="kv"><span>' + t.name + (t.center != null ? ' turret' : '') + '</span><span>' + (t.ok ? 'pos ' + f(t.pos, 3) : '<span class="badge bad">missing</span>') + '</span></div>'; }).join('') + '</div>');
   ov.push('<div class="card"><h3>Color sensor ' + (S.color.ok ? '' : '<span class="badge bad">missing</span>') + '</h3>' +
@@ -613,21 +1180,27 @@ function render() {
     setText(n + 'Err', w.ok ? (w.mode === 'VEL' && w.target ? 'error ' + f(w.vel - w.target) + ' ticks/s (' + f(100 * (w.vel - w.target) / Math.abs(w.target), 1) + '%)' : '') : w.error);
     setText(n + 'Hub', w.hubPidf || '–');
     fillOnce(n + 'pidf', function () { ['p', 'i', 'd', 'f'].forEach(function (k, i) { $(n + 'K' + k).value = w.pidf[i]; }); $(n + 'Rev').checked = w.reversed; });
+    $(n + 'UseF').disabled = !(w.ff && w.ff.fFromFit != null);
     var st = w.lastStep;
     setHtml(n + 'Step', st ? (st.error ? '<div class="msg bad">' + esc(st.error) + '</div>' :
       '<div class="tablewrap"><table><tr><th>last step</th><th>rise 10–90</th><th>in band</th><th>settled</th><th>overshoot</th><th>ss err ± std</th><th>loop</th><th>V</th></tr>' +
       '<tr><td>' + f(st.from) + '→' + f(st.to) + '</td><td>' + f(st.rise10_90S, 3) + ' s</td><td>' + f(st.firstInBandS, 3) + ' s</td><td>' +
       (st.settleS == null ? '<span class="badge bad">never</span>' : f(st.settleS, 3) + ' s') + '</td><td>' + f(st.overshootPct, 1) + '%</td><td>' +
       f(st.ssErrMean, 1) + ' ± ' + f(st.ssErrStd, 1) + '</td><td>' + f(st.loopHzTrue) + ' Hz</td><td>' + f(st.volts, 2) + '</td></tr></table></div>') : '');
+    setHtml(n + 'Diag', st ? diagnose(st).map(function (d) { return '<div class="tip ' + d[0] + '">' + esc(d[1]) + '</div>'; }).join('') : '');
     var ff = w.ff;
     setHtml(n + 'Ff', ff ? '<div class="hint" style="margin-top:6px">Feed-forward sweep: ' + ff.levels.map(function (l) { return 'p' + l[0] + '→' + f(l[1]); }).join(', ') +
       '. Max velocity (fit) <b>' + f(ff.maxVelFit) + '</b> → F ≈ <b>' + f(ff.fFromFit, 2) + '</b>' +
       (ff.fFromFull != null ? ' (at full power: ' + f(ff.maxVelAtFull) + ' → F ' + f(ff.fFromFull, 2) + ')' : '') + '. FIRST guide: F = 32767 / max ticks/s.</div>' : '');
   });
-  var tSec = (performance.now() - t0) / 1000;
-  hist.push([tSec, S.wheels[0].target, S.wheels[0].vel, S.wheels[1].target, S.wheels[1].vel, S.atSpeedFrac]);
-  while (hist.length && hist[0][0] < tSec - 45) hist.shift();
-  drawChart();
+  markPidf();
+  var tSec = (performance.now() - t0) / 1000, p = S.wheels[0], q = S.wheels[1];
+  hist.push({t: tSec, pT: p.target, pV: p.vel, nT: q.target, nV: q.vel, pOn: p.mode === 'VEL' && p.target !== 0,
+    nOn: q.mode === 'VEL' && q.target !== 0, band: S.atSpeedFrac, gate: S.shoot.gateOpen});
+  while (hist.length && hist[0].t < tSec - 45) hist.shift();
+  drawCharts();
+  captureTrials();
+  captureEvents();
 
   var ev = S.events.slice().reverse();
   setHtml('evTable', ev.length ? '<tr><th>#</th><th>wheel</th><th>source</th><th>target</th><th>dip</th><th>to bottom</th><th>back at speed</th><th>overshoot</th><th>PIDF</th><th>V</th></tr>' +
@@ -637,8 +1210,39 @@ function render() {
     : '<tr><td class="hint">No shots or kicks yet.</td></tr>');
   var shots = S.events.filter(function (e) { return e.source === 'shot' && e.recoverMs >= 0; });
   setText('evSummary', shots.length ? shots.length + ' recovered shots shown, median back-at-speed ' +
-    f(shots.map(function (e) { return e.recoverMs; }).sort(function (a, b) { return a - b; })[Math.floor(shots.length / 2)]) + ' ms' : '');
+    f(median(shots.map(function (e) { return e.recoverMs; }))) + ' ms' : '');
   setText('recInfo', (S.rec.recording ? '● recording ' : 'stopped · ') + S.rec.label + ' · ' + S.rec.size + '/' + S.rec.capacity);
+
+  // shooting
+  var sh = S.shoot;
+  fillOnce('shoot', function () { $('shEntry').value = +(sh.entry * 100).toFixed(2); $('shHold').value = +(sh.hold * 100).toFixed(2);
+    $('shMinOpen').value = sh.minOpenS; $('shIdle').value = +(sh.idle * 100).toFixed(1); });
+  dirtyShoot();
+  setHtml('shootGateWarn', sh.gateReady ? '' : '<div class="msg bad" style="margin-top:8px">The gate\'s <b>open</b> and <b>close</b> positions are not marked yet — ' +
+    'the sequence will refuse to run. <button class="small" onclick="gotoTab(\'turret\')">Mark them</button></div>');
+  var inB = function (w, fr) { return w.mode === 'VEL' && w.target > 0 && Math.abs(w.vel - w.target) <= fr * w.target; };
+  var bandBadge = function (w) { return '<span class="badge ' + (inB(w, sh.entry) ? 'good' : inB(w, sh.hold) ? 'warn' : '') + '">' + w.name + ' ' +
+    (inB(w, sh.entry) ? 'in entry band' : inB(w, sh.hold) ? 'in hold band' : 'outside') + '</span>'; };
+  $('shootStatus').className = 'msg' + (sh.state === 'SHOOT' ? '' : sh.state === 'TRACK' ? ' warn' : '');
+  setHtml('shootStatus', (sh.state === 'OFF' ? '<b>Idle.</b> ' + (sh.end ? 'Last run ended: ' + esc(sh.end) + '.' : '')
+    : sh.state === 'TRACK' ? '<b>Waiting for speed</b> — ' + f(sh.phaseMs) + ' ms so far'
+    : '<b>Gate OPEN</b> — ' + f(sh.phaseMs) + ' ms' + (sh.feed ? ', intake feeding' : '')) +
+    (sh.state !== 'OFF' ? ' · ' + sh.left + ' window' + (sh.left === 1 ? '' : 's') + ' left' : '') +
+    '<div class="row" style="margin-bottom:0">' + bandBadge(p) + bandBadge(q) + '</div>');
+  var wins = sh.windows.slice().reverse();
+  setHtml('shootTable', wins.length ? '<tr><th>#</th><th>ready</th><th>open</th><th style="text-align:left">closed because</th><th>pollen worst</th><th>nectar worst</th>' +
+    '<th>targets</th><th>entry / hold / min open</th><th>fed</th><th>V</th></tr>' + wins.map(function (wd) {
+      return '<tr><td>' + wd.id + '</td><td>' + f(wd.readyMs) + ' ms</td><td>' + f(wd.openMs) + ' ms</td><td style="text-align:left">' + esc(wd.closedBy) + '</td><td>' +
+        f(wd.pWorstPct, 1) + '%</td><td>' + f(wd.nWorstPct, 1) + '%</td><td>' + f(wd.pTarget) + ' / ' + f(wd.nTarget) + '</td><td>' +
+        f(wd.entry * 100, 1) + '% / ' + f(wd.hold * 100, 1) + '% / ' + f(wd.minOpenS, 2) + ' s</td><td>' + (wd.feed ? 'yes' : 'no') + '</td><td>' + f(wd.volts, 2) + '</td></tr>';
+    }).join('') : '<tr><td class="hint">No gate windows yet. Load pieces and press Shoot.</td></tr>');
+  var zs = S.wheels.map(function (w) { var st = w.lastStep; return st && st.label && st.label.indexOf('zone-') === 0 ? [w.name, st] : null; }).filter(Boolean);
+  setHtml('zoneResult', zs.length ? '<div class="msg" style="margin-top:8px">' + zs.map(function (z) {
+      return z[0] + ': ' + f(z[1].from) + ' → ' + f(z[1].to) + ' ticks/s, in the entry band after <b>' +
+        (z[1].firstInBandS == null ? 'never' : f(z[1].firstInBandS, 2) + ' s') + '</b>';
+    }).join('<br>') + (zs.length === 2 && zs[0][1].firstInBandS != null && zs[1][1].firstInBandS != null
+      ? '<br>First shot possible ≈ <b>' + f(Math.max(zs[0][1].firstInBandS, zs[1][1].firstInBandS), 2) + ' s</b> after entering the zone (the slower wheel; aiming not counted).' : '') +
+    '</div>' : '');
 
   // turrets and servos
   S.turrets.forEach(function (t) {
@@ -648,7 +1252,8 @@ function render() {
     if (t.pos != null && document.activeElement !== $(id + 'Slider')) $(id + 'Slider').value = t.pos;
     setText(id + 'RangeInfo', 'full travel = ' + f(t.rangeDeg, 1) + '° of turret');
     fillOnce(id, function () { $(id + 'Center').value = t.center; $(id + 'GrA').value = t.grA; $(id + 'GrB').value = t.grB;
-      $(id + 'Range').value = t.servoRange; $(id + 'Rev').checked = t.reversed; $(id + 'PosIn').value = t.pos != null ? t.pos : t.center; });
+      $(id + 'Range').value = t.servoRange; $(id + 'Rev').checked = t.reversed; $(id + 'PosIn').value = t.pos != null ? t.pos : t.center;
+      $(id + 'OffX').value = t.offX; $(id + 'OffY').value = t.offY; });
   });
   S.servos.forEach(function (s) {
     var id = 's' + s.name;
@@ -674,6 +1279,7 @@ function render() {
     (c.pausedForRec ? '<div class="badge warn">paused: recorder running</div>' : ''));
   $('btnStream').classList.toggle('on', c.stream); setText('btnStream', c.stream ? 'Streaming on' : 'Streaming off');
   setText('intakeInfo', S.intake.ok ? 'intake ' + S.intake.mode + ' · alliance ' + S.intake.alliance : 'intake unavailable: ' + S.intake.error);
+  fillOnce('brake', function () { $('brakeMs').value = S.intake.brakeMs; });
   setText('sampleInfo', c.sampling ? 'capturing ' + c.samplingLabel + '… ' + c.sampling + ' left' : c.samples + ' samples stored');
   var sm = c.summary || {labels: []};
   setHtml('colorTable', sm.labels.length ? '<tr><th>label</th><th>n</th><th>red mean [min–max]</th><th>green</th><th>blue</th><th>alpha</th><th>called RED</th><th>called BLUE</th></tr>' +
@@ -690,11 +1296,21 @@ function render() {
   fillOnce('color', function () { fillColorInputs(false); });
 
   // export
-  setHtml('exportTable', '<tr><th>file</th><th>field</th><th>value</th></tr>' + S.export.map(function (e) {
-    return '<tr><td>' + e.file + '</td><td>' + e.name + '</td><td style="text-align:left"><code>' + esc(e.value) + '</code></td></tr>'; }).join(''));
-  var byFile = {};
-  S.export.forEach(function (e) { (byFile[e.file] = byFile[e.file] || []).push(e.name + ' = ' + e.value + ';'); });
+  var showAll = chk('exportAll');
+  var rows = S.export.map(function (e) { return [e, entryStatus(e)]; });
+  var shown = rows.filter(function (r) { return showAll || r[1] === 'changed' || r[1] === 'new'; });
+  var label = {changed: '<span class="badge warn">changed</span>', 'new': '<span class="badge warn">new</span>', shipped: '<span class="badge">as shipped</span>'};
+  setHtml('exportTable', shown.length ? '<tr><th>file</th><th>field</th><th style="text-align:left">in the code (at init)</th><th style="text-align:left">this run</th><th></th></tr>' +
+    shown.map(function (r) { var e = r[0];
+      return '<tr' + (r[1] === 'shipped' ? '' : ' class="changed"') + '><td>' + e.file + '</td><td>' + e.name + '</td><td style="text-align:left"><code>' +
+        (e.shipped == null ? '<span class="hint">not readable by the tool</span>' : esc(e.shipped)) + '</code></td><td style="text-align:left"><code>' + esc(e.value) + '</code></td><td>' + label[r[1]] + '</td></tr>';
+    }).join('') : '<tr><td class="hint">Nothing changed yet — every value is still what the code ships. Tick “show unchanged values too” to see them.</td></tr>');
+  var byFile = {}, files = {};
+  shown.forEach(function (r) { var e = r[0]; (byFile[e.file] = byFile[e.file] || []).push(e.name + ' = ' + e.value + ';');
+    files[e.file.replace(/^.*\//, '').replace(/\.java$/, '')] = true; });
   setText('exportJava', Object.keys(byFile).map(function (k) { return '// ' + k + '\n' + byFile[k].join('\n'); }).join('\n\n'));
+  var only = Object.keys(files);
+  setText('exportCmd', 'python tools/mechtune/mechtune.py export' + (only.length && !showAll ? ' --only ' + only.join(',') : ''));
 }
 function fillColorInputs(force) {
   if (!S || !S.live) return;
@@ -722,17 +1338,19 @@ function poll() {
   polling = true;
   fetch('/tune/state', {cache: 'no-store'}).then(function (r) { return r.json(); })
     .then(function (j) {
-      var wasLive = S && S.live;
+      var wasLive = S && S.live, wasSession = S && S.sessionId;
       S = j;
-      if (S.live && !wasLive) { filled = {}; }
+      if (S.live && (!wasLive || S.sessionId !== wasSession)) { filled = {}; }
       render();
     })
     .catch(function () { S = null; render(); })
     .then(function () { polling = false; });
 }
+renderTrials(); renderGroups(); renderChecks();
+try { var savedTab = location.hash.slice(1) || localStorage.getItem('tuneTab'); if (savedTab) gotoTab(savedTab); } catch (err) {}
 setInterval(poll, 100);
 setInterval(prompts, 5000);
-window.addEventListener('resize', drawChart);
+window.addEventListener('resize', function () { drawCharts(); drawTrials(); });
 poll();
 </script>
 </body>

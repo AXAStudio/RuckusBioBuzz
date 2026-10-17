@@ -60,7 +60,7 @@ public final class FlyRecorder {
         return label;
     }
 
-    /** Marks the next sample (1 = step, 2 = kick, 3 = dip detected, 4 = ff level). */
+    /** Marks the next sample (1 = step, 2 = kick, 3 = dip detected, 4 = ff level, 5 = gate open, 6 = gate close). */
     public void mark(int code) {
         pendingEvent = code;
     }

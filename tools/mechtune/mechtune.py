@@ -347,7 +347,7 @@ def set_pidf(wheel: str, coeffs: list[float]) -> None:
 FILE_KEYS = {
     "flywheel": "systems/flywheel.java", "turret": "systems/turret.java",
     "intake": "systems/intake.java", "gate": "systems/gate.java",
-    "scoopula": "systems/scoopula.java",
+    "scoopula": "systems/scoopula.java", "shooter": "systems/shooter.java",
 }
 
 
