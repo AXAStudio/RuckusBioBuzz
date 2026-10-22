@@ -1,12 +1,14 @@
 package org.firstinspires.ftc.teamcode.systems;
 
 import com.acmerobotics.dashboard.config.Config;
+import com.pedropathing.math.Pose;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
 import org.firstinspires.ftc.teamcode.modules.predictiveAiming;
 import org.firstinspires.ftc.teamcode.modules.zoneCheck;
+import org.firstinspires.ftc.teamcode.helpers.HivePosition;
 
 @Config
 public class shooter {
@@ -21,6 +23,7 @@ public class shooter {
     private final turret aiming;
     private final flywheel flywheel;
     private final intake intake;
+    private final HivePosition hivePosition;
     private gate shooterGate;
 
     private boolean inZone;
@@ -31,17 +34,18 @@ public class shooter {
     states state = states.TRACK;
 
     public shooter(HardwareMap hardwareMap, predictiveAiming predictor) {
-        this.zone = new zoneCheck(predictor);
-        aiming = new turret(hardwareMap, predictor);
+        hivePosition = new HivePosition();
+        zone = new zoneCheck(predictor);
+        aiming = new turret(hardwareMap, predictor, new HivePosition());
         intake = new intake(hardwareMap);
-        this.flywheel = new flywheel(hardwareMap, aiming);
+        flywheel = new flywheel(hardwareMap, aiming);
         shooterGate = new gate(hardwareMap);
 
     }
 
     public void setAlliance(Alliance alliance) {
         aiming.setAlliance(alliance);
-        intake.setAlliance(alliance);
+        intake.setAlliance(alliance) ;
 
     }
     public boolean shooting(){
@@ -88,6 +92,9 @@ public class shooter {
 
     public boolean ready() {
         return state == states.SHOOT;
+    }
+    public states getState(){
+        return state;
     }
 
     public boolean inZone() { return zone.predictedInZone(); }

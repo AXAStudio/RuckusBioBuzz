@@ -30,6 +30,7 @@ public class turret{
 
     private final TurretServo pollenTurret;
     private final TurretServo nectarTurret;
+    private final HivePosition hivePosition;
 
     private boolean pollenAimed;
     private boolean nectarAimed;
@@ -46,10 +47,11 @@ public class turret{
         }
     }
 
-    public turret(HardwareMap hardwareMap, predictiveAiming predictor) {
+    public turret(HardwareMap hardwareMap, predictiveAiming predictor, HivePosition hivePosition) {
         this.predictor = predictor;
         pollenTurret = new TurretServo(hardwareMap.get(Servo.class, "pollenTurretServo"));
         nectarTurret = new TurretServo(hardwareMap.get(Servo.class, "nectarTurretServo"));
+        this.hivePosition = hivePosition;
     }
 
     public void setAlliance(Alliance alliance) {
@@ -77,7 +79,7 @@ public class turret{
     public boolean nectarAimed() { return nectarAimed; }
 
     private aimer aimFrom(Pose turret) {
-        Pose target = HivePosition.target(predictor.leadPose(), alliance);
+        Pose target = hivePosition.target(predictor.leadPose(), alliance);
         double dx = target.x() - turret.x();
         double dy = target.y() - turret.y();
         double dist = Math.hypot(dx, dy);

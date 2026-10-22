@@ -18,7 +18,7 @@ public class HivePosition {
     /** Field half line in y: below it the target is DOWN_POS, at or above it UP_POS. */
     private static final double HALF_Y = 71;
 
-    private HivePosition() {}
+    public HivePosition() {}
 
     /** The hive point to aim at from {@code robot}: the alliance's x, down below the half, else up. */
     public static Pose target(Pose robot, Alliance alliance) {
