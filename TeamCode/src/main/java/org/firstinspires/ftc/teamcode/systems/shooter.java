@@ -97,7 +97,6 @@ public class shooter {
         return state;
     }
 
-    public boolean inZone() { return zone.predictedInZone(); }
     public boolean pollenAimed() { return aiming.pollenAimed(); }
     public boolean nectarAimed() { return aiming.nectarAimed(); }
 }
