@@ -1,6 +1,7 @@
 package org.firstinspires.ftc.teamcode.systems;
 
 
+import com.acmerobotics.dashboard.config.Config;
 import com.bylazar.configurables.annotations.Configurable;
 import com.pedropathing.control.PIDFCoefficients;
 import com.qualcomm.robotcore.hardware.DcMotor;
@@ -10,6 +11,7 @@ import com.qualcomm.robotcore.hardware.HardwareMap;
 
 import org.firstinspires.ftc.teamcode.modules.shootingRegression;
 
+@Config
 @Configurable
 public class flywheel {
     public static boolean POLLEN_FLYWHEEL_REVERSED = false;

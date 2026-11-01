@@ -1,5 +1,8 @@
 package org.firstinspires.ftc.teamcode.diagnostics.swerve;
 
+import com.acmerobotics.dashboard.FtcDashboard;
+import com.acmerobotics.dashboard.config.Config;
+import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
 import com.bylazar.configurables.annotations.Configurable;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
@@ -19,6 +22,7 @@ import com.qualcomm.robotcore.util.ElapsedTime;
  * disconnect, so a dropped laptop would otherwise leave the motors running); set it to 0 and back
  * to keep going. Put the robot on blocks.
  */
+@Config
 @Configurable
 @TeleOp(name = "Raw Motor Test", group = "Diagnostics")
 public class RawMotorTest extends OpMode {
@@ -42,6 +46,7 @@ public class RawMotorTest extends OpMode {
         motors[0].setDirection(DcMotorSimple.Direction.REVERSE);
         motors[1].setDirection(DcMotorSimple.Direction.REVERSE);
 
+        telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
     }
 
     @Override

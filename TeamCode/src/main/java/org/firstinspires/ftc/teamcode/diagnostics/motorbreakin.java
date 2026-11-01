@@ -1,5 +1,6 @@
 package org.firstinspires.ftc.teamcode.diagnostics;
 
+import com.acmerobotics.dashboard.config.Config;
 import com.bylazar.configurables.annotations.Configurable;
 import com.pedropathing.drivetrain.DrivePowers;
 import com.pedropathing.follower.Follower;
@@ -12,6 +13,7 @@ import com.qualcomm.robotcore.util.ElapsedTime;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 
 @TeleOp(name = "motorbreakin", group = "TeleOp")
+@Config
 @Configurable
 public class motorbreakin extends OpMode {
     private static final double NORMAL_SPEED = 1.0;

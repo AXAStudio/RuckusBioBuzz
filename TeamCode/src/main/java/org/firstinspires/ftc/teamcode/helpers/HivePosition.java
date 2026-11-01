@@ -1,5 +1,6 @@
 package org.firstinspires.ftc.teamcode.helpers;
 
+import com.acmerobotics.dashboard.config.Config;
 import com.bylazar.configurables.annotations.Configurable;
 import com.pedropathing.math.Pose;
 
@@ -8,6 +9,7 @@ import com.pedropathing.math.Pose;
  * up or down position from the half of the field the robot is on. Only the two x values can be
  * changed, from FTC Dashboard.
  */
+@Config
 @Configurable
 public class HivePosition {
     public static double xred = 58;

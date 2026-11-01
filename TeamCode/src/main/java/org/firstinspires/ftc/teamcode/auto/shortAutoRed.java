@@ -1,5 +1,6 @@
 package org.firstinspires.ftc.teamcode.auto;
 
+import com.acmerobotics.dashboard.config.Config;
 import com.bylazar.configurables.annotations.Configurable;
 import com.pedropathing.algorithm.Foresight;
 import com.pedropathing.api.Paths;
@@ -19,6 +20,7 @@ import java.util.List;
 import org.firstinspires.ftc.teamcode.helpers.PoseStorage;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 
+@Config
 @Configurable
 @Autonomous(name = "Short RED auto", group = "Auto")
 public class shortAutoRed extends OpMode {

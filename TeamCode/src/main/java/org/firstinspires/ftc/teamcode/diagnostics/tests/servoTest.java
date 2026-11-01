@@ -2,6 +2,9 @@ package org.firstinspires.ftc.teamcode.diagnostics.tests;
 
 import android.util.Log;
 
+import com.acmerobotics.dashboard.FtcDashboard;
+import com.acmerobotics.dashboard.config.Config;
+import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
 import com.bylazar.configurables.annotations.Configurable;
 import com.bylazar.telemetry.PanelsTelemetry;
 import com.bylazar.telemetry.TelemetryManager;
@@ -19,6 +22,7 @@ import java.io.FileReader;
  * servo.getPosition(). If SERVO_NAME is not in the ACTIVE hardware config the OpMode stays
  * open and lists the servos that are, instead of dying at init.
  */
+@Config
 @Configurable
 @TeleOp(name = "servoTest", group = "Test")
 public class servoTest extends LinearOpMode {
@@ -36,6 +40,7 @@ public class servoTest extends LinearOpMode {
 
     @Override
     public void runOpMode() {
+        telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
         TelemetryManager panels = PanelsTelemetry.INSTANCE.getTelemetry();
         Servo test = null;
         long lastLog = 0;
