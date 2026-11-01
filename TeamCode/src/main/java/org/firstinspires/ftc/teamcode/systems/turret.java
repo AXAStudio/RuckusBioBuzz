@@ -23,7 +23,10 @@ public class turret{
     public static boolean NECTAR_TURRET_REVERSED = false;
     public static double[] POLLEN_TURRET_GEAR_RATIO = {355, 370};
     public static double[] NECTAR_TURRET_GEAR_RATIO = {355, 370};
-    public static double SERVO_RANGE_DEG = 355; // Axon Max MK1
+    // MEASURED 2026-11-01 on the pollen Axon (Servo Angle 255 in the Axon software), bare servo on
+    // blocks, IMU method in servoRangeTest: 324.4 (0->1) and 321.6 (1->0), mean 323.0, n=2. Was an
+    // assumed 355. The nectar Axon is NOT measured; it shares this value until it is.
+    public static double SERVO_RANGE_DEG = 323; // Axon Max MK1
     public static double UNWIND_HYSTERESIS_DEG = 10;
     public static double UNWIND_SETTLE_S = 1.0;
 
