@@ -3,7 +3,9 @@ import com.acmerobotics.dashboard.config.Config;
 import com.bylazar.configurables.annotations.Configurable;
 import com.pedropathing.math.Pose;
 import com.qualcomm.robotcore.hardware.HardwareMap;
+import com.qualcomm.robotcore.hardware.PwmControl;
 import com.qualcomm.robotcore.hardware.Servo;
+import com.qualcomm.robotcore.hardware.ServoImplEx;
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
 
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
@@ -23,10 +25,14 @@ public class turret{
     public static boolean NECTAR_TURRET_REVERSED = false;
     public static double[] POLLEN_TURRET_GEAR_RATIO = {355, 370};
     public static double[] NECTAR_TURRET_GEAR_RATIO = {355, 370};
-    // MEASURED 2026-11-01 on the pollen Axon (Servo Angle 255 in the Axon software), bare servo on
-    // blocks, IMU method in servoRangeTest: 324.4 (0->1) and 321.6 (1->0), mean 323.0, n=2. Was an
-    // assumed 355. The nectar Axon is NOT measured; it shares this value until it is.
-    public static double SERVO_RANGE_DEG = 323; // Axon Max MK1
+    // MEASURED 2026-11-01, pollen Axon (Servo Angle 255 in the Axon software), bare servo on blocks,
+    // IMU method in diagnostics/tests/servoRangeTest, AT THE 500-2500 us PULSE RANGE SET BELOW:
+    // 358.3 (0->1) and 359.0 (1->0), mean 358.6, n=2. At the SDK default 600-2400 us the same servo
+    // measured 323.0 (324.4, 321.6) - 90% of the travel, which is why the range is widened.
+    // The nectar Axon is NOT measured; it shares this value until it is.
+    public static double SERVO_RANGE_DEG = 358.6; // Axon Max MK1
+    /** Pulse range the turret servos are driven at; Axon rates its travel over 500-2500 us. */
+    public static final double PWM_LOWER_US = 500, PWM_UPPER_US = 2500;
     public static double UNWIND_HYSTERESIS_DEG = 10;
     public static double UNWIND_SETTLE_S = 1.0;
 
@@ -99,6 +105,8 @@ public class turret{
 
         TurretServo(Servo servo) {
             this.servo = servo;
+            // SDK default is 600-2400 us, which only reaches ~90% of the Axon's travel.
+            ((ServoImplEx) servo).setPwmRange(new PwmControl.PwmRange(PWM_LOWER_US, PWM_UPPER_US));
         }
 
         boolean track(double theta, double center, boolean reversed, double[] gearRatio) {

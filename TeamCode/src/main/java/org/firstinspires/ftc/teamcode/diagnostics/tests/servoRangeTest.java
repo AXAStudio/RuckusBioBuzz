@@ -10,7 +10,9 @@ import com.qualcomm.hardware.rev.RevHubOrientationOnRobot;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.IMU;
+import com.qualcomm.robotcore.hardware.PwmControl;
 import com.qualcomm.robotcore.hardware.Servo;
+import com.qualcomm.robotcore.hardware.ServoImplEx;
 
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 
@@ -24,7 +26,11 @@ import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
  * <li>Travel = 360 - |yaw| (the horn turned S, the robot undid it by turning 360 - S the short
  *     way). Valid for travel above 180 deg, which is visibly the case for a turret servo.</li>
  * </ol>
- * Logcat tag servoRangeTest every 200 ms: position, yaw, implied travel.
+ * Logcat tag servoRangeTest every 200 ms: position, yaw, implied travel, pulse range.
+ *
+ * <p>FULL_PWM: the SDK drives servos at 600-2400 us by default (PwmControl.PwmRange defaults,
+ * RobotCore 12.0.0); Axon rates its travel over 500-2500 us. FULL_PWM = true sets 500-2500.
+ * Measured 2026-11-01 at the default 600-2400: 323.0 deg (n=2).
  */
 @Config
 @Configurable
@@ -33,6 +39,7 @@ public class servoRangeTest extends LinearOpMode {
     public static String SERVO_NAME = "pollenTurretServo";
     public static double POSITION = 0.0;
     public static boolean ZERO = false;
+    public static boolean FULL_PWM = true;
 
     @Override
     public void runOpMode() {
@@ -44,10 +51,16 @@ public class servoRangeTest extends LinearOpMode {
                 RevHubOrientationOnRobot.UsbFacingDirection.FORWARD)));
         imu.resetYaw();
         long lastLog = 0;
+        Boolean appliedFull = null;
         while (!isStopRequested()) {
             if (ZERO) {
                 imu.resetYaw();
                 ZERO = false;
+            }
+            if (appliedFull == null || appliedFull != FULL_PWM) {
+                ((ServoImplEx) servo).setPwmRange(FULL_PWM
+                        ? new PwmControl.PwmRange(500, 2500) : PwmControl.PwmRange.defaultRange);
+                appliedFull = FULL_PWM;
             }
             servo.setPosition(POSITION);
             double yaw = imu.getRobotYawPitchRollAngles().getYaw(AngleUnit.DEGREES);
@@ -60,7 +73,8 @@ public class servoRangeTest extends LinearOpMode {
             if (now - lastLog >= 200) {
                 lastLog = now;
                 Log.i("servoRangeTest", String.format(java.util.Locale.US,
-                        "pos=%.3f yaw=%.2f travel=%.2f", POSITION, yaw, travel));
+                        "pos=%.3f yaw=%.2f travel=%.2f pwm=%s", POSITION, yaw, travel,
+                        FULL_PWM ? "500-2500" : "600-2400"));
             }
             sleep(20);
         }
