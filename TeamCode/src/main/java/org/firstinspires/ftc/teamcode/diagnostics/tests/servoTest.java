@@ -35,7 +35,14 @@ public class servoTest extends LinearOpMode {
             }
             return;
         }
-        waitForStart();
+        // Drive during INIT too, so the bench works without pressing PLAY.
+        while (!isStarted() && !isStopRequested()) {
+            test.setPosition(position);
+            telemetry.addData("commanded position", position);
+            telemetry.addData("servo getPosition()", test.getPosition());
+            telemetry.update();
+            sleep(20);
+        }
         while (opModeIsActive()) {
             test.setPosition(position);
             telemetry.addData("commanded position", position);
