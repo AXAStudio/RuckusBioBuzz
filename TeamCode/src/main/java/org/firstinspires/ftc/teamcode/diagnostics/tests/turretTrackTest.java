@@ -9,9 +9,12 @@ import com.bylazar.configurables.annotations.Configurable;
 import com.pedropathing.math.Pose;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
+import com.qualcomm.hardware.rev.RevHubOrientationOnRobot;
+import com.qualcomm.robotcore.hardware.IMU;
 import com.qualcomm.robotcore.hardware.Servo;
 
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
+import org.firstinspires.ftc.robotcore.external.navigation.YawPitchRollAngles;
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
 import org.firstinspires.ftc.teamcode.helpers.HivePosition;
 import org.firstinspires.ftc.teamcode.modules.predictiveAiming;
@@ -26,6 +29,9 @@ import org.firstinspires.ftc.teamcode.systems.turret;
  * turret must counter-rotate through its travel limit and unwind. 1 LAP: robot drives a rectangle
  * (LAP_MIN..LAP_MAX in x and y) at LAP_IN_PER_S facing its direction of travel - crosses the y half
  * line (hive target flips) and turns a full 360 per lap. 2 MANUAL: MAN_X / MAN_Y / MAN_HEADING_DEG.
+ * 3 IMU: robot parked at MAN_X / MAN_Y, heading = Control Hub IMU yaw (device "imu"), zeroed to
+ * MAN_HEADING_DEG when the scenario starts - turn the robot by hand and the turret counter-rotates.
+ * Diagnostic stand-in only; nothing shipped reads the Control Hub IMU (odometry is the Pinpoint).
  *
  * <p>Logcat tag turretTrackTest, every 100 ms: sim pose, the aim angle theta, commanded servo
  * position, the turret angle that position implies, and their difference (err, wrapped to +-180).
@@ -43,6 +49,11 @@ public class turretTrackTest extends LinearOpMode {
     public static double LAP_MIN = 30, LAP_MAX = 114, LAP_IN_PER_S = 15;
 
     public static double MAN_X = 72, MAN_Y = 40, MAN_HEADING_DEG = 0;
+
+    /** Flip if turning the robot left makes the IMU heading go down (hub mounted logo-down). */
+    public static boolean IMU_REVERSED = false;
+
+    private static IMU imu;
 
     /** The simulated pose that SimAiming hands to turret. */
     private static Pose sim = new Pose(72, 40, 0);
@@ -65,6 +76,15 @@ public class turretTrackTest extends LinearOpMode {
         telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
         turret t = new turret(hardwareMap, new SimAiming(), new HivePosition());
         Servo pollen = hardwareMap.get(Servo.class, "pollenTurretServo");
+        imu = null;
+        try {
+            imu = hardwareMap.get(IMU.class, "imu");
+            imu.initialize(new IMU.Parameters(new RevHubOrientationOnRobot(
+                    RevHubOrientationOnRobot.LogoFacingDirection.UP,
+                    RevHubOrientationOnRobot.UsbFacingDirection.FORWARD)));
+        } catch (IllegalArgumentException e) {
+            imu = null; // no "imu" in the active config: SCENARIO 3 falls back to MANUAL
+        }
         telemetry.addLine("Ready. SCENARIO 0 SPIN / 1 LAP / 2 MANUAL. Runs from INIT.");
         telemetry.update();
 
@@ -75,6 +95,7 @@ public class turretTrackTest extends LinearOpMode {
             if (SCENARIO != lastScenario) {
                 start = System.nanoTime();
                 lastScenario = SCENARIO;
+                if (imu != null) imu.resetYaw();
             }
             double s = (System.nanoTime() - start) / 1e9;
             sim = simPose(SCENARIO, s);
@@ -90,6 +111,7 @@ public class turretTrackTest extends LinearOpMode {
             double err = AngleUnit.normalizeDegrees(impliedDeg - thetaDeg);
 
             telemetry.addData("scenario", SCENARIO);
+            if (SCENARIO == 3 && imu == null) telemetry.addLine("NO \"imu\" IN ACTIVE CONFIG - using MANUAL heading");
             telemetry.addData("sim pose", "%.1f, %.1f, %.0f deg", sim.x(), sim.y(),
                     Math.toDegrees(sim.heading()));
             telemetry.addData("aim theta deg", thetaDeg);
@@ -125,6 +147,13 @@ public class turretTrackTest extends LinearOpMode {
                     default: return new Pose(LAP_MIN, LAP_MAX - u, -Math.PI / 2);
                 }
             }
+            case 3:
+                if (imu != null) {
+                    YawPitchRollAngles a = imu.getRobotYawPitchRollAngles();
+                    double yaw = (IMU_REVERSED ? -1 : 1) * a.getYaw(AngleUnit.DEGREES);
+                    return new Pose(MAN_X, MAN_Y, Math.toRadians(MAN_HEADING_DEG + yaw));
+                }
+                return new Pose(MAN_X, MAN_Y, Math.toRadians(MAN_HEADING_DEG));
             case 2:
                 return new Pose(MAN_X, MAN_Y, Math.toRadians(MAN_HEADING_DEG));
             default:
