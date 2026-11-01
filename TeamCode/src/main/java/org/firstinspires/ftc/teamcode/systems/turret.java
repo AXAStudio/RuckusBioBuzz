@@ -58,6 +58,17 @@ public class turret{
         }
     }
 
+    /**
+     * Drive a turret servo at the pulse range SERVO_RANGE_DEG was measured at. Anything that writes
+     * a turret servo directly (MechanismTuner, PreMatchSystemCheck) must call this too, or its
+     * positions land ~10% short of what this class commands. Null-safe.
+     */
+    public static void configurePwm(Servo servo) {
+        if (servo instanceof ServoImplEx) {
+            ((ServoImplEx) servo).setPwmRange(new PwmControl.PwmRange(PWM_LOWER_US, PWM_UPPER_US));
+        }
+    }
+
     public turret(HardwareMap hardwareMap, predictiveAiming predictor, HivePosition hivePosition) {
         this.predictor = predictor;
         pollenTurret = new TurretServo(hardwareMap.get(Servo.class, "pollenTurretServo"));
@@ -105,8 +116,7 @@ public class turret{
 
         TurretServo(Servo servo) {
             this.servo = servo;
-            // SDK default is 600-2400 us, which only reaches ~90% of the Axon's travel.
-            ((ServoImplEx) servo).setPwmRange(new PwmControl.PwmRange(PWM_LOWER_US, PWM_UPPER_US));
+            configurePwm(servo); // SDK default 600-2400 us only reaches ~90% of the Axon's travel
         }
 
         boolean track(double theta, double center, boolean reversed, double[] gearRatio) {

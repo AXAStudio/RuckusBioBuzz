@@ -335,6 +335,8 @@ public class PreMatchSystemCheck extends OpMode {
         intakeRight = device(DcMotorEx.class, "intakeRight", "intake");
         pollenTurretServo = device(Servo.class, "pollenTurretServo", "pollen turret");
         nectarTurretServo = device(Servo.class, "nectarTurretServo", "nectar turret");
+        turret.configurePwm(pollenTurretServo); // same pulse range as the competition turret
+        turret.configurePwm(nectarTurretServo);
         colorSensor = device(ColorSensor.class, "colorSensor", "intake color sensor");
         if (device(Servo.class, "turretGate", "shooter gate") != null) {
             shooterGate = new gate(hardwareMap);

@@ -1282,6 +1282,7 @@ public class MechanismTuner extends OpMode {
             this.gearA = gear[0];
             this.gearB = gear[1];
             servo = hardwareMap.tryGet(Servo.class, device);
+            turret.configurePwm(servo); // same pulse range as the competition turret
         }
 
         /** Turret degrees across the full 0-1 servo travel, exactly as turret.TurretServo.track. */
