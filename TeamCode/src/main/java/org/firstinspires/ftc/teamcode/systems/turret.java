@@ -1,5 +1,5 @@
 package org.firstinspires.ftc.teamcode.systems;
-import com.acmerobotics.dashboard.config.Config;
+import com.bylazar.configurables.annotations.Configurable;
 import com.pedropathing.math.Pose;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.Servo;
@@ -9,7 +9,7 @@ import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.teamcode.helpers.HivePosition;
 import org.firstinspires.ftc.teamcode.modules.predictiveAiming;
 
-@Config
+@Configurable
 public class turret{
 
     public static double[] nectarTurretOffset = {3.22, 0};

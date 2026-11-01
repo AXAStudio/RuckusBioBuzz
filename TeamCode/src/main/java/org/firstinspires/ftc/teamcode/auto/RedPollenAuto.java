@@ -1,6 +1,6 @@
 package org.firstinspires.ftc.teamcode.auto;
 
-import com.acmerobotics.dashboard.config.Config;
+import com.bylazar.configurables.annotations.Configurable;
 import android.util.Size;
 import com.pedropathing.algorithm.Foresight;
 import com.pedropathing.api.Paths;
@@ -20,7 +20,7 @@ import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 import org.firstinspires.ftc.teamcode.pipelines.PollenDetectionPipeline;
 import org.firstinspires.ftc.vision.VisionPortal;
 
-@Config
+@Configurable
 @Autonomous(name = "RedPollenAuto", group = "Auto")
 public class RedPollenAuto extends OpMode {
   // PathStep fields are editable from FTC Dashboard; paths are built in init(), so edits apply on the next init.

@@ -1,9 +1,9 @@
 package org.firstinspires.ftc.teamcode.modules;
 
-import com.acmerobotics.dashboard.config.Config;
+import com.bylazar.configurables.annotations.Configurable;
 import com.pedropathing.math.Pose;
 
-@Config
+@Configurable
 public class zoneCheck {
     public static double ZONE_Y = 39;
     public static final double FIELD_SIZE = 141.5;

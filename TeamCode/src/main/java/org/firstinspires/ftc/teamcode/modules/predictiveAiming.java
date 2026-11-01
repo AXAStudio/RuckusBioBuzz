@@ -1,11 +1,11 @@
 package org.firstinspires.ftc.teamcode.modules;
 
-import com.acmerobotics.dashboard.config.Config;
+import com.bylazar.configurables.annotations.Configurable;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.math.Pose;
 import com.pedropathing.math.Velocity;
 
-@Config
+@Configurable
 public class predictiveAiming {
 
     public static double PREDICT_MS = 150;

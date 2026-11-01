@@ -2,9 +2,7 @@ package org.firstinspires.ftc.teamcode.tele;
 
 import static org.firstinspires.ftc.teamcode.systems.intake.intakeState;
 
-import com.acmerobotics.dashboard.FtcDashboard;
-import com.acmerobotics.dashboard.config.Config;
-import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
+import com.bylazar.configurables.annotations.Configurable;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.math.Pose;
 import com.pedropathing.revhub.drivetrains.Swerve;
@@ -22,7 +20,7 @@ import org.firstinspires.ftc.teamcode.systems.scoopula;
 import org.firstinspires.ftc.teamcode.systems.shooter;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 
-@Config
+@Configurable
 @com.qualcomm.robotcore.eventloop.opmode.TeleOp(name = "TeleOp", group = "TeleOp")
 public class TeleOp extends OpMode {
     public static double INTAKE_FEED_POWER = 1.0;
@@ -39,7 +37,6 @@ public class TeleOp extends OpMode {
 
     @Override
     public void init() {
-        telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
         hubs = hardwareMap.getAll(LynxModule.class);
         for (LynxModule hub : hubs) {
             hub.setBulkCachingMode(LynxModule.BulkCachingMode.MANUAL);

@@ -1,14 +1,14 @@
 package org.firstinspires.ftc.teamcode.systems;
 
 
-import com.acmerobotics.dashboard.config.Config;
+import com.bylazar.configurables.annotations.Configurable;
 import com.qualcomm.robotcore.hardware.ColorSensor;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
 
-@Config
+@Configurable
 public class intake {
     private DcMotor intakeLeft, intakeRight;
     private ColorSensor colorSensor;

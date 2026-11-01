@@ -1,8 +1,6 @@
 package org.firstinspires.ftc.teamcode.diagnostics.swerve;
 
-import com.acmerobotics.dashboard.FtcDashboard;
-import com.acmerobotics.dashboard.config.Config;
-import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
+import com.bylazar.configurables.annotations.Configurable;
 import com.pedropathing.drivetrain.DrivePowers;
 import com.pedropathing.revhub.drivetrains.Swerve;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
@@ -40,7 +38,7 @@ import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
  * <p>Once the odometry pods are installed and verified, go back to {@code DriveTeleOp}, which uses
  * the Follower and gains field-centric driving and path following.
  */
-@Config
+@Configurable
 // Diagnostics, not "TeleOp": it must not sit in the Driver Station list beside the competition
 // OpMode, where it is one mis-tap from a match.
 @TeleOp(name = "Swerve TeleOp", group = "Diagnostics")
@@ -87,7 +85,6 @@ public class SwerveDirectTeleOp extends OpMode {
         STRAFE = 0;
         TURN = 0;
         swerve = Constants.createSwerve(hardwareMap);
-        telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
     }
 
     @Override

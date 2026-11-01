@@ -14,7 +14,7 @@ contradicts the code, the code wins — fix this file in the same commit.**
 | AGP | `com.android.tools.build:gradle:8.7.0`, `org.gradle.jvmargs=-Xmx2048M` |
 | Path lib | **Pedro Pathing 3.0.0** — `com.pedropathing:revhub:3.0.0` (vendored fork, see `third_party/PedroPathing/RUCKUS_PATCHES.md`) + `com.pedropathing:telemetry:1.0.0` (local module) + AutoTune `com.pedropathing:tuning:1.0.0` (needs `repo.dairy.foundation` for Sloth). Branches cut before `pedro-3.0.0-migration` are on **2.1.2**, and every measurement in §5–§7 was taken on 2.1.2 |
 | Pedro source | vendored — `settings.gradle` does `includeBuild 'third_party/PedroPathing'`; `settings.gradle` seeds `third_party/PedroPathing/local.properties` from the root one (gitignored, else "SDK location not found") |
-| Other deps | `com.acmerobotics.dashboard:dashboard:0.5.1`, `com.bylazar:fullpanels:1.0.12` |
+| Other deps | `com.bylazar:fullpanels:1.0.12` (Panels, http://192.168.43.1:8001 - the only live-config UI via `@Configurable`; FTC Dashboard and Slothboard removed 2026-10-31: Slothboard crash-looped the hub on boot with BindException, plain 0.5.1 edits never reached OpModes. `robot.py estop` / `ftcdash.py` still target Dashboard and no longer work) |
 | Modules | `:FtcRobotController`, `:TeamCode`, `:PedroVisualizer` (`tools/pedro-visualizer`), `:PollenCameraTester` (`tools/pollen-camera-tester`) |
 | Resources | `TeamCode/build.gradle` adds `resources.srcDirs += ['src/main/java']` so `field/biobuzz_field.json` etc. load via `Class#getResourceAsStream` at OpMode init (`config.jsonc` and its drivetrain switch were removed 2026-10-01) |
 

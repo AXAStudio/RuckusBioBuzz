@@ -1,6 +1,6 @@
 package org.firstinspires.ftc.teamcode.systems;
 
-import com.acmerobotics.dashboard.config.Config;
+import com.bylazar.configurables.annotations.Configurable;
 import com.pedropathing.math.Pose;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.util.ElapsedTime;
@@ -10,7 +10,7 @@ import org.firstinspires.ftc.teamcode.modules.predictiveAiming;
 import org.firstinspires.ftc.teamcode.modules.zoneCheck;
 import org.firstinspires.ftc.teamcode.helpers.HivePosition;
 
-@Config
+@Configurable
 public class shooter {
     // Placeholders until the shooter is built and a shot can be timed.
     /** Once the gate opens it stays open at least this long, whatever the wheel speed does. */
