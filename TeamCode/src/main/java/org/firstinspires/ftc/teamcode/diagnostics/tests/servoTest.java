@@ -10,7 +10,7 @@ import com.qualcomm.robotcore.hardware.Servo;
 @Config
 @TeleOp(name = "servoTest", group = "Test")
 public class servoTest extends LinearOpMode {
-    public static String SERVO_NAME = "servo";
+    public static String SERVO_NAME = "pollenTurretServo";
     public static double position = 0.0;
 
     @Override
