@@ -1,6 +1,10 @@
 package org.firstinspires.ftc.teamcode.diagnostics.tests;
 
+import android.util.Log;
+
 import com.bylazar.configurables.annotations.Configurable;
+import com.bylazar.telemetry.PanelsTelemetry;
+import com.bylazar.telemetry.TelemetryManager;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.Servo;
@@ -19,7 +23,9 @@ public class servoTest extends LinearOpMode {
 
     @Override
     public void runOpMode() {
+        TelemetryManager panels = PanelsTelemetry.INSTANCE.getTelemetry();
         Servo test = null;
+        long lastLog = 0;
         try {
             test = hardwareMap.get(Servo.class, SERVO_NAME);
         } catch (IllegalArgumentException e) {
@@ -38,18 +44,30 @@ public class servoTest extends LinearOpMode {
         // Drive during INIT too, so the bench works without pressing PLAY.
         while (!isStarted() && !isStopRequested()) {
             test.setPosition(position);
-            telemetry.addData("commanded position", position);
-            telemetry.addData("servo getPosition()", test.getPosition());
-            telemetry.update();
+            lastLog = report(panels, test, lastLog);
             sleep(20);
         }
         while (opModeIsActive()) {
             test.setPosition(position);
-            telemetry.addData("commanded position", position);
-            telemetry.addData("servo getPosition()", test.getPosition());
-            telemetry.update();
+            lastLog = report(panels, test, lastLog);
         }
         test.setPosition(0);
+    }
+
+    /** Echo to the Driver Station, Panels and logcat (tag servoTest, twice a second). */
+    private long report(TelemetryManager panels, Servo test, long lastLog) {
+        telemetry.addData("commanded position", position);
+        telemetry.addData("servo getPosition()", test.getPosition());
+        telemetry.update();
+        panels.debug("commanded position", position);
+        panels.debug("servo getPosition()", test.getPosition());
+        panels.update(telemetry);
+        long now = System.currentTimeMillis();
+        if (now - lastLog > 500) {
+            Log.i("servoTest", SERVO_NAME + " position=" + position + " getPosition=" + test.getPosition());
+            return now;
+        }
+        return lastLog;
     }
 
     private java.util.List<String> names() {
