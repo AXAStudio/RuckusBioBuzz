@@ -3,12 +3,10 @@ repositories {
     google() // Needed for androidx
     maven { url = 'https://mymaven.bylazar.com/releases' }
     maven { url = 'https://maven.brott.dev/' }
-    maven { url = 'https://repo.dairy.foundation/releases/' } // Sloth, required by com.pedropathing:tuning
 }
 
-// SDK 12.0 = BIOBUZZ (2026-27). Must stay >= 11.2: Sloth 0.3.x pulls Sinister 2.3.0, whose
-// OpMode scanner references com.qualcomm.robotcore.eventloop.opmode.Utility (added in 11.2).
-// Below that it throws NoClassDefFoundError at app start and NO TeamCode OpModes register.
+// SDK 12.0 = BIOBUZZ (2026-27). The old >= 11.2 floor was for Sloth (Sinister 2.3.0 needs
+// opmode.Utility); Sloth left with pedropathing:tuning on 2026-11-01, so that floor is gone.
 // This file is what ships; Pedro's own ftc pin is compileOnly and never reaches the hub.
 dependencies {
     implementation 'org.firstinspires.ftc:Inspection:12.0.0'

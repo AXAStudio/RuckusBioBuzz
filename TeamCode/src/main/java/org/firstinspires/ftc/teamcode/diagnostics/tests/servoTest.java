@@ -26,9 +26,9 @@ public class servoTest extends LinearOpMode {
     public static double position = 0.0;
 
     /**
-     * Fallback input: if this file exists its first line overrides {@code position}. Needed because
-     * under Sloth, Panels edits do not reach this class's static field (observed 2026-10-31:
-     * Panels held 1, the OpMode kept logging 0.0). Write it from the PC:
+     * Fallback input: if this file exists its first line overrides {@code position}. Added
+     * 2026-10-31 when Sloth stopped Panels edits reaching this static field (Panels held 1, the
+     * OpMode logged 0.0). Write it from the PC:
      * adb shell "echo 0.5 > /sdcard/FIRST/servoTest_position.txt"
      */
     private static final File POSITION_FILE = new File("/sdcard/FIRST/servoTest_position.txt");
