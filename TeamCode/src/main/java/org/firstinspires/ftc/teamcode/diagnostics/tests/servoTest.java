@@ -9,6 +9,10 @@ import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.Servo;
 
+import java.io.BufferedReader;
+import java.io.File;
+import java.io.FileReader;
+
 /**
  * Positional servo bench test. Edit {@code position} under servoTest in Panels
  * (http://192.168.43.1:8001, Configurables). Telemetry echoes the commanded value and
@@ -20,6 +24,15 @@ import com.qualcomm.robotcore.hardware.Servo;
 public class servoTest extends LinearOpMode {
     public static String SERVO_NAME = "pollenTurretServo";
     public static double position = 0.0;
+
+    /**
+     * Fallback input: if this file exists its first line overrides {@code position}. Needed because
+     * under Sloth, Panels edits do not reach this class's static field (observed 2026-10-31:
+     * Panels held 1, the OpMode kept logging 0.0). Write it from the PC:
+     * adb shell "echo 0.5 > /sdcard/FIRST/servoTest_position.txt"
+     */
+    private static final File POSITION_FILE = new File("/sdcard/FIRST/servoTest_position.txt");
+    private long fileCheckMs;
 
     @Override
     public void runOpMode() {
@@ -43,11 +56,13 @@ public class servoTest extends LinearOpMode {
         }
         // Drive during INIT too, so the bench works without pressing PLAY.
         while (!isStarted() && !isStopRequested()) {
+            readPositionFile();
             test.setPosition(position);
             lastLog = report(panels, test, lastLog);
             sleep(20);
         }
         while (opModeIsActive()) {
+            readPositionFile();
             test.setPosition(position);
             lastLog = report(panels, test, lastLog);
         }
@@ -55,6 +70,17 @@ public class servoTest extends LinearOpMode {
     }
 
     /** Echo to the Driver Station, Panels and logcat (tag servoTest, twice a second). */
+    private void readPositionFile() {
+        long now = System.currentTimeMillis();
+        if (now - fileCheckMs < 100 || !POSITION_FILE.exists()) return;
+        fileCheckMs = now;
+        try (BufferedReader r = new BufferedReader(new FileReader(POSITION_FILE))) {
+            String line = r.readLine();
+            if (line != null) position = Math.max(0, Math.min(1, Double.parseDouble(line.trim())));
+        } catch (Exception ignored) {
+        }
+    }
+
     private long report(TelemetryManager panels, Servo test, long lastLog) {
         telemetry.addData("commanded position", position);
         telemetry.addData("servo getPosition()", test.getPosition());
