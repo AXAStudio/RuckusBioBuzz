@@ -17,25 +17,25 @@ public class zoneCheck {
     public static final double ROBOT_WIDTH = 18;
     private static int xQuality = 5;
     private static int yQuality = 10;
-    private static int[][] map;
+    private static int yPollenOffset = 0;
+    private static int yNectarOffset = 0;
+    private static int[][] mapNectar;
+    private static int[][] mapPollen;
     private static Alliance alliance;
 
-
-    private final predictiveAiming predictor;
-
-    public zoneCheck(predictiveAiming predictor, Alliance alliance) {
-        this.predictor = predictor;
+    public zoneCheck(Alliance alliance) {
         this.alliance = alliance;
-        map = new int[yQuality][xQuality];
+        mapPollen = new int[yQuality][xQuality];
+        mapNectar = new int[yQuality][xQuality];
     }
 
-    public boolean predictedInZone() {
-        return inZone(predictor.predictPose());
-    }
 
-    public static boolean inZone(Pose pose) {
-        double x = pose.x();
-        double y = pose.y();
+
+    public static boolean inZoneNectar(Pose pose) {
+        int nectarOffsetx = (int)(-yNectarOffset*Math.sin(pose.heading())); //this just spins the vecter
+        int nectarOffsety = (int)(yNectarOffset*Math.cos(pose.heading())); //this just spins the vecter
+        double x = pose.x()+nectarOffsetx;
+        double y = pose.y()+nectarOffsety;
         double fieldx = 141.5;
         double fieldy = 141.5;
         if(alliance == Alliance.BLUE){
@@ -47,7 +47,31 @@ public class zoneCheck {
         telemetry.addData("xQuad", xQuad);
         telemetry.addData("yQuad", yQuad);
         telemetry.update();
-        if(map[xQuad][yQuad] == 1){
+        if(mapNectar[xQuad][yQuad] == 1){
+            return true;
+        }
+        return false;
+//        double reach = ROBOT_LENGTH / 2 * Math.abs(Math.sin(pose.heading()))
+//            + ROBOT_WIDTH / 2 * Math.abs(Math.cos(pose.heading()));
+//        return pose.y() - reach <= ZONE_Y || pose.y() + reach >= FIELD_SIZE - ZONE_Y;
+    }
+    public static boolean inZonePollen(Pose pose) {
+        int pollenOffsetx = (int)(-yPollenOffset*Math.sin(pose.heading())); //this just spins the vecter
+        int pollenOffsety = (int)(yPollenOffset*Math.cos(pose.heading()));
+        double x = pose.x()+pollenOffsetx;
+        double y = pose.y()+pollenOffsety;
+        double fieldx = 141.5;
+        double fieldy = 141.5;
+        if(alliance == Alliance.BLUE){
+            x = fieldx-x;
+            y = fieldy-y;
+        }
+        int xQuad = (int)(x/(fieldx/xQuality));
+        int yQuad = (int)(y/(fieldy/yQuality));
+        telemetry.addData("xQuad", xQuad);
+        telemetry.addData("yQuad", yQuad);
+        telemetry.update();
+        if(mapPollen[xQuad][yQuad] == 1){
             return true;
         }
         return false;

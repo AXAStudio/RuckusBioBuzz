@@ -29,6 +29,7 @@ public class shooter {
     private gate shooterGate;
 
     private boolean inZone;
+    private final predictiveAiming predictiveAiming;
 
     private enum states {
             RESET, TRACK, SHOOT
@@ -37,11 +38,12 @@ public class shooter {
 
     public shooter(HardwareMap hardwareMap, predictiveAiming predictor, Alliance alliance) {
         hivePosition = new HivePosition();
-        zone = new zoneCheck(predictor, alliance);
+        zone = new zoneCheck(alliance);
         aiming = new turret(hardwareMap, predictor, new HivePosition());
         intake = new intake(hardwareMap);
         flywheel = new flywheel(hardwareMap, aiming);
         shooterGate = new gate(hardwareMap);
+        this.predictiveAiming = predictor;
 
     }
 
@@ -55,7 +57,7 @@ public class shooter {
     }
 
     public void update() {
-        inZone = zone.predictedInZone();
+        inZone = zone.inZonePollen(predictiveAiming.predictPose());
         flywheel.update(inZone);
 
         switch (state) {
@@ -99,7 +101,7 @@ public class shooter {
         return state;
     }
 
-    public boolean inZone() { return zone.predictedInZone(); }
+    public boolean inZone() { return zone.inZonePollen(predictiveAiming.predictPose()); }
     public boolean pollenAimed() { return aiming.pollenAimed(); }
     public boolean nectarAimed() { return aiming.nectarAimed(); }
 }
