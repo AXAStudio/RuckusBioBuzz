@@ -52,7 +52,7 @@ public class TeleOp extends OpMode {
             follower.setPose(autoEndPose);
         }
         predictor = new predictiveAiming(follower);
-        shooterSystem = new shooter(hardwareMap, predictor);
+        shooterSystem = new shooter(hardwareMap, predictor, alliance);
         intake = new intake(hardwareMap);
         scoopula = new scoopula(hardwareMap);
 

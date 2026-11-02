@@ -35,9 +35,9 @@ public class shooter {
     }
     states state = states.TRACK;
 
-    public shooter(HardwareMap hardwareMap, predictiveAiming predictor) {
+    public shooter(HardwareMap hardwareMap, predictiveAiming predictor, Alliance alliance) {
         hivePosition = new HivePosition();
-        zone = new zoneCheck(predictor);
+        zone = new zoneCheck(predictor, alliance);
         aiming = new turret(hardwareMap, predictor, new HivePosition());
         intake = new intake(hardwareMap);
         flywheel = new flywheel(hardwareMap, aiming);
