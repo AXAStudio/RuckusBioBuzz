@@ -16,6 +16,7 @@ public class intake {
     private ColorSensor colorSensor;
     HardwareMap hardwareMap;
     private intakeState currentState = intakeState.STOP;
+    private ColorCheck colorCheck;
     private Alliance alliance;
     public enum intakeState {
         INTAKE, STOP, REJECT
@@ -35,6 +36,7 @@ public class intake {
         colorSensor = hardwareMap.get(ColorSensor.class, "colorSensor");
         intakeLeft.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
         intakeRight.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.BRAKE);
+        colorCheck = new ColorCheck(colorSensor, alliance);
 
         //intakeRight.setDirection(DcMotor.Direction.REVERSE);
     }
@@ -47,7 +49,7 @@ public class intake {
     }
 
     public void update(boolean leftBumper, boolean rightBumper) {
-        if(leftBumper){
+        if(leftBumper || colorCheck.reject()){
             currentState = intakeState.REJECT;
         }else if(rightBumper){
             currentState = intakeState.INTAKE;
@@ -60,13 +62,6 @@ public class intake {
             powerL = 1;
             powerR = 1;
         } else if (currentState == intakeState.REJECT) {
-            powerL = -1;
-            powerR = -1;
-        }
-        if(alliance == Alliance.BLUE && dominant(colorSensor.red(), thresholdRed, Channel.RED)){
-            powerL = -1;
-            powerR = -1;
-        }else if(alliance == Alliance.RED && dominant(colorSensor.blue(), thresholdBlue, Channel.BLUE)){
             powerL = -1;
             powerR = -1;
         }
@@ -84,16 +79,8 @@ public class intake {
         intakeLeft.setPower(powerL);
         intakeRight.setPower(powerR);
 
-
     }
 
-    private enum Channel { RED, BLUE }
 
-    private boolean dominant(int value, int threshold, Channel channel) {
-        if (value <= threshold) return false;
-        int green = colorSensor.green();
-        int other = channel == Channel.RED ? colorSensor.blue() : colorSensor.red();
-        return value > DOMINANCE * green && value > DOMINANCE * other;
-    }
 
 }
