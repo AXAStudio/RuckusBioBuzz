@@ -20,12 +20,9 @@ public class rangeTest extends LinearOpMode {
     DcMotorEx pollenTurret;
     public static int nectarTurretVel = 1000;
     public static int pollenTurretVel = 1000;
-    public static int sections = 10;
     PinpointLocalizer pinpoint;
 
     zoneCheck zoneCheck;
-    int yPollenOffset = 0;
-    int yNectarOffset = 0;
     @Override
     public void runOpMode() {
         nectarTurret = hardwareMap.get(DcMotorEx.class, "nectarTurret");
