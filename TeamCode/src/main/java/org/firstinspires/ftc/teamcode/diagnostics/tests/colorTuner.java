@@ -27,11 +27,12 @@ public class colorTuner extends LinearOpMode {
             }else if(colorSensor.red() > rThreshRED &&  colorSensor.green() > gThreshRED && colorSensor.blue() > bThreshRED ) {
                 telemetry.addData("BLUE BALL", true);
             }
-            }
             telemetry.addData("Red", colorSensor.red());
             telemetry.addData("Green", colorSensor.green());
             telemetry.addData("Blue", colorSensor.blue());
             telemetry.addData("Alpha", colorSensor.alpha());
             telemetry.update();
+            }
+
         }
     }
