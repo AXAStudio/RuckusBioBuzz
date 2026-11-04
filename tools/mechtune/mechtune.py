@@ -348,6 +348,7 @@ FILE_KEYS = {
     "flywheel": "systems/flywheel.java", "turret": "systems/turret.java",
     "intake": "systems/intake.java", "gate": "systems/gate.java",
     "scoopula": "systems/scoopula.java", "shooter": "systems/shooter.java",
+    "ColorCheck": "systems/ColorCheck.java",
 }
 
 
@@ -629,7 +630,7 @@ def cmd_color(args) -> int:
     if args.what == "show":
         c = state()["color"]
         print(f"live r{c['r']} g{c['g']} b{c['b']} a{c['a']} dist {c['dist']}  "
-              f"thresholds red {c['thresholdRed']} blue {c['thresholdBlue']} dom {c['dominance']}")
+              f"rule red>{c['redOverBlue']}*blue  blue>{c['blueOverRed']}*red  dist<{c['maxDistCm']}cm")
         for lab in c["summary"].get("labels", []):
             print(f"  {lab['label']:10s} n={lab['n']:3d} mean {lab['mean']} min {lab['min']} "
                   f"max {lab['max']} calledRed {lab['redHits']} calledBlue {lab['blueHits']}")

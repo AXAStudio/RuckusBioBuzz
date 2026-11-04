@@ -21,17 +21,17 @@ public class turret{
 
     public static double POLLEN_TURRET_CENTER = 0.5;
     public static double NECTAR_TURRET_CENTER = 0.5;
+    public static double POLLEN_TURRET_MIN = 0.0;
+    public static double POLLEN_TURRET_MAX = 1.0;
+    public static double NECTAR_TURRET_MIN = 0.0;
+    public static double NECTAR_TURRET_MAX = 1.0;
+    public static double POLLEN_TURRET_START = 0.5;
+    public static double NECTAR_TURRET_START = 0.5;
     public static boolean POLLEN_TURRET_REVERSED = false;
     public static boolean NECTAR_TURRET_REVERSED = false;
     public static double[] POLLEN_TURRET_GEAR_RATIO = {355, 370};
     public static double[] NECTAR_TURRET_GEAR_RATIO = {355, 370};
-    // MEASURED 2026-11-01, pollen Axon (Servo Angle 255 in the Axon software), bare servo on blocks,
-    // IMU method in diagnostics/tests/servoRangeTest, AT THE 500-2500 us PULSE RANGE SET BELOW:
-    // 358.3 (0->1) and 359.0 (1->0), mean 358.6, n=2. At the SDK default 600-2400 us the same servo
-    // measured 323.0 (324.4, 321.6) - 90% of the travel, which is why the range is widened.
-    // The nectar Axon is NOT measured; it shares this value until it is.
     public static double SERVO_RANGE_DEG = 358.6; // Axon Max MK1
-    /** Pulse range the turret servos are driven at; Axon rates its travel over 500-2500 us. */
     public static final double PWM_LOWER_US = 500, PWM_UPPER_US = 2500;
     public static double UNWIND_HYSTERESIS_DEG = 10;
     public static double UNWIND_SETTLE_S = 1.0;
@@ -47,22 +47,15 @@ public class turret{
     private boolean nectarAimed;
 
     public class aimer {
-        // 1. Attributes (fields) that make up your data type
         public double theta;
         public double distance;
 
-        // 2. Constructor to initialize your data type
         public aimer(double theta, double distance) {
             this.theta = theta;
             this.distance = distance;
         }
     }
 
-    /**
-     * Drive a turret servo at the pulse range SERVO_RANGE_DEG was measured at. Anything that writes
-     * a turret servo directly (MechanismTuner, PreMatchSystemCheck) must call this too, or its
-     * positions land ~10% short of what this class commands. Null-safe.
-     */
     public static void configurePwm(Servo servo) {
         if (servo instanceof ServoImplEx) {
             ((ServoImplEx) servo).setPwmRange(new PwmControl.PwmRange(PWM_LOWER_US, PWM_UPPER_US));
@@ -71,8 +64,10 @@ public class turret{
 
     public turret(HardwareMap hardwareMap, predictiveAiming predictor, HivePosition hivePosition) {
         this.predictor = predictor;
-        pollenTurret = new TurretServo(hardwareMap.get(Servo.class, "pollenTurretServo"));
-        nectarTurret = new TurretServo(hardwareMap.get(Servo.class, "nectarTurretServo"));
+        pollenTurret = new TurretServo(hardwareMap.get(Servo.class, "pollenTurretServo"),
+                limit(POLLEN_TURRET_START, POLLEN_TURRET_MIN, POLLEN_TURRET_MAX));
+        nectarTurret = new TurretServo(hardwareMap.get(Servo.class, "nectarTurretServo"),
+                limit(NECTAR_TURRET_START, NECTAR_TURRET_MIN, NECTAR_TURRET_MAX));
         this.hivePosition = hivePosition;
     }
 
@@ -82,8 +77,10 @@ public class turret{
 
 //in form dist, theta
     public void update(){
-        pollenAimed = pollenTurret.track(aimPollen().theta, POLLEN_TURRET_CENTER, POLLEN_TURRET_REVERSED, POLLEN_TURRET_GEAR_RATIO);
-        nectarAimed = nectarTurret.track(aimNectar().theta, NECTAR_TURRET_CENTER, NECTAR_TURRET_REVERSED, NECTAR_TURRET_GEAR_RATIO);
+        pollenAimed = pollenTurret.track(aimPollen().theta, POLLEN_TURRET_CENTER, POLLEN_TURRET_REVERSED, POLLEN_TURRET_GEAR_RATIO,
+                POLLEN_TURRET_MIN, POLLEN_TURRET_MAX);
+        nectarAimed = nectarTurret.track(aimNectar().theta, NECTAR_TURRET_CENTER, NECTAR_TURRET_REVERSED, NECTAR_TURRET_GEAR_RATIO,
+                NECTAR_TURRET_MIN, NECTAR_TURRET_MAX);
     }
 
     public boolean unwinding(){
@@ -114,32 +111,37 @@ public class turret{
         private double position = Double.NaN;
         private long settleUntilNanos;
 
-        TurretServo(Servo servo) {
+        TurretServo(Servo servo, double start) {
             this.servo = servo;
             configurePwm(servo); // SDK default 600-2400 us only reaches ~90% of the Axon's travel
+            position = start;
+            servo.setPosition(start);
         }
 
-        boolean track(double theta, double center, boolean reversed, double[] gearRatio) {
+        boolean track(double theta, double center, boolean reversed, double[] gearRatio, double min, double max) {
+            double lo = Math.max(0, Math.min(min, max)), hi = Math.min(1, Math.max(min, max)); //tolerate swapped limits
+            min = lo;
+            max = hi;
             double range = SERVO_RANGE_DEG * gearRatio[1] / gearRatio[0]; //turret degrees across the full servo travel 0-1
             double turn = 360.0 / range; //one full turret revolution in servo position units
             double last = Double.isNaN(position) ? center : position; //last commanded position or center on the first call
             double base = center + (reversed ? -1 : 1) * Math.toDegrees(theta) / range; //servo position that points at theta
             double follow = base + Math.round((last - base) / turn) * turn; //same aim shifted by whole turns to the copy closest to last
-            double overshoot = Math.max(-follow, follow - 1); //how far follow is past 0 or 1 and <= 0 means it is reachable
+            double overshoot = Math.max(min - follow, follow - max); //how far follow is past a limit; <= 0 means it is reachable
             boolean aimed = false;
 
             if (overshoot <= 0) {
                 position = follow;
                 aimed = true;
             } else if (overshoot <= UNWIND_HYSTERESIS_DEG / range) {
-                position = clamp(follow);
+                position = limit(follow, min, max);
             } else {
-                double unwound = follow - Math.signum(follow - 0.5) * turn;
-                if (unwound >= 0 && unwound <= 1) {
+                double unwound = follow - Math.signum(follow - (min + max) / 2) * turn;
+                if (unwound >= min && unwound <= max) {
                     position = unwound;
                     settleUntilNanos = System.nanoTime() + (long) (UNWIND_SETTLE_S * 1e9);
                 } else {
-                    position = clamp(follow);
+                    position = limit(follow, min, max);
                 }
             }
             servo.setPosition(position);
@@ -150,9 +152,11 @@ public class turret{
             return System.nanoTime() < settleUntilNanos;
         }
 
-        private static double clamp(double position) {
-            return Math.max(0, Math.min(1, position));
-        }
+    }
+
+    static double limit(double position, double min, double max) {
+        double lo = Math.max(0, Math.min(min, max)), hi = Math.min(1, Math.max(min, max));
+        return Math.max(lo, Math.min(hi, position));
     }
 
 }

@@ -15,6 +15,7 @@ import com.qualcomm.robotcore.hardware.VoltageSensor;
 import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
+import org.firstinspires.ftc.teamcode.systems.ColorCheck;
 import org.firstinspires.ftc.teamcode.systems.flywheel;
 import org.firstinspires.ftc.teamcode.systems.intake;
 import org.firstinspires.ftc.teamcode.systems.shooter;
@@ -114,8 +115,7 @@ public class MechanismTuner extends OpMode {
     private int dtCount;
 
     // Shipped statics the tool writes so the shipped intake class runs with them; restored on stop.
-    private int origThrRed, origThrBlue;
-    private double origDominance, origBrakeMs;
+    private double origRedOverBlue, origBlueOverRed, origMaxDist, origBrakeMs;
 
     /** Export values as they stood at init (the shipped statics), keyed "file#name". */
     private final Map<String, String> shippedValues = new LinkedHashMap<>();
@@ -154,19 +154,21 @@ public class MechanismTuner extends OpMode {
 
         turrets[0] = new TurretCal("pollen", "pollenTurretServo", turret.POLLEN_TURRET_CENTER,
                 turret.POLLEN_TURRET_REVERSED, turret.POLLEN_TURRET_GEAR_RATIO,
-                turret.pollenTurretOffset);
+                turret.pollenTurretOffset, turret.POLLEN_TURRET_MIN, turret.POLLEN_TURRET_MAX,
+                turret.POLLEN_TURRET_START);
         turrets[1] = new TurretCal("nectar", "nectarTurretServo", turret.NECTAR_TURRET_CENTER,
                 turret.NECTAR_TURRET_REVERSED, turret.NECTAR_TURRET_GEAR_RATIO,
-                turret.nectarTurretOffset);
+                turret.nectarTurretOffset, turret.NECTAR_TURRET_MIN, turret.NECTAR_TURRET_MAX,
+                turret.NECTAR_TURRET_START);
 
         servos[0] = new ServoCal("gate", "turretGate", "systems/gate.java",
                 new String[]{"open", "openPos", "close", "closePos"});
         servos[1] = new ServoCal("scoopula", "scoopula", "systems/scoopula.java",
                 new String[]{"scoop", "scoopPos", "unscoop", "unscoopPos"});
 
-        origThrRed = intake.thresholdRed;
-        origThrBlue = intake.thresholdBlue;
-        origDominance = intake.DOMINANCE;
+        origRedOverBlue = ColorCheck.RED_OVER_BLUE;
+        origBlueOverRed = ColorCheck.BLUE_OVER_RED;
+        origMaxDist = ColorCheck.MAX_DIST_CM;
         origBrakeMs = intake.REVERSE_BRAKE_MS;
         try {
             intakeSys = new intake(hardwareMap);
@@ -207,9 +209,9 @@ public class MechanismTuner extends OpMode {
     public void stop() {
         stopAll();
         recorder.stop();
-        intake.thresholdRed = origThrRed;
-        intake.thresholdBlue = origThrBlue;
-        intake.DOMINANCE = origDominance;
+        ColorCheck.RED_OVER_BLUE = origRedOverBlue;
+        ColorCheck.BLUE_OVER_RED = origBlueOverRed;
+        ColorCheck.MAX_DIST_CM = origMaxDist;
         intake.REVERSE_BRAKE_MS = origBrakeMs;
         TuningHub.INSTANCE.markStopped();
     }
@@ -482,13 +484,14 @@ public class MechanismTuner extends OpMode {
             // ---- turrets
             case "turretPos":
                 for (TurretCal t : turretsFor(c)) {
-                    t.setPosition(num(c, "pos", t.pos));
+                    // free=1 (Turret limits tab) may go past the limits, to find them.
+                    t.setPosition(num(c, "pos", t.pos), "1".equals(c.get("free")));
                 }
                 message = "Turret position set.";
                 break;
             case "turretDeg":
                 for (TurretCal t : turretsFor(c)) {
-                    t.setPosition(t.positionFor(num(c, "deg", 0)));
+                    t.setPosition(t.positionFor(num(c, "deg", 0)), false);
                 }
                 message = "Turret pointed at " + num(c, "deg", 0) + " deg (shipped formula).";
                 break;
@@ -504,9 +507,33 @@ public class MechanismTuner extends OpMode {
                     t.servoRange = num(c, "servoRange", t.servoRange);
                     t.offset[0] = num(c, "offX", t.offset[0]);
                     t.offset[1] = num(c, "offY", t.offset[1]);
+                    t.min = clamp(num(c, "min", t.min), 0, 1);
+                    t.max = clamp(num(c, "max", t.max), 0, 1);
+                    t.start = clamp(num(c, "start", t.start), 0, 1);
                 }
                 message = "Turret calibration updated (tool only until exported).";
                 break;
+            case "turretMark": {
+                String mark = c.get("mark") == null ? "" : c.get("mark");
+                StringBuilder m = new StringBuilder();
+                for (TurretCal t : turretsFor(c)) {
+                    if (Double.isNaN(t.pos)) {
+                        m.append(t.name).append(": move it first. ");
+                        continue;
+                    }
+                    switch (mark) {
+                        case "min": t.min = t.pos; break;
+                        case "max": t.max = t.pos; break;
+                        case "start": t.start = t.pos; break;
+                        case "center": t.center = t.pos; break;
+                        default: m.append("unknown mark ").append(mark).append(". "); continue;
+                    }
+                    m.append(t.name).append(' ').append(mark).append(" = ")
+                            .append(FlyRecorder.r(t.pos, 4)).append(". ");
+                }
+                message = m.append("(tool only until exported)").toString();
+                break;
+            }
 
             // ---- gate / scoopula
             case "servoPos": {
@@ -599,22 +626,22 @@ public class MechanismTuner extends OpMode {
                         + " applied live (restored on STOP unless exported).";
                 break;
             case "colorParams":
-                intake.thresholdRed = (int) num(c, "red", intake.thresholdRed);
-                intake.thresholdBlue = (int) num(c, "blue", intake.thresholdBlue);
-                intake.DOMINANCE = num(c, "dom", intake.DOMINANCE);
+                ColorCheck.RED_OVER_BLUE = num(c, "red", ColorCheck.RED_OVER_BLUE);
+                ColorCheck.BLUE_OVER_RED = num(c, "blue", ColorCheck.BLUE_OVER_RED);
+                ColorCheck.MAX_DIST_CM = num(c, "dist", ColorCheck.MAX_DIST_CM);
                 rebuildColorSummary();
                 message = "Intake color thresholds applied live (restored on STOP unless exported).";
                 break;
             case "colorSuggestApply":
                 rebuildColorSummary();
                 if (suggestion != null) {
-                    intake.thresholdRed = suggestion[0];
-                    intake.thresholdBlue = suggestion[1];
-                    intake.DOMINANCE = suggestionDom;
+                    ColorCheck.RED_OVER_BLUE = suggestion[0];
+                    ColorCheck.BLUE_OVER_RED = suggestion[1];
+                    ColorCheck.MAX_DIST_CM = suggestion[2];
                     rebuildColorSummary();
                     message = "Suggested thresholds applied live.";
                 } else {
-                    message = "No suggestion yet: sample RED, BLUE and at least one other label.";
+                    message = "No suggestion yet: sample RED, BLUE and EMPTY.";
                 }
                 break;
 
@@ -1271,10 +1298,15 @@ public class MechanismTuner extends OpMode {
         double servoRange = turret.SERVO_RANGE_DEG;
         /** Turret pivot from the robot's pose center, inches, robot frame {forward, left}. */
         final double[] offset;
+        /** Wiring limits and INIT position, servo units, as turret.*_TURRET_MIN / MAX / START. */
+        double min, max, start;
 
         TurretCal(String name, String device, double center, boolean reversed, double[] gear,
-                  double[] offset) {
+                  double[] offset, double min, double max, double start) {
             this.name = name;
+            this.min = min;
+            this.max = max;
+            this.start = start;
             this.offset = offset.clone();
             this.device = device;
             this.center = center;
@@ -1298,9 +1330,10 @@ public class MechanismTuner extends OpMode {
             return (p - center) * range() * (reversed ? -1 : 1);
         }
 
-        void setPosition(double p) {
+        /** Commands are held inside the marked limits unless free (only the limits tab sends free). */
+        void setPosition(double p, boolean free) {
             if (servo == null) throw new IllegalStateException("no servo named " + device);
-            pos = clamp(p, 0, 1);
+            pos = free ? clamp(p, 0, 1) : clamp(p, Math.min(min, max), Math.max(min, max));
             servo.setPosition(pos);
         }
     }
@@ -1354,17 +1387,7 @@ public class MechanismTuner extends OpMode {
 
     // ------------------------------------------------------------------------- color
 
-    private int[] suggestion;
-    private double suggestionDom;
-
-    /** Would the shipped intake call this channel dominant? Mirrors intake.dominant(). */
-    private static boolean dominant(int[] s, boolean red, int thrRed, int thrBlue, double dom) {
-        int value = red ? s[0] : s[2];
-        int threshold = red ? thrRed : thrBlue;
-        if (value <= threshold) return false;
-        int other = red ? s[2] : s[0];
-        return value > dom * s[1] && value > dom * other;
-    }
+    private double[] suggestion;
 
     private void rebuildColorSummary() {
         Map<String, List<int[]>> byLabel = new LinkedHashMap<>();
@@ -1377,7 +1400,7 @@ public class MechanismTuner extends OpMode {
                 byLabel.put(l, list);
             }
             int[] s = samples.get(i);
-            list.add(s);
+            list.add(new int[]{s[0], s[1], s[2], s[3], i});
             csv.append(l).append(',').append(s[0]).append(',').append(s[1]).append(',')
                     .append(s[2]).append(',').append(s[3]).append(',')
                     .append(FlyRecorder.r(sampleDist.get(i), 2)).append('\n');
@@ -1400,8 +1423,9 @@ public class MechanismTuner extends OpMode {
                     mx[k] = Math.max(mx[k], s[k]);
                     mean[k] += s[k] / (double) e.getValue().size();
                 }
-                if (dominant(s, true, intake.thresholdRed, intake.thresholdBlue, intake.DOMINANCE)) redHits++;
-                if (dominant(s, false, intake.thresholdRed, intake.thresholdBlue, intake.DOMINANCE)) blueHits++;
+                double d = sampleDist.get(s[4]);
+                if (ColorCheck.calledRed(s[0], s[2], d)) redHits++;
+                if (ColorCheck.calledBlue(s[0], s[2], d)) blueHits++;
             }
             sb.append("{\"label\":\"").append(TuningHub.esc(e.getKey()))
                     .append("\",\"n\":").append(e.getValue().size())
@@ -1418,21 +1442,18 @@ public class MechanismTuner extends OpMode {
         sb.append(']');
 
         suggestion = null;
-        if (byLabel.containsKey("RED") && byLabel.containsKey("BLUE") && byLabel.size() >= 3) {
-            int[] red = fit(true);
-            int[] blue = fit(false);
-            // One DOMINANCE is shared by both channels in the shipped intake; take the stricter.
-            double dom = Math.max(red[1], blue[1]) / 100.0;
-            suggestion = new int[]{red[0], blue[0]};
-            suggestionDom = dom;
-            int[] cur = confusion(intake.thresholdRed, intake.thresholdBlue, intake.DOMINANCE);
-            int[] sug = confusion(red[0], blue[0], dom);
-            sb.append(",\"suggest\":{\"thresholdRed\":").append(red[0])
-                    .append(",\"thresholdBlue\":").append(blue[0])
-                    .append(",\"dominance\":").append(FlyRecorder.r(dom, 2))
-                    .append(",\"errorsSuggested\":").append(sug[0])
+        if (byLabel.containsKey("RED") && byLabel.containsKey("BLUE") && byLabel.containsKey("EMPTY")) {
+            double dist = fitDist();
+            double[] sug = {fitRatio(true, dist), fitRatio(false, dist), dist};
+            suggestion = sug;
+            int[] cur = confusion(ColorCheck.RED_OVER_BLUE, ColorCheck.BLUE_OVER_RED, ColorCheck.MAX_DIST_CM);
+            int[] fit = confusion(sug[0], sug[1], sug[2]);
+            sb.append(",\"suggest\":{\"redOverBlue\":").append(FlyRecorder.r(sug[0], 3))
+                    .append(",\"blueOverRed\":").append(FlyRecorder.r(sug[1], 3))
+                    .append(",\"maxDistCm\":").append(FlyRecorder.r(sug[2], 2))
+                    .append(",\"errorsSuggested\":").append(fit[0])
                     .append(",\"errorsCurrent\":").append(cur[0])
-                    .append(",\"total\":").append(sug[1]).append('}');
+                    .append(",\"total\":").append(fit[1]).append('}');
         } else {
             sb.append(",\"suggest\":null");
         }
@@ -1440,60 +1461,69 @@ public class MechanismTuner extends OpMode {
         colorSummary = sb.toString();
     }
 
-    /**
-     * Grid search for one channel: maximise correct calls of "this sample is that colour" over
-     * every stored sample (positives = that label, negatives = every other label), then take the
-     * centre of the tied-best region so the boundary sits as far from both clusters as the data
-     * allows. Returns {threshold, dominance x 100}.
-     */
-    private int[] fit(boolean red) {
-        String pos = red ? "RED" : "BLUE";
-        int ch = red ? 0 : 2;
-        int maxV = 1;
-        for (int[] s : samples) maxV = Math.max(maxV, s[ch]);
-        int stepT = Math.max(1, maxV / 200);
+    // Fits for the shipped ColorCheck rule (present && ratio). Each is a 1-D grid search that
+    // maximises correct calls and takes the middle of the tied-best run, so the boundary sits as far
+    // from both clusters as the data allows. Ratios use a log grid (middle = geometric midpoint).
+
+    /** Piece-present gate: RED and BLUE samples must be under it, EMPTY over it. Other labels ignored. */
+    private double fitDist() {
+        List<Double> grid = new ArrayList<>();
+        for (int k = 5; k <= 300; k++) grid.add(k * 0.05);
         int best = -1;
-        List<int[]> ties = new ArrayList<>();
-        for (int thr = 0; thr <= maxV; thr += stepT) {
-            for (int d100 = 100; d100 <= 300; d100 += 5) {
-                int ok = 0;
-                for (int i = 0; i < samples.size(); i++) {
-                    boolean want = pos.equals(sampleLabels.get(i));
-                    boolean got = dominant(samples.get(i), red, thr, thr, d100 / 100.0);
-                    if (want == got) ok++;
-                }
-                if (ok > best) {
-                    best = ok;
-                    ties.clear();
-                }
-                if (ok == best) ties.add(new int[]{thr, d100});
+        List<Double> ties = new ArrayList<>();
+        for (double g : grid) {
+            int ok = 0;
+            for (int i = 0; i < samples.size(); i++) {
+                String l = sampleLabels.get(i);
+                boolean piece = "RED".equals(l) || "BLUE".equals(l);
+                if (!piece && !"EMPTY".equals(l)) continue;
+                double d = sampleDist.get(i);
+                if (Double.isNaN(d)) continue;
+                if ((d < g) == piece) ok++;
             }
+            if (ok > best) { best = ok; ties.clear(); }
+            if (ok == best) ties.add(g);
         }
-        double mt = 0, md = 0;
-        for (int[] t : ties) {
-            mt += t[0] / (double) ties.size();
-            md += t[1] / (double) ties.size();
-        }
-        int[] pick = ties.get(0);
-        double bestDist = Double.MAX_VALUE;
-        for (int[] t : ties) {
-            double dist = Math.pow((t[0] - mt) / maxV, 2) + Math.pow((t[1] - md) / 200.0, 2);
-            if (dist < bestDist) {
-                bestDist = dist;
-                pick = t;
-            }
-        }
-        return pick;
+        return ties.get(ties.size() / 2);
     }
 
-    /** {misclassified, total} over both channels for a parameter set. */
-    private int[] confusion(int thrRed, int thrBlue, double dom) {
+    /** RED_OVER_BLUE (red=true) or BLUE_OVER_RED, over every sample, with the distance gate applied. */
+    private double fitRatio(boolean red, double maxDist) {
+        String pos = red ? "RED" : "BLUE";
+        int best = -1;
+        List<Double> ties = new ArrayList<>();
+        for (int k = 0; k <= 400; k++) {
+            double g = 0.25 * Math.pow(10, k / 200.0); // 0.25 .. 25
+            int ok = 0;
+            for (int i = 0; i < samples.size(); i++) {
+                int[] s = samples.get(i);
+                boolean present = !(sampleDist.get(i) >= maxDist);
+                boolean got = present && (red ? s[0] > g * s[2] : s[2] > g * s[0]);
+                if (got == pos.equals(sampleLabels.get(i))) ok++;
+            }
+            if (ok > best) { best = ok; ties.clear(); }
+            if (ok == best) ties.add(g);
+        }
+        return ties.get(ties.size() / 2);
+    }
+
+    /** {misclassified, total} over both calls for a parameter set. */
+    private int[] confusion(double redOverBlue, double blueOverRed, double maxDist) {
+        double r0 = ColorCheck.RED_OVER_BLUE, b0 = ColorCheck.BLUE_OVER_RED, d0 = ColorCheck.MAX_DIST_CM;
+        ColorCheck.RED_OVER_BLUE = redOverBlue;
+        ColorCheck.BLUE_OVER_RED = blueOverRed;
+        ColorCheck.MAX_DIST_CM = maxDist;
         int wrong = 0;
         for (int i = 0; i < samples.size(); i++) {
+            int[] s = samples.get(i);
             String l = sampleLabels.get(i);
-            if (dominant(samples.get(i), true, thrRed, thrBlue, dom) != "RED".equals(l)) wrong++;
-            if (dominant(samples.get(i), false, thrRed, thrBlue, dom) != "BLUE".equals(l)) wrong++;
+            double d = sampleDist.get(i);
+            if (ColorCheck.calledRed(s[0], s[2], d) != "RED".equals(l)) wrong++;
+            if (ColorCheck.calledBlue(s[0], s[2], d) != "BLUE".equals(l)) wrong++;
         }
+        ColorCheck.RED_OVER_BLUE = r0;
+        ColorCheck.BLUE_OVER_RED = b0;
+        ColorCheck.MAX_DIST_CM = d0;
         return new int[]{wrong, samples.size() * 2};
     }
 
@@ -1605,7 +1635,14 @@ public class MechanismTuner extends OpMode {
                     .append(",\"servoRange\":").append(t.servoRange)
                     .append(",\"rangeDeg\":").append(FlyRecorder.r(t.range(), 2))
                     .append(",\"offX\":").append(t.offset[0])
-                    .append(",\"offY\":").append(t.offset[1]).append('}');
+                    .append(",\"offY\":").append(t.offset[1])
+                    .append(",\"min\":").append(FlyRecorder.r(t.min, 4))
+                    .append(",\"max\":").append(FlyRecorder.r(t.max, 4))
+                    .append(",\"start\":").append(FlyRecorder.r(t.start, 4))
+                    .append(",\"minDeg\":").append(FlyRecorder.r(t.degFor(t.min), 1))
+                    .append(",\"maxDeg\":").append(FlyRecorder.r(t.degFor(t.max), 1))
+                    .append(",\"startDeg\":").append(FlyRecorder.r(t.degFor(t.start), 1))
+                    .append(",\"turnPos\":").append(FlyRecorder.r(360.0 / t.range(), 4)).append('}');
         }
         sb.append(']');
 
@@ -1635,7 +1672,6 @@ public class MechanismTuner extends OpMode {
                 .append("\",\"alliance\":\"").append(alliance)
                 .append("\",\"brakeMs\":").append(FlyRecorder.r(intake.REVERSE_BRAKE_MS, 1)).append('}');
 
-        int[] live = {cr, cg, cb, ca};
         sb.append(",\"color\":{\"ok\":").append(color != null)
                 .append(",\"hasDistance\":").append(colorDistance != null)
                 .append(",\"stream\":").append(colorStream)
@@ -1643,11 +1679,11 @@ public class MechanismTuner extends OpMode {
                 .append(",\"r\":").append(cr).append(",\"g\":").append(cg)
                 .append(",\"b\":").append(cb).append(",\"a\":").append(ca)
                 .append(",\"dist\":").append(nanToNull(cdist, 2))
-                .append(",\"redDominant\":").append(dominant(live, true, intake.thresholdRed, intake.thresholdBlue, intake.DOMINANCE))
-                .append(",\"blueDominant\":").append(dominant(live, false, intake.thresholdRed, intake.thresholdBlue, intake.DOMINANCE))
-                .append(",\"thresholdRed\":").append(intake.thresholdRed)
-                .append(",\"thresholdBlue\":").append(intake.thresholdBlue)
-                .append(",\"dominance\":").append(intake.DOMINANCE)
+                .append(",\"redDominant\":").append(ColorCheck.calledRed(cr, cb, cdist))
+                .append(",\"blueDominant\":").append(ColorCheck.calledBlue(cr, cb, cdist))
+                .append(",\"redOverBlue\":").append(ColorCheck.RED_OVER_BLUE)
+                .append(",\"blueOverRed\":").append(ColorCheck.BLUE_OVER_RED)
+                .append(",\"maxDistCm\":").append(ColorCheck.MAX_DIST_CM)
                 .append(",\"sampling\":").append(sampleRemaining)
                 .append(",\"samplingLabel\":\"").append(TuningHub.esc(sampleLabel))
                 .append("\",\"samples\":").append(samples.size())
@@ -1697,15 +1733,22 @@ public class MechanismTuner extends OpMode {
         out.add(new String[]{tu, "POLLEN_TURRET_GEAR_RATIO", gearSource(turrets[0])});
         out.add(new String[]{tu, "NECTAR_TURRET_GEAR_RATIO", gearSource(turrets[1])});
         out.add(new String[]{tu, "SERVO_RANGE_DEG", trim(turrets[0].servoRange)});
+        out.add(new String[]{tu, "POLLEN_TURRET_MIN", FlyRecorder.r(turrets[0].min, 4)});
+        out.add(new String[]{tu, "POLLEN_TURRET_MAX", FlyRecorder.r(turrets[0].max, 4)});
+        out.add(new String[]{tu, "NECTAR_TURRET_MIN", FlyRecorder.r(turrets[1].min, 4)});
+        out.add(new String[]{tu, "NECTAR_TURRET_MAX", FlyRecorder.r(turrets[1].max, 4)});
+        out.add(new String[]{tu, "POLLEN_TURRET_START", FlyRecorder.r(turrets[0].start, 4)});
+        out.add(new String[]{tu, "NECTAR_TURRET_START", FlyRecorder.r(turrets[1].start, 4)});
         out.add(new String[]{tu, "pollenTurretOffset", arraySource(turrets[0].offset)});
         out.add(new String[]{tu, "nectarTurretOffset", arraySource(turrets[1].offset)});
         String sh = "systems/shooter.java";
         out.add(new String[]{sh, "MIN_GATE_OPEN_S", Double.toString(minGateOpenS)});
         out.add(new String[]{sh, "HOLD_SPEED_FRACTION", Double.toString(holdFrac)});
         String in = "systems/intake.java";
-        out.add(new String[]{in, "thresholdRed", Integer.toString(intake.thresholdRed)});
-        out.add(new String[]{in, "thresholdBlue", Integer.toString(intake.thresholdBlue)});
-        out.add(new String[]{in, "DOMINANCE", Double.toString(intake.DOMINANCE)});
+        String cc = "systems/ColorCheck.java";
+        out.add(new String[]{cc, "RED_OVER_BLUE", trim(ColorCheck.RED_OVER_BLUE)});
+        out.add(new String[]{cc, "BLUE_OVER_RED", trim(ColorCheck.BLUE_OVER_RED)});
+        out.add(new String[]{cc, "MAX_DIST_CM", trim(ColorCheck.MAX_DIST_CM)});
         out.add(new String[]{in, "REVERSE_BRAKE_MS", trim(intake.REVERSE_BRAKE_MS)});
         for (ServoCal s : servos) {
             for (Map.Entry<String, Double> m : s.marks.entrySet()) {

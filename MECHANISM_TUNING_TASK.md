@@ -121,23 +121,24 @@ is how a session begins.
 
 ## Part B — Intake color sensor
 
-The shipped rule (`intake.dominant`): a channel is "seen" when it is above its threshold **and**
-above `DOMINANCE ×` each of the other two channels. Wrong-alliance → reverse the intake.
+The shipped rule (`systems/ColorCheck`): RED when `red > RED_OVER_BLUE × blue`, BLUE when
+`blue > BLUE_OVER_RED × red`, and either only while the sensor distance is under `MAX_DIST_CM`.
+Green is ignored: this sensor reads green highest on everything. Wrong-alliance → reverse the intake.
 
 1. `ask` the operator to hold each item at the sensor the way it arrives during intake, and
    capture with `mechtune.py color sample LABEL --n 40 --ask "..."`. Labels: `RED`, `BLUE`,
    `EMPTY`, plus one label per other thing the sensor can see (the other game piece, a half-in
    piece, tile, a hand). At least two captures per label at different positions.
 2. `mechtune.py color show` — the per-label table, how many reads of each label the *current*
-   thresholds call RED / BLUE, and a suggestion (grid search over threshold × dominance on all
-   samples, centred in the tied-best region).
+   thresholds call RED / BLUE, and a suggestion (1-D grid searches: the distance gate on RED/BLUE vs EMPTY,
+   then each ratio on all samples, centred in the tied-best region).
 3. A suggestion with any wrong calls on its own training samples is not good enough: capture more,
    or report the overlap. Check the margin: if a label's min/max sits within ~10% of the threshold,
    ambient light will move it across.
 4. `mechtune.py color apply`, then put the intake in WATCH (`cmd intake mode=WATCH`) with each
    alliance and `ask` the operator to present wrong-alliance and right-alliance pieces: reject
    must fire on wrong only. That live check is the acceptance.
-5. `color csv` (archive), `export --only intake --write`, build, commit with the confusion counts.
+5. `color csv` (archive), `export --only ColorCheck --write`, build, commit with the confusion counts.
 
 ## Part C — Turrets, gate, scoopula (operator-driven; Claude assists)
 

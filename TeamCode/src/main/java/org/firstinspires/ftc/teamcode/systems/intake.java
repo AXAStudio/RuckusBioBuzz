@@ -21,9 +21,6 @@ public class intake {
     public enum intakeState {
         INTAKE, STOP, REJECT
     }
-    public static int thresholdRed = 100;
-    public static int thresholdBlue = 100;
-    public static double DOMINANCE = 1.5;
     public static double REVERSE_BRAKE_MS = 60;
     private int lastSign = 0;
     private long lastDriveNanos = 0;
@@ -42,6 +39,7 @@ public class intake {
     }
     public void setAlliance(Alliance alliance){
         this.alliance = alliance;
+        colorCheck.setAlliance(alliance); // ColorCheck is built before the alliance is known
     }
 
     public intakeState getState(){

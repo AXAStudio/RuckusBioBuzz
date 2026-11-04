@@ -24,15 +24,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-/**
- * Pre-match check: drivetrain response first (needs floor space), then every mechanism.
- *
- * Mechanism checks only answer "is it connected, does its encoder count, does it turn the way the
- * shipped code expects". Motors are judged by encoder velocity and current; positional servos have
- * no feedback, so they are moved and flagged LOOK for the operator to confirm by eye. The
- * mechanisms are not built yet (2026-10-10): the thresholds below are placeholders, and the gate
- * and scoopula are skipped with a warning while their positions are still unset.
- */
 @Autonomous(name = "PreMatchSystemCheck", group = "Diagnostics")
 public class PreMatchSystemCheck extends OpMode {
     private static final Pose START_POSE = new Pose(0.0, 0.0, 0.0);

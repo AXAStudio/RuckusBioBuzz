@@ -15,9 +15,7 @@ import org.firstinspires.ftc.teamcode.helpers.HivePosition;
 @Configurable
 public class shooter {
     // Placeholders until the shooter is built and a shot can be timed.
-    /** Once the gate opens it stays open at least this long, whatever the wheel speed does. */
     public static double MIN_GATE_OPEN_S = 0.3;
-    /** Speed band that keeps SHOOT once entered (entry uses flywheel.AT_SPEED_FRACTION). */
     public static double HOLD_SPEED_FRACTION = 0.20;
 
     private final ElapsedTime shootTimer = new ElapsedTime();

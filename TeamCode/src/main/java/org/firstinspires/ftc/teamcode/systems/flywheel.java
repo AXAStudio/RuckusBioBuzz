@@ -60,7 +60,6 @@ public class flywheel {
     }
     public boolean atSpeedPollen() { return atSpeedPollen(AT_SPEED_FRACTION); }
     public boolean atSpeedNectar() { return atSpeedNectar(AT_SPEED_FRACTION); }
-    /** Same check with a caller-chosen band, e.g. the wider band shooter holds SHOOT with. */
     public boolean atSpeedPollen(double fraction) { return atSpeed(pollenVelocity, pollenTarget, fraction); }
     public boolean atSpeedNectar(double fraction) { return atSpeed(nectarVelocity, nectarTarget, fraction); }
 
