@@ -8,7 +8,7 @@ import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
 import org.firstinspires.ftc.teamcode.modules.predictiveAiming;
-import org.firstinspires.ftc.teamcode.modules.zoneCheck;
+import org.firstinspires.ftc.teamcode.modules.ZoneCheck;
 import org.firstinspires.ftc.teamcode.helpers.HivePosition;
 
 @Config
@@ -21,7 +21,7 @@ public class shooter {
     public static double HOLD_SPEED_FRACTION = 0.20;
 
     private final ElapsedTime shootTimer = new ElapsedTime();
-    private final zoneCheck zone;
+    private final ZoneCheck zone;
     private final turret aiming;
     private final flywheel flywheel;
     private final intake intake;
@@ -38,7 +38,7 @@ public class shooter {
 
     public shooter(HardwareMap hardwareMap, predictiveAiming predictor, Alliance alliance) {
         hivePosition = new HivePosition();
-        zone = new zoneCheck(alliance);
+        zone = new ZoneCheck(alliance, ZoneCheck.ShooterType.POLLEN);
         aiming = new turret(hardwareMap, predictor, new HivePosition());
         intake = new intake(hardwareMap);
         flywheel = new flywheel(hardwareMap, aiming);
@@ -57,7 +57,7 @@ public class shooter {
     }
 
     public void update() {
-        inZone = zone.inZonePollen(predictiveAiming.predictPose());
+        inZone = zone.inZone(predictiveAiming.predictPose());
         flywheel.update(inZone);
 
         switch (state) {
@@ -101,7 +101,7 @@ public class shooter {
         return state;
     }
 
-    public boolean inZone() { return zone.inZonePollen(predictiveAiming.predictPose()); }
+    public boolean inZone() { return zone.inZone(predictiveAiming.predictPose()); }
     public boolean pollenAimed() { return aiming.pollenAimed(); }
     public boolean nectarAimed() { return aiming.nectarAimed(); }
 }

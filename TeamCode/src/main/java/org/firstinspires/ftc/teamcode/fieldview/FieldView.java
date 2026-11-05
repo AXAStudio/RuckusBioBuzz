@@ -2,8 +2,9 @@ package org.firstinspires.ftc.teamcode.fieldview;
 
 import com.pedropathing.math.Pose;
 
+import org.firstinspires.ftc.teamcode.configs.ZoneCheckConfig;
+import org.firstinspires.ftc.teamcode.modules.ZoneCheck;
 import org.firstinspires.ftc.teamcode.modules.predictiveAiming;
-import org.firstinspires.ftc.teamcode.modules.zoneCheck;
 
 public final class FieldView {
     private static final long PUBLISH_INTERVAL_NS = 50_000_000L;
@@ -28,13 +29,12 @@ public final class FieldView {
             .append(",\"px\":").append(predicted.x())
             .append(",\"py\":").append(predicted.y())
             .append(",\"ph\":").append(predicted.heading())
-            .append(",\"inZonePollen\":").append(zoneCheck.inZonePollen(robot))
-            .append(",\"predInZonePollen\":").append(zoneCheck.inZonePollen(predicted))
+            .append(",\"inZonePollen\":").append(ZoneCheck.inZone(robot))
+            .append(",\"predInZonePollen\":").append(ZoneCheck.inZone(predicted))
             .append(",\"predictMs\":").append(predictiveAiming.PREDICT_MS)
-            .append(",\"zoneY\":").append(zoneCheck.ZONE_Y)
-            .append(",\"field\":").append(zoneCheck.FIELD_SIZE)
-            .append(",\"robotL\":").append(zoneCheck.ROBOT_LENGTH)
-            .append(",\"robotW\":").append(zoneCheck.ROBOT_WIDTH);
+            .append(",\"field\":").append(ZoneCheckConfig.FIELD_SIZE)
+            .append(",\"robotL\":").append(ZoneCheckConfig.ROBOT_LENGTH)
+            .append(",\"robotW\":").append(ZoneCheckConfig.ROBOT_WIDTH);
         snapshot = sb.toString();
         publishedAtNs = now;
     }

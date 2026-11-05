@@ -9,8 +9,9 @@ import com.qualcomm.robotcore.hardware.DcMotorEx;
 
 import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
+import org.firstinspires.ftc.teamcode.modules.ZoneCheck;
 import org.firstinspires.ftc.teamcode.modules.predictiveAiming;
-import org.firstinspires.ftc.teamcode.modules.zoneCheck;
+import org.firstinspires.ftc.teamcode.modules.ZoneCheck;
 import org.firstinspires.ftc.teamcode.pipelines.tools.blobDetection;
 import org.firstinspires.ftc.vision.VisionPortal;
 
@@ -22,7 +23,7 @@ public class rangeTest extends LinearOpMode {
     public static int pollenTurretVel = 1000;
     PinpointLocalizer pinpoint;
 
-    zoneCheck zoneCheck;
+    ZoneCheck zoneCheck;
     @Override
     public void runOpMode() {
         nectarTurret = hardwareMap.get(DcMotorEx.class, "nectarTurret");
@@ -32,17 +33,15 @@ public class rangeTest extends LinearOpMode {
         nectarTurret.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
         pollenTurret.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
         pollenTurret.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
-        zoneCheck = new zoneCheck(Alliance.RED);
+        zoneCheck = new ZoneCheck(Alliance.RED, ZoneCheck.ShooterType.POLLEN);
 
 
         waitForStart();
         while (opModeIsActive()) {
             Pose pose = pinpoint.pose();
-
-            nectarTurret.setVelocity(nectarTurretVel);
             pollenTurret.setVelocity(pollenTurretVel);
-            zoneCheck.inZoneNectar(pose);
-            zoneCheck.inZonePollen(pose);
+            zoneCheck.inZone(pose);
+
         }
 
     }
