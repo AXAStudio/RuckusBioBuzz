@@ -7,13 +7,13 @@ import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
-import org.firstinspires.ftc.teamcode.modules.predictiveAiming;
+import org.firstinspires.ftc.teamcode.modules.PredictiveAiming;
 import org.firstinspires.ftc.teamcode.modules.ZoneCheck;
 import org.firstinspires.ftc.teamcode.helpers.HivePosition;
 
 @Config
 @Configurable
-public class shooter {
+public class Shooter {
     // Placeholders until the shooter is built and a shot can be timed.
     /** Once the gate opens it stays open at least this long, whatever the wheel speed does. */
     public static double MIN_GATE_OPEN_S = 0.3;
@@ -22,27 +22,27 @@ public class shooter {
 
     private final ElapsedTime shootTimer = new ElapsedTime();
     private final ZoneCheck zone;
-    private final turret aiming;
-    private final flywheel flywheel;
-    private final intake intake;
+    private final Turret aiming;
+    private final Flywheel flywheel;
+    private final Intake intake;
     private final HivePosition hivePosition;
-    private gate shooterGate;
+    private Gate shooterGate;
 
     private boolean inZone;
-    private final predictiveAiming predictiveAiming;
+    private final PredictiveAiming predictiveAiming;
 
     private enum states {
             RESET, TRACK, SHOOT
     }
     states state = states.TRACK;
 
-    public shooter(HardwareMap hardwareMap, predictiveAiming predictor, Alliance alliance) {
+    public Shooter(HardwareMap hardwareMap, PredictiveAiming predictor, Alliance alliance) {
         hivePosition = new HivePosition();
         zone = new ZoneCheck(alliance, ZoneCheck.ShooterType.POLLEN);
-        aiming = new turret(hardwareMap, predictor, new HivePosition());
-        intake = new intake(hardwareMap);
-        flywheel = new flywheel(hardwareMap, aiming);
-        shooterGate = new gate(hardwareMap);
+        aiming = new Turret(hardwareMap, predictor, new HivePosition());
+        intake = new Intake(hardwareMap);
+        flywheel = new Flywheel(hardwareMap, aiming);
+        shooterGate = new Gate(hardwareMap);
         this.predictiveAiming = predictor;
 
     }

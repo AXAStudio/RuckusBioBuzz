@@ -10,9 +10,6 @@ import com.qualcomm.robotcore.hardware.DcMotorEx;
 import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
 import org.firstinspires.ftc.teamcode.modules.ZoneCheck;
-import org.firstinspires.ftc.teamcode.modules.predictiveAiming;
-import org.firstinspires.ftc.teamcode.modules.ZoneCheck;
-import org.firstinspires.ftc.teamcode.pipelines.tools.blobDetection;
 import org.firstinspires.ftc.vision.VisionPortal;
 
 @TeleOp(name = "Range Test",group = "TeleOp")
