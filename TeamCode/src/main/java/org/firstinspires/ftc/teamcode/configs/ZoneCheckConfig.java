@@ -5,14 +5,11 @@ public class ZoneCheckConfig {
     public static final double FIELD_SIZE = 141.5;
     public static final double ROBOT_LENGTH = 18;
     public static final double ROBOT_WIDTH = 18;
-    public static int yOffset = 0;
-    public static int xOffset = 0;
+    public static int yOffsetNectar = 0;
+    public static int yOffsetPollen = 0;
     public static int xQuality = 5;
     public static int yQuality = 10;
-    public static int yPollenOffset = 0;
-    public static int yNectarOffset = 0;
-    public static int[][] mapNectar;
-    public static int[][] mapPollen;
+    public static int[][] mapNectar, mapPollen = new int[yQuality][xQuality];
     public double fieldx = 141.5;
     public double fieldy = 141.5;
 }

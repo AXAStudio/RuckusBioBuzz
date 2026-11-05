@@ -12,11 +12,8 @@ import org.firstinspires.ftc.teamcode.helpers.Alliance;
 @Config
 @Configurable
 public class ZoneCheck {
-
-    private static int[][] mapNectar;
-    private static int[][] mapPollen;
     private static Alliance alliance;
-    private ShooterType shooterType;
+    private static ShooterType shooterType;
     public enum ShooterType{
         POLLEN, NECTAR
     }
@@ -24,17 +21,18 @@ public class ZoneCheck {
     public ZoneCheck(Alliance alliance, ShooterType shooterType) {
         this.shooterType = shooterType;
         this.alliance = alliance;
-        mapPollen = new int[ZoneCheckConfig.yQuality][ZoneCheckConfig.xQuality];
-        mapNectar = new int[ZoneCheckConfig.yQuality][ZoneCheckConfig.xQuality];
+
     }
 
 
 
     public static boolean inZone(Pose pose) {
-        int nectarOffsetx = (int)(-ZoneCheckConfig.yOffset*Math.sin(pose.heading())); //this just spins the vecter
-        int nectarOffsety = (int)(ZoneCheckConfig.xOffset*Math.cos(pose.heading())); //this just spins the vecter
-        double x = pose.x()+nectarOffsetx;
-        double y = pose.y()+nectarOffsety;
+        int offsetX;
+        int offsetY;
+        offsetX = (int) (-(shooterType == ShooterType.POLLEN? ZoneCheckConfig.yOffsetPollen: ZoneCheckConfig.yOffsetNectar) * Math.sin(pose.heading())); //this just spins the vecter
+        offsetY = (int) ((shooterType == ShooterType.POLLEN? ZoneCheckConfig.yOffsetPollen: ZoneCheckConfig.yOffsetNectar) * Math.cos(pose.heading())); //this just spins the vecter
+        double x = pose.x()+offsetX;
+        double y = pose.y()+offsetY;
         if(alliance == Alliance.BLUE){
             x = ZoneCheckConfig.xQuality-x;
             y = ZoneCheckConfig.yQuality-y;
@@ -44,7 +42,7 @@ public class ZoneCheck {
         telemetry.addData("xQuad", xQuad);
         telemetry.addData("yQuad", yQuad);
         telemetry.update();
-        if(mapNectar[xQuad][yQuad] == 1){
+        if(ZoneCheckConfig.mapNectar[xQuad][yQuad] == 1){
             return true;
         }
         return false;
