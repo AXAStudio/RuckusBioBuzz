@@ -126,6 +126,7 @@
   <button data-tab="fly">Flywheels</button>
   <button data-tab="shoot">Shooting</button>
   <button data-tab="turret">Turrets &amp; servos</button>
+  <button data-tab="tlimits">Turret limits</button>
   <button data-tab="color">Intake &amp; color</button>
   <button data-tab="swerve">Swerve</button>
   <button data-tab="export">Export</button>
@@ -389,6 +390,21 @@
   </section>
 </div>
 
+<!-- ======================================================== TURRET LIMITS -->
+<div class="tab" id="tab-tlimits">
+  <section>
+    <h2>Turret limits and start position</h2>
+    <p class="hint" style="margin-top:0">Do this with the wiring done. For each turret: jog it one way until the wires are
+      as far as they may go and press <b>Mark limit</b> for that side; jog it back the other way and mark the other
+      side. Then put it where it should sit at the start of a match and press <b>Mark start</b>. While tracking, the
+      shipped turret never goes past a limit: when the target would carry it past one, it turns a full turn back the
+      other way (if that still fits) instead. The jog buttons here are the only ones allowed past the marked limits;
+      everything else on this dashboard is held inside them. <b>Start</b> is commanded when the turret is built at
+      OpMode INIT. Nothing ships until you export (Export tab).</p>
+    <div class="grid" id="limitCards"></div>
+  </section>
+</div>
+
 <!-- ======================================================== INTAKE & COLOR -->
 <div class="tab" id="tab-color">
   <section>
@@ -430,7 +446,7 @@
     <p class="hint" style="margin-top:0">Hold each piece where the sensor sees it during intake and capture ~40 reads.
       Do RED, BLUE, EMPTY (nothing in the intake) and every other thing the sensor might see (the other game
       piece, a piece half-in, field tiles). Vary position between captures. The suggestion maximises correct calls
-      over all samples using the exact <code>intake.dominant()</code> rule.</p>
+      over all samples using the exact shipped <code>ColorCheck</code> rule (red &gt; R×blue or blue &gt; B×red, and distance under the gate).</p>
     <div class="row">
       <label class="inline">reads <input type="number" id="sampleN" value="40" min="1" max="500"></label>
       <button class="small" onclick="sample('RED')">Capture RED</button>
@@ -450,13 +466,13 @@
   <section>
     <h2>Thresholds (live)</h2>
     <div class="row">
-      <label class="inline">thresholdRed <input type="number" id="thrRed"></label>
-      <label class="inline">thresholdBlue <input type="number" id="thrBlue"></label>
-      <label class="inline">DOMINANCE <input type="number" id="dom" step="0.05"></label>
-      <button class="small primary" onclick="cmd('colorParams',{red:num('thrRed'),blue:num('thrBlue'),dom:num('dom')})">Apply live</button>
+      <label class="inline">RED_OVER_BLUE <input type="number" id="thrRed" step="0.01"></label>
+      <label class="inline">BLUE_OVER_RED <input type="number" id="thrBlue" step="0.01"></label>
+      <label class="inline">MAX_DIST_CM <input type="number" id="maxDist" step="0.1"></label>
+      <button class="small primary" onclick="cmd('colorParams',{red:num('thrRed'),blue:num('thrBlue'),dist:num('maxDist')})">Apply live</button>
       <button class="small" onclick="fillColorInputs(true)">Reload</button>
     </div>
-    <p class="hint">Applied to the shipped <code>intake</code> statics for this run only; restored when the OpMode stops. Ship them from the Export tab.</p>
+    <p class="hint">Applied to the shipped <code>ColorCheck</code> statics for this run only; restored when the OpMode stops. Ship them from the Export tab.</p>
   </section>
   <section>
     <h2>Claude prompt — color sensor</h2>
@@ -607,13 +623,18 @@ var CHECKS = [
     {id: 'tg', what: 'Gear ratio / servo range', f: ['POLLEN_TURRET_GEAR_RATIO', 'NECTAR_TURRET_GEAR_RATIO', 'SERVO_RANGE_DEG'],
       how: 'Point −90° and +90° and measure the real angles; adjust grB until they match. 3+ measurements a side.'},
     {id: 'to', what: 'Mount offsets', f: ['pollenTurretOffset', 'nectarTurretOffset'],
-      how: 'Tape-measure each turret pivot from the robot\'s pose center: inches, x forward, y left.'}
+      how: 'Tape-measure each turret pivot from the robot\'s pose center: inches, x forward, y left.'},
+    {id: 'tl', what: 'Wiring limits, each direction', tab: 'tlimits',
+      f: ['POLLEN_TURRET_MIN', 'POLLEN_TURRET_MAX', 'NECTAR_TURRET_MIN', 'NECTAR_TURRET_MAX'],
+      how: 'Turret limits tab, wiring finished: jog to the end of the wires each way and Mark limit for that side.'},
+    {id: 'ts', what: 'Start position', tab: 'tlimits', f: ['POLLEN_TURRET_START', 'NECTAR_TURRET_START'],
+      how: 'Turret limits tab: put each turret where it sits at match start, Mark start.'}
   ]},
   {g: 'Scoopula', tab: 'turret', items: [
     {id: 'sc', what: 'Scoop / unscoop positions', f: ['scoopPos', 'unscoopPos'], how: 'Slide it, then Mark scoop and Mark unscoop.'}
   ]},
   {g: 'Intake', tab: 'color', items: [
-    {id: 'col', what: 'Color thresholds and DOMINANCE', f: ['thresholdRed', 'thresholdBlue', 'DOMINANCE'],
+    {id: 'col', what: 'Color ratios and distance gate', f: ['RED_OVER_BLUE', 'BLUE_OVER_RED', 'MAX_DIST_CM'],
       how: 'Capture RED, BLUE, EMPTY and anything else the sensor sees; apply the suggestion once it calls every sample right.'},
     {id: 'rej', what: 'Live reject check, both alliances', f: [],
       how: 'Watch mode, alliance RED then BLUE: a wrong-alliance piece must be spat out, a right one kept.'},
@@ -762,6 +783,40 @@ function buildTurretCards() {
       '<span class="hint" id="' + id + 'RangeInfo"></span></div></div>';
   }).join('');
 }
+function buildLimitCards() {
+  $('limitCards').innerHTML = ['pollen', 'nectar'].map(function (w) {
+    var id = 'L' + w, q = '\'' + w + '\'';
+    var jog = function (d) { return '<button class="small" onclick="limitJog(' + q + ',' + d + ')">' + (d > 0 ? '+' : '') + d + '</button>'; };
+    return '<div class="card"><h3>' + w + ' turret <span class="badge" id="' + id + 'Ok">–</span></h3>' +
+      '<div class="row" style="gap:22px"><div><div class="hint">servo position</div><div class="big" id="' + id + 'Pos">–</div></div>' +
+      '<div><div class="hint">turret angle</div><div class="big" id="' + id + 'Deg">–</div></div></div>' +
+      '<div class="row"><input type="range" min="0" max="1" step="0.001" id="' + id + 'Slider" ' +
+      'onchange="cmd(\'turretPos\',{which:' + q + ',pos:this.value,free:1})"></div>' +
+      '<div class="row"><span class="hint">jog</span>' + [-0.05, -0.01, -0.002].map(jog).join('') + [0.002, 0.01, 0.05].map(jog).join('') + '</div>' +
+      '<div class="row"><button class="small primary" onclick="cmd(\'turretMark\',{which:' + q + ',mark:\'min\'}).then(function(){filled.' + id + '=false})">Mark limit (low side)</button>' +
+      '<button class="small primary" onclick="cmd(\'turretMark\',{which:' + q + ',mark:\'max\'}).then(function(){filled.' + id + '=false})">Mark limit (high side)</button>' +
+      '<button class="small primary" onclick="cmd(\'turretMark\',{which:' + q + ',mark:\'start\'}).then(function(){filled.' + id + '=false})">Mark start</button></div>' +
+      '<div class="row"><button class="small" onclick="limitGo(' + q + ',\'min\')">Go to low limit</button>' +
+      '<button class="small" onclick="limitGo(' + q + ',\'max\')">Go to high limit</button>' +
+      '<button class="small" onclick="limitGo(' + q + ',\'start\')">Go to start</button></div>' +
+      '<div class="row"><b style="font-size:12px">Values</b>' +
+      '<label class="inline">low <input type="number" step="0.001" id="' + id + 'Min"></label>' +
+      '<label class="inline">high <input type="number" step="0.001" id="' + id + 'Max"></label>' +
+      '<label class="inline">start <input type="number" step="0.001" id="' + id + 'Start"></label>' +
+      '<button class="small" onclick="cmd(\'turretCal\',{which:' + q + ',min:num(\'' + id + 'Min\'),max:num(\'' + id + 'Max\'),start:num(\'' + id + 'Start\')})">Apply</button></div>' +
+      '<div id="' + id + 'Info"></div></div>';
+  }).join('');
+}
+function limitTurret(w) { return S && S.turrets && S.turrets.filter(function (x) { return x.name === w; })[0]; }
+function limitJog(w, d) {
+  var t = limitTurret(w); if (!t) return;
+  var p = t.pos != null ? t.pos : t.start;
+  cmd('turretPos', {which: w, pos: Math.max(0, Math.min(1, p + d)).toFixed(4), free: 1});
+}
+function limitGo(w, k) {
+  var t = limitTurret(w); if (!t) return;
+  cmd('turretPos', {which: w, pos: t[k], free: 1});
+}
 function nudge(w, d) {
   var t = S && S.turrets && S.turrets.filter(function (x) { return x.name === w; })[0];
   var p = t && t.pos != null ? t.pos : (t ? t.center : 0.5);
@@ -884,11 +939,11 @@ color:
 '- Ask me to hold each piece at the sensor with `mechtune.py color sample LABEL --ask "..."`. Capture RED, BLUE, ' +
 'EMPTY and every other thing the sensor can see, at least twice each at different positions.\n' +
 '- The suggestion must call every sample correctly; then check reject live in WATCH mode for both alliances.\n\n' +
-'Deliverable: thresholdRed / thresholdBlue / DOMINANCE spliced into systems/intake.java with ' +
-'`mechtune.py export --only intake --write`, built, committed with the confusion counts, then pushed.'
+'Deliverable: RED_OVER_BLUE / BLUE_OVER_RED / MAX_DIST_CM spliced into systems/ColorCheck.java with ' +
+'`mechtune.py export --only ColorCheck --write`, built, committed with the confusion counts, then pushed.'
 };
 
-buildWheelCards(); buildTurretCards(); buildServoCards();
+buildWheelCards(); buildTurretCards(); buildLimitCards(); buildServoCards();
 prompts();
 
 // ---------------------------------------------------------------- live charts
@@ -1255,6 +1310,24 @@ function render() {
       $(id + 'Range').value = t.servoRange; $(id + 'Rev').checked = t.reversed; $(id + 'PosIn').value = t.pos != null ? t.pos : t.center;
       $(id + 'OffX').value = t.offX; $(id + 'OffY').value = t.offY; });
   });
+  S.turrets.forEach(function (t) {
+    var id = 'L' + t.name;
+    setText(id + 'Ok', t.ok ? t.device : 'missing ' + t.device); $(id + 'Ok').className = 'badge' + (t.ok ? '' : ' bad');
+    setText(id + 'Pos', f(t.pos, 3)); setText(id + 'Deg', t.deg == null ? '–' : f(t.deg, 1) + '°');
+    if (t.pos != null && document.activeElement !== $(id + 'Slider')) $(id + 'Slider').value = t.pos;
+    var lo = Math.min(t.min, t.max), hi = Math.max(t.min, t.max), span = hi - lo;
+    var spanDeg = span * t.rangeDeg, warn = [];
+    if (t.min > t.max) warn.push('low is above high: the turret treats them as swapped.');
+    if (t.start < lo || t.start > hi) warn.push('start is outside the limits; the turret will be clamped to them.');
+    if (span < t.turnPos) warn.push('limits span less than one full turn, so some directions cannot be reached: the turret will sit at the limit instead.');
+    setHtml(id + 'Info', '<div class="kv"><span>low limit</span><span>' + f(t.min, 4) + ' (' + f(t.minDeg, 1) + '°)</span></div>' +
+      '<div class="kv"><span>high limit</span><span>' + f(t.max, 4) + ' (' + f(t.maxDeg, 1) + '°)</span></div>' +
+      '<div class="kv"><span>start</span><span>' + f(t.start, 4) + ' (' + f(t.startDeg, 1) + '°)</span></div>' +
+      '<div class="kv"><span>travel between limits</span><span>' + f(spanDeg, 1) + '° of turret</span></div>' +
+      '<div class="hint">angles use this run\'s center / gear ratio / direction (Turrets &amp; servos tab)</div>' +
+      warn.map(function (w) { return '<div class="badge warn">' + w + '</div>'; }).join(''));
+    fillOnce(id, function () { $(id + 'Min').value = t.min; $(id + 'Max').value = t.max; $(id + 'Start').value = t.start; });
+  });
   S.servos.forEach(function (s) {
     var id = 's' + s.name;
     setText(id + 'Ok', s.ok ? s.device : 'missing ' + s.device); $(id + 'Ok').className = 'badge' + (s.ok ? '' : ' bad');
@@ -1269,13 +1342,13 @@ function render() {
   setHtml('colorLive', !c.ok ? '<span class="badge bad">no device named colorSensor</span>' :
     ['red', 'green', 'blue', 'alpha'].map(function (k, i) { return '<div class="kv"><span>' + k + '</span><span>' + [c.r, c.g, c.b, c.a][i] + '</span></div>'; }).join('') +
     (c.hasDistance ? '<div class="kv"><span>distance</span><span>' + f(c.dist, 1) + ' cm</span></div>' : '') +
-    '<div class="kv"><span>red / max(g,b)</span><span>' + f(c.r / Math.max(1, c.g, c.b), 2) + '</span></div>' +
-    '<div class="kv"><span>blue / max(g,r)</span><span>' + f(c.b / Math.max(1, c.g, c.r), 2) + '</span></div>');
+    '<div class="kv"><span>red / blue</span><span>' + f(c.r / Math.max(1, c.b), 2) + '</span></div>' +
+    '<div class="kv"><span>blue / red</span><span>' + f(c.b / Math.max(1, c.r), 2) + '</span></div>');
   var rejectNow = (S.intake.alliance === 'RED' && c.blueDominant) || (S.intake.alliance === 'BLUE' && c.redDominant);
-  setHtml('colorVerdict', '<div class="kv"><span>RED dominant</span><span class="badge ' + (c.redDominant ? 'bad' : '') + '">' + c.redDominant + '</span></div>' +
-    '<div class="kv"><span>BLUE dominant</span><span class="badge ' + (c.blueDominant ? 'good' : '') + '">' + c.blueDominant + '</span></div>' +
+  setHtml('colorVerdict', '<div class="kv"><span>called RED</span><span class="badge ' + (c.redDominant ? 'bad' : '') + '">' + c.redDominant + '</span></div>' +
+    '<div class="kv"><span>called BLUE</span><span class="badge ' + (c.blueDominant ? 'good' : '') + '">' + c.blueDominant + '</span></div>' +
     '<div class="kv"><span>intake would reject (' + S.intake.alliance + ')</span><span class="badge ' + (rejectNow ? 'warn' : '') + '">' + rejectNow + '</span></div>' +
-    '<div class="hint">thresholds red ' + c.thresholdRed + ' · blue ' + c.thresholdBlue + ' · dominance ' + c.dominance + '</div>' +
+    '<div class="hint">red &gt; ' + c.redOverBlue + '×blue · blue &gt; ' + c.blueOverRed + '×red · dist &lt; ' + c.maxDistCm + ' cm</div>' +
     (c.pausedForRec ? '<div class="badge warn">paused: recorder running</div>' : ''));
   $('btnStream').classList.toggle('on', c.stream); setText('btnStream', c.stream ? 'Streaming on' : 'Streaming off');
   setText('intakeInfo', S.intake.ok ? 'intake ' + S.intake.mode + ' · alliance ' + S.intake.alliance : 'intake unavailable: ' + S.intake.error);
@@ -1289,10 +1362,10 @@ function render() {
         bad(l.redHits, l.label === 'RED') + '</td><td>' + bad(l.blueHits, l.label === 'BLUE') + '</td></tr>'; }).join('')
     : '<tr><td class="hint">No samples yet.</td></tr>');
   var sg = sm.suggest;
-  setHtml('colorSuggest', sg ? '<div class="msg">Suggested: thresholdRed <b>' + sg.thresholdRed + '</b>, thresholdBlue <b>' + sg.thresholdBlue +
-    '</b>, DOMINANCE <b>' + sg.dominance + '</b> — ' + sg.errorsSuggested + ' wrong calls of ' + sg.total + ' (current values: ' + sg.errorsCurrent +
+  setHtml('colorSuggest', sg ? '<div class="msg">Suggested: RED_OVER_BLUE <b>' + sg.redOverBlue + '</b>, BLUE_OVER_RED <b>' + sg.blueOverRed +
+    '</b>, MAX_DIST_CM <b>' + sg.maxDistCm + '</b> — ' + sg.errorsSuggested + ' wrong calls of ' + sg.total + ' (current values: ' + sg.errorsCurrent +
     ') <button class="small primary" onclick="cmd(\'colorSuggestApply\').then(function(){filled.color=false})">Apply live</button></div>'
-    : '<div class="hint">Capture RED, BLUE and at least one other label to get a suggestion.</div>');
+    : '<div class="hint">Capture RED, BLUE and EMPTY to get a suggestion.</div>');
   fillOnce('color', function () { fillColorInputs(false); });
 
   // export
@@ -1314,7 +1387,7 @@ function render() {
 }
 function fillColorInputs(force) {
   if (!S || !S.live) return;
-  $('thrRed').value = S.color.thresholdRed; $('thrBlue').value = S.color.thresholdBlue; $('dom').value = S.color.dominance;
+  $('thrRed').value = S.color.redOverBlue; $('thrBlue').value = S.color.blueOverRed; $('maxDist').value = S.color.maxDistCm;
 }
 
 // notify.js comes from the robot (/tune/notify.js). Opened from disk it is absent, and the page

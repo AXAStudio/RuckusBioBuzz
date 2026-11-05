@@ -9,11 +9,11 @@ import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
-import org.firstinspires.ftc.teamcode.modules.shootingRegression;
+import org.firstinspires.ftc.teamcode.modules.ShootingRegression;
 
 @Config
 @Configurable
-public class flywheel {
+public class Flywheel {
     public static boolean POLLEN_FLYWHEEL_REVERSED = false;
     public static boolean NECTAR_FLYWHEEL_REVERSED = false;
     public static double AT_SPEED_FRACTION = 0.05;
@@ -21,7 +21,7 @@ public class flywheel {
     public static PIDFCoefficients POLLEN_PIDF = new PIDFCoefficients(500, 0, 0, 11.7);
     public static PIDFCoefficients NECTAR_PIDF = new PIDFCoefficients(500, 0, 0, 11.7);
 
-    private final shootingRegression regression;
+    private final ShootingRegression regression;
 
     private final DcMotorEx pollenFlywheel;
     private final DcMotorEx nectarFlywheel;
@@ -29,8 +29,8 @@ public class flywheel {
     private double nectarTarget;
     private double pollenVelocity;
     private double nectarVelocity;
-    public flywheel(HardwareMap hardwareMap, turret aiming) {
-        regression = new shootingRegression(aiming);
+    public Flywheel(HardwareMap hardwareMap, Turret aiming) {
+        regression = new ShootingRegression(aiming);
 
         pollenFlywheel = hardwareMap.get(DcMotorEx.class, "pollenTurret");
         nectarFlywheel = hardwareMap.get(DcMotorEx.class, "nectarTurret");
@@ -60,7 +60,6 @@ public class flywheel {
     }
     public boolean atSpeedPollen() { return atSpeedPollen(AT_SPEED_FRACTION); }
     public boolean atSpeedNectar() { return atSpeedNectar(AT_SPEED_FRACTION); }
-    /** Same check with a caller-chosen band, e.g. the wider band shooter holds SHOOT with. */
     public boolean atSpeedPollen(double fraction) { return atSpeed(pollenVelocity, pollenTarget, fraction); }
     public boolean atSpeedNectar(double fraction) { return atSpeed(nectarVelocity, nectarTarget, fraction); }
 

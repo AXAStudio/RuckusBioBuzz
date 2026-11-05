@@ -13,7 +13,8 @@ Diagnostic only — never ships. Tunes everything except the drivetrain (that is
 | Flywheels | Live velocity chart and a zoomed speed-error chart (entry and hold bands, gate-open shading), spin / open loop, hub velocity PIDF (Write / Write to both / Shipped / Copy, sweep F, FIRST starting point, "not written" flag), step test with a rule-of-thumb verdict, synthetic kick, feed-forward sweep, **Step trials** (every step overlaid with its gains, pulled from `/tune/rec.csv`), shot/dip events and **Recovery by gain set**, recorder, Claude prompt |
 | Shooting | `shooter.java`'s gate logic run with tool values (entry band, hold band, min open time) and fed by the shipped intake; gate-window table; zone-entry test for `IDLE_FRACTION` |
 | Turrets & servos | Turret center / reversed / gear ratio against the exact `turret.java` formula, mount offsets; gate and scoopula positions with Mark buttons |
-| Intake & color | Live raw RGB, what the shipped `intake.dominant()` rule calls it, intake run through the shipped `intake` class, `REVERSE_BRAKE_MS`, labelled samples and a threshold suggestion (`/tune/color.csv`) |
+| Turret limits | Per turret: jog (allowed past the limits) and mark the wiring limit on each side and the start position (`*_TURRET_MIN/MAX/START`); every other turret move on the dashboard is held inside the marked limits |
+| Intake & color | Live raw RGB, what the shipped `ColorCheck` rule calls it, intake run through the shipped `intake` class, `REVERSE_BRAKE_MS`, labelled samples and a ratio + distance-gate suggestion (`/tune/color.csv`) |
 | Swerve | Whether Swerve Bring-Up is running, link to `/swerve`, Claude prompt |
 | Export | Every value next to what the code had at init, changed rows highlighted, the `--only` command for the changed files |
 

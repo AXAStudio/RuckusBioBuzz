@@ -4,14 +4,14 @@ import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 
 import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
-import org.firstinspires.ftc.teamcode.pipelines.tools.blobDetection;
+import org.firstinspires.ftc.teamcode.pipelines.tools.BlobDetection;
 import org.firstinspires.ftc.vision.VisionPortal;
 
 @Disabled
 @TeleOp(name = "Blob Detection Test",group = "TeleOp")
 public class blobDetectionTest extends LinearOpMode {
 
-    blobDetection detector = new blobDetection();
+    BlobDetection detector = new BlobDetection();
     VisionPortal portal;
 
     @Override

@@ -17,11 +17,11 @@ import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.YawPitchRollAngles;
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
 import org.firstinspires.ftc.teamcode.helpers.HivePosition;
-import org.firstinspires.ftc.teamcode.modules.predictiveAiming;
-import org.firstinspires.ftc.teamcode.systems.turret;
+import org.firstinspires.ftc.teamcode.modules.PredictiveAiming;
+import org.firstinspires.ftc.teamcode.systems.Turret;
 
 /**
- * DIAGNOSTIC ONLY. Runs the real {@link turret} against a SIMULATED robot pose, so turret
+ * DIAGNOSTIC ONLY. Runs the real {@link Turret} against a SIMULATED robot pose, so turret
  * tracking (wrap, unwind, target switch at the field half) can be checked on blocks with nothing
  * driving. Only the two turret servos move.
  *
@@ -59,7 +59,7 @@ public class turretTrackTest extends LinearOpMode {
     private static Pose sim = new Pose(72, 40, 0);
 
     /** predictiveAiming that ignores the follower and returns the simulated pose (no lead). */
-    private static final class SimAiming extends predictiveAiming {
+    private static final class SimAiming extends PredictiveAiming {
         SimAiming() { super(null); }
 
         @Override public Pose leadPose() { return sim; }
@@ -74,7 +74,7 @@ public class turretTrackTest extends LinearOpMode {
     @Override
     public void runOpMode() {
         telemetry = new MultipleTelemetry(telemetry, FtcDashboard.getInstance().getTelemetry());
-        turret t = new turret(hardwareMap, new SimAiming(), new HivePosition());
+        Turret t = new Turret(hardwareMap, new SimAiming(), new HivePosition());
         Servo pollen = hardwareMap.get(Servo.class, "pollenTurretServo");
         imu = null;
         try {
@@ -104,10 +104,10 @@ public class turretTrackTest extends LinearOpMode {
 
             double thetaDeg = Math.toDegrees(t.aimPollen().theta);
             double pos = pollen.getPosition();
-            double range = turret.SERVO_RANGE_DEG * turret.POLLEN_TURRET_GEAR_RATIO[1]
-                    / turret.POLLEN_TURRET_GEAR_RATIO[0];
-            double impliedDeg = (turret.POLLEN_TURRET_REVERSED ? -1 : 1)
-                    * (pos - turret.POLLEN_TURRET_CENTER) * range;
+            double range = Turret.SERVO_RANGE_DEG * Turret.POLLEN_TURRET_GEAR_RATIO[1]
+                    / Turret.POLLEN_TURRET_GEAR_RATIO[0];
+            double impliedDeg = (Turret.POLLEN_TURRET_REVERSED ? -1 : 1)
+                    * (pos - Turret.POLLEN_TURRET_CENTER) * range;
             double err = AngleUnit.normalizeDegrees(impliedDeg - thetaDeg);
 
             telemetry.addData("scenario", SCENARIO);

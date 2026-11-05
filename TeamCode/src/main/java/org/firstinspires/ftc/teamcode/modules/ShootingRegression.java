@@ -1,12 +1,12 @@
 package org.firstinspires.ftc.teamcode.modules;
 
-import org.firstinspires.ftc.teamcode.systems.turret;
+import org.firstinspires.ftc.teamcode.systems.Turret;
 
-public class shootingRegression {
+public class ShootingRegression {
 
-    private final turret aiming;
+    private final Turret aiming;
 
-    public shootingRegression(turret aiming) {
+    public ShootingRegression(Turret aiming) {
         this.aiming = aiming;
     }
 
