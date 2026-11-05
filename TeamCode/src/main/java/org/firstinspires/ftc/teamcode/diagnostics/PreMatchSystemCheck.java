@@ -1,5 +1,7 @@
 package org.firstinspires.ftc.teamcode.diagnostics;
 
+import org.firstinspires.ftc.teamcode.SystemConstants;
+
 import com.pedropathing.drivetrain.DrivePowers;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.math.Pose;
@@ -336,8 +338,8 @@ public class PreMatchSystemCheck extends OpMode {
             scoopula = new Scoopula(hardwareMap);
         }
 
-        checkTurretTravel("Pollen", Turret.POLLEN_TURRET_GEAR_RATIO);
-        checkTurretTravel("Nectar", Turret.NECTAR_TURRET_GEAR_RATIO);
+        checkTurretTravel("Pollen", SystemConstants.Turret.POLLEN_TURRET_GEAR_RATIO);
+        checkTurretTravel("Nectar", SystemConstants.Turret.NECTAR_TURRET_GEAR_RATIO);
     }
 
     private <T> T device(Class<T> type, String name, String what) {
@@ -351,7 +353,7 @@ public class PreMatchSystemCheck extends OpMode {
 
     /** turret.track can only reach every heading if the turret covers a full turn. */
     private void checkTurretTravel(String name, double[] gearRatio) {
-        double range = Turret.SERVO_RANGE_DEG * gearRatio[1] / gearRatio[0];
+        double range = SystemConstants.Turret.SERVO_RANGE_DEG * gearRatio[1] / gearRatio[0];
         if (!isFinite(range) || range < 360.0) {
             addWarning(name + " turret covers " + format(range) + " deg over the servo's travel; "
                     + "under 360 it cannot aim at every heading.");
@@ -400,10 +402,10 @@ public class PreMatchSystemCheck extends OpMode {
 
         switch (step) {
             case POLLEN_FLYWHEEL:
-                startFlywheel(pollenFlywheel, Flywheel.POLLEN_FLYWHEEL_REVERSED);
+                startFlywheel(pollenFlywheel, SystemConstants.Flywheel.POLLEN_FLYWHEEL_REVERSED);
                 break;
             case NECTAR_FLYWHEEL:
-                startFlywheel(nectarFlywheel, Flywheel.NECTAR_FLYWHEEL_REVERSED);
+                startFlywheel(nectarFlywheel, SystemConstants.Flywheel.NECTAR_FLYWHEEL_REVERSED);
                 break;
             case INTAKE:
                 // Same sign systems/intake uses for INTAKE.
@@ -412,10 +414,10 @@ public class PreMatchSystemCheck extends OpMode {
                 break;
             case TURRETS:
                 if (pollenTurretServo != null) {
-                    pollenTurretServo.setPosition(Turret.POLLEN_TURRET_CENTER);
+                    pollenTurretServo.setPosition(SystemConstants.Turret.POLLEN_TURRET_CENTER);
                 }
                 if (nectarTurretServo != null) {
-                    nectarTurretServo.setPosition(Turret.NECTAR_TURRET_CENTER);
+                    nectarTurretServo.setPosition(SystemConstants.Turret.NECTAR_TURRET_CENTER);
                 }
                 break;
             case GATE:

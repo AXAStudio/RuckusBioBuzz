@@ -1,17 +1,13 @@
 package org.firstinspires.ftc.teamcode.modules;
 
-import com.acmerobotics.dashboard.config.Config;
-import com.bylazar.configurables.annotations.Configurable;
+import org.firstinspires.ftc.teamcode.SystemConstants;
+
 import com.pedropathing.follower.Follower;
 import com.pedropathing.math.Pose;
 import com.pedropathing.math.Velocity;
 
-@Config
-@Configurable
 public class PredictiveAiming {
 
-    public static double PREDICT_MS = 150;
-    private static final double[] CENTER = {0, 0};
 
     private final Follower follower;
 
@@ -19,20 +15,20 @@ public class PredictiveAiming {
         this.follower = follower;
     }
     public Pose predictPose() {
-        return predictPose(PREDICT_MS);
+        return predictPose(SystemConstants.PredictiveAiming.PREDICT_MS);
     }
     public Pose predictPose(double ms) {
         return follower.pose().exp(follower.twist(), ms / 1000.0);
     }
 
     public Pose leadPose() {
-        return leadPose(CENTER);
+        return leadPose(SystemConstants.PredictiveAiming.CENTER);
     }
 
     public Pose leadPose(double[] offset) {
         Pose robot = follower.pose();
         Velocity v = follower.velocity();
-        double t = PREDICT_MS / 1000.0;
+        double t = SystemConstants.PredictiveAiming.PREDICT_MS / 1000.0;
         double c = Math.cos(robot.heading());
         double s = Math.sin(robot.heading());
         double rx = offset[0] * c - offset[1] * s;

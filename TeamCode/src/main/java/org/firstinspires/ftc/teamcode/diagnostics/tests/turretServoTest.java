@@ -1,5 +1,7 @@
 package org.firstinspires.ftc.teamcode.diagnostics.tests;
 
+import org.firstinspires.ftc.teamcode.SystemConstants;
+
 import com.acmerobotics.dashboard.FtcDashboard;
 import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
@@ -62,7 +64,7 @@ public class turretServoTest extends LinearOpMode {
             telemetry.addData("servo", SERVO_NAME + " (port " + servo.getPortNumber() + ")");
             telemetry.addData("mode", SWEEP ? "SWEEP" : "POSITION");
             telemetry.addData("commanded", cmd);
-            telemetry.addData("approx deg from 0", cmd * Turret.SERVO_RANGE_DEG);
+            telemetry.addData("approx deg from 0", cmd * SystemConstants.Turret.SERVO_RANGE_DEG);
             telemetry.addData("state", isStarted() ? "RUNNING" : "INIT (already driving)");
             telemetry.update();
             sleep(20);

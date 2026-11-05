@@ -11,7 +11,7 @@ drivetrain; the drivetrain is `TUNING_TASK.md`.
 | Front door | `tools/mechtune/mechtune.py` (stdlib only, run from anywhere). `MECHTUNE_HOST=ip:port` overrides |
 | Trial log | `tools/mechtune/trials.jsonl` (every step / kick / shot / ff / A-B arm, with volts and PIDF) |
 | Traces | `mechtune.py pull LABEL` → `tools/mechtune/runs/LABEL.csv` |
-| Deliverable | values spliced into `systems/flywheel.java`, `intake.java`, `turret.java`, `gate.java`, `scoopula.java` by `mechtune.py export --write` — a **shipped** change |
+| Deliverable | values spliced into `SystemConstants.java` (nested classes `Flywheel`, `Intake`, `Turret`, `Gate`, `Scoopula`, `Shooter`, `ColorCheck`) by `mechtune.py export --write` — a **shipped** change |
 
 ---
 

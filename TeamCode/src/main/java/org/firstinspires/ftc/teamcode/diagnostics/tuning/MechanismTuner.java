@@ -1,5 +1,7 @@
 package org.firstinspires.ftc.teamcode.diagnostics.tuning;
 
+import org.firstinspires.ftc.teamcode.SystemConstants;
+
 import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
@@ -143,33 +145,33 @@ public class MechanismTuner extends OpMode {
                 ? hardwareMap.voltageSensor.iterator().next() : null;
 
         sessionId = System.currentTimeMillis();
-        atSpeedFrac = Flywheel.AT_SPEED_FRACTION;
-        idleFrac = Flywheel.IDLE_FRACTION;
-        holdFrac = Shooter.HOLD_SPEED_FRACTION;
-        minGateOpenS = Shooter.MIN_GATE_OPEN_S;
-        wheels[0] = new Wheel("pollen", "pollenTurret", Flywheel.POLLEN_FLYWHEEL_REVERSED,
-                Flywheel.POLLEN_PIDF);
-        wheels[1] = new Wheel("nectar", "nectarTurret", Flywheel.NECTAR_FLYWHEEL_REVERSED,
-                Flywheel.NECTAR_PIDF);
+        atSpeedFrac = SystemConstants.Flywheel.AT_SPEED_FRACTION;
+        idleFrac = SystemConstants.Flywheel.IDLE_FRACTION;
+        holdFrac = SystemConstants.Shooter.HOLD_SPEED_FRACTION;
+        minGateOpenS = SystemConstants.Shooter.MIN_GATE_OPEN_S;
+        wheels[0] = new Wheel("pollen", "pollenTurret", SystemConstants.Flywheel.POLLEN_FLYWHEEL_REVERSED,
+                SystemConstants.Flywheel.POLLEN_PIDF);
+        wheels[1] = new Wheel("nectar", "nectarTurret", SystemConstants.Flywheel.NECTAR_FLYWHEEL_REVERSED,
+                SystemConstants.Flywheel.NECTAR_PIDF);
 
-        turrets[0] = new TurretCal("pollen", "pollenTurretServo", Turret.POLLEN_TURRET_CENTER,
-                Turret.POLLEN_TURRET_REVERSED, Turret.POLLEN_TURRET_GEAR_RATIO,
-                Turret.pollenTurretOffset, Turret.POLLEN_TURRET_MIN, Turret.POLLEN_TURRET_MAX,
-                Turret.POLLEN_TURRET_START);
-        turrets[1] = new TurretCal("nectar", "nectarTurretServo", Turret.NECTAR_TURRET_CENTER,
-                Turret.NECTAR_TURRET_REVERSED, Turret.NECTAR_TURRET_GEAR_RATIO,
-                Turret.nectarTurretOffset, Turret.NECTAR_TURRET_MIN, Turret.NECTAR_TURRET_MAX,
-                Turret.NECTAR_TURRET_START);
+        turrets[0] = new TurretCal("pollen", "pollenTurretServo", SystemConstants.Turret.POLLEN_TURRET_CENTER,
+                SystemConstants.Turret.POLLEN_TURRET_REVERSED, SystemConstants.Turret.POLLEN_TURRET_GEAR_RATIO,
+                SystemConstants.Turret.pollenTurretOffset, SystemConstants.Turret.POLLEN_TURRET_MIN, SystemConstants.Turret.POLLEN_TURRET_MAX,
+                SystemConstants.Turret.POLLEN_TURRET_START);
+        turrets[1] = new TurretCal("nectar", "nectarTurretServo", SystemConstants.Turret.NECTAR_TURRET_CENTER,
+                SystemConstants.Turret.NECTAR_TURRET_REVERSED, SystemConstants.Turret.NECTAR_TURRET_GEAR_RATIO,
+                SystemConstants.Turret.nectarTurretOffset, SystemConstants.Turret.NECTAR_TURRET_MIN, SystemConstants.Turret.NECTAR_TURRET_MAX,
+                SystemConstants.Turret.NECTAR_TURRET_START);
 
-        servos[0] = new ServoCal("gate", "turretGate", "systems/gate.java",
+        servos[0] = new ServoCal("gate", "turretGate", "gate",
                 new String[]{"open", "openPos", "close", "closePos"});
-        servos[1] = new ServoCal("scoopula", "scoopula", "systems/scoopula.java",
+        servos[1] = new ServoCal("scoopula", "scoopula", "scoopula",
                 new String[]{"scoop", "scoopPos", "unscoop", "unscoopPos"});
 
-        origRedOverBlue = ColorCheck.RED_OVER_BLUE;
-        origBlueOverRed = ColorCheck.BLUE_OVER_RED;
-        origMaxDist = ColorCheck.MAX_DIST_CM;
-        origBrakeMs = Intake.REVERSE_BRAKE_MS;
+        origRedOverBlue = SystemConstants.ColorCheck.RED_OVER_BLUE;
+        origBlueOverRed = SystemConstants.ColorCheck.BLUE_OVER_RED;
+        origMaxDist = SystemConstants.ColorCheck.MAX_DIST_CM;
+        origBrakeMs = SystemConstants.Intake.REVERSE_BRAKE_MS;
         try {
             intakeSys = new Intake(hardwareMap);
             intakeSys.setAlliance(alliance);
@@ -209,10 +211,10 @@ public class MechanismTuner extends OpMode {
     public void stop() {
         stopAll();
         recorder.stop();
-        ColorCheck.RED_OVER_BLUE = origRedOverBlue;
-        ColorCheck.BLUE_OVER_RED = origBlueOverRed;
-        ColorCheck.MAX_DIST_CM = origMaxDist;
-        Intake.REVERSE_BRAKE_MS = origBrakeMs;
+        SystemConstants.ColorCheck.RED_OVER_BLUE = origRedOverBlue;
+        SystemConstants.ColorCheck.BLUE_OVER_RED = origBlueOverRed;
+        SystemConstants.ColorCheck.MAX_DIST_CM = origMaxDist;
+        SystemConstants.Intake.REVERSE_BRAKE_MS = origBrakeMs;
         TuningHub.INSTANCE.markStopped();
     }
 
@@ -621,23 +623,23 @@ public class MechanismTuner extends OpMode {
                 break;
             }
             case "intakeParams":
-                Intake.REVERSE_BRAKE_MS = clamp(num(c, "brakeMs", Intake.REVERSE_BRAKE_MS), 0, 1000);
-                message = "Intake REVERSE_BRAKE_MS " + FlyRecorder.r(Intake.REVERSE_BRAKE_MS, 0)
+                SystemConstants.Intake.REVERSE_BRAKE_MS = clamp(num(c, "brakeMs", SystemConstants.Intake.REVERSE_BRAKE_MS), 0, 1000);
+                message = "Intake REVERSE_BRAKE_MS " + FlyRecorder.r(SystemConstants.Intake.REVERSE_BRAKE_MS, 0)
                         + " applied live (restored on STOP unless exported).";
                 break;
             case "colorParams":
-                ColorCheck.RED_OVER_BLUE = num(c, "red", ColorCheck.RED_OVER_BLUE);
-                ColorCheck.BLUE_OVER_RED = num(c, "blue", ColorCheck.BLUE_OVER_RED);
-                ColorCheck.MAX_DIST_CM = num(c, "dist", ColorCheck.MAX_DIST_CM);
+                SystemConstants.ColorCheck.RED_OVER_BLUE = num(c, "red", SystemConstants.ColorCheck.RED_OVER_BLUE);
+                SystemConstants.ColorCheck.BLUE_OVER_RED = num(c, "blue", SystemConstants.ColorCheck.BLUE_OVER_RED);
+                SystemConstants.ColorCheck.MAX_DIST_CM = num(c, "dist", SystemConstants.ColorCheck.MAX_DIST_CM);
                 rebuildColorSummary();
                 message = "Intake color thresholds applied live (restored on STOP unless exported).";
                 break;
             case "colorSuggestApply":
                 rebuildColorSummary();
                 if (suggestion != null) {
-                    ColorCheck.RED_OVER_BLUE = suggestion[0];
-                    ColorCheck.BLUE_OVER_RED = suggestion[1];
-                    ColorCheck.MAX_DIST_CM = suggestion[2];
+                    SystemConstants.ColorCheck.RED_OVER_BLUE = suggestion[0];
+                    SystemConstants.ColorCheck.BLUE_OVER_RED = suggestion[1];
+                    SystemConstants.ColorCheck.MAX_DIST_CM = suggestion[2];
                     rebuildColorSummary();
                     message = "Suggested thresholds applied live.";
                 } else {
@@ -1295,7 +1297,7 @@ public class MechanismTuner extends OpMode {
         double center;
         boolean reversed;
         double gearA, gearB;
-        double servoRange = Turret.SERVO_RANGE_DEG;
+        double servoRange = SystemConstants.Turret.SERVO_RANGE_DEG;
         /** Turret pivot from the robot's pose center, inches, robot frame {forward, left}. */
         final double[] offset;
         /** Wiring limits and INIT position, servo units, as turret.*_TURRET_MIN / MAX / START. */
@@ -1446,7 +1448,7 @@ public class MechanismTuner extends OpMode {
             double dist = fitDist();
             double[] sug = {fitRatio(true, dist), fitRatio(false, dist), dist};
             suggestion = sug;
-            int[] cur = confusion(ColorCheck.RED_OVER_BLUE, ColorCheck.BLUE_OVER_RED, ColorCheck.MAX_DIST_CM);
+            int[] cur = confusion(SystemConstants.ColorCheck.RED_OVER_BLUE, SystemConstants.ColorCheck.BLUE_OVER_RED, SystemConstants.ColorCheck.MAX_DIST_CM);
             int[] fit = confusion(sug[0], sug[1], sug[2]);
             sb.append(",\"suggest\":{\"redOverBlue\":").append(FlyRecorder.r(sug[0], 3))
                     .append(",\"blueOverRed\":").append(FlyRecorder.r(sug[1], 3))
@@ -1509,10 +1511,10 @@ public class MechanismTuner extends OpMode {
 
     /** {misclassified, total} over both calls for a parameter set. */
     private int[] confusion(double redOverBlue, double blueOverRed, double maxDist) {
-        double r0 = ColorCheck.RED_OVER_BLUE, b0 = ColorCheck.BLUE_OVER_RED, d0 = ColorCheck.MAX_DIST_CM;
-        ColorCheck.RED_OVER_BLUE = redOverBlue;
-        ColorCheck.BLUE_OVER_RED = blueOverRed;
-        ColorCheck.MAX_DIST_CM = maxDist;
+        double r0 = SystemConstants.ColorCheck.RED_OVER_BLUE, b0 = SystemConstants.ColorCheck.BLUE_OVER_RED, d0 = SystemConstants.ColorCheck.MAX_DIST_CM;
+        SystemConstants.ColorCheck.RED_OVER_BLUE = redOverBlue;
+        SystemConstants.ColorCheck.BLUE_OVER_RED = blueOverRed;
+        SystemConstants.ColorCheck.MAX_DIST_CM = maxDist;
         int wrong = 0;
         for (int i = 0; i < samples.size(); i++) {
             int[] s = samples.get(i);
@@ -1521,9 +1523,9 @@ public class MechanismTuner extends OpMode {
             if (ColorCheck.calledRed(s[0], s[2], d) != "RED".equals(l)) wrong++;
             if (ColorCheck.calledBlue(s[0], s[2], d) != "BLUE".equals(l)) wrong++;
         }
-        ColorCheck.RED_OVER_BLUE = r0;
-        ColorCheck.BLUE_OVER_RED = b0;
-        ColorCheck.MAX_DIST_CM = d0;
+        SystemConstants.ColorCheck.RED_OVER_BLUE = r0;
+        SystemConstants.ColorCheck.BLUE_OVER_RED = b0;
+        SystemConstants.ColorCheck.MAX_DIST_CM = d0;
         return new int[]{wrong, samples.size() * 2};
     }
 
@@ -1670,7 +1672,7 @@ public class MechanismTuner extends OpMode {
                 .append(",\"error\":\"").append(TuningHub.esc(intakeError))
                 .append("\",\"mode\":\"").append(intakeMode)
                 .append("\",\"alliance\":\"").append(alliance)
-                .append("\",\"brakeMs\":").append(FlyRecorder.r(Intake.REVERSE_BRAKE_MS, 1)).append('}');
+                .append("\",\"brakeMs\":").append(FlyRecorder.r(SystemConstants.Intake.REVERSE_BRAKE_MS, 1)).append('}');
 
         sb.append(",\"color\":{\"ok\":").append(color != null)
                 .append(",\"hasDistance\":").append(colorDistance != null)
@@ -1681,9 +1683,9 @@ public class MechanismTuner extends OpMode {
                 .append(",\"dist\":").append(nanToNull(cdist, 2))
                 .append(",\"redDominant\":").append(ColorCheck.calledRed(cr, cb, cdist))
                 .append(",\"blueDominant\":").append(ColorCheck.calledBlue(cr, cb, cdist))
-                .append(",\"redOverBlue\":").append(ColorCheck.RED_OVER_BLUE)
-                .append(",\"blueOverRed\":").append(ColorCheck.BLUE_OVER_RED)
-                .append(",\"maxDistCm\":").append(ColorCheck.MAX_DIST_CM)
+                .append(",\"redOverBlue\":").append(SystemConstants.ColorCheck.RED_OVER_BLUE)
+                .append(",\"blueOverRed\":").append(SystemConstants.ColorCheck.BLUE_OVER_RED)
+                .append(",\"maxDistCm\":").append(SystemConstants.ColorCheck.MAX_DIST_CM)
                 .append(",\"sampling\":").append(sampleRemaining)
                 .append(",\"samplingLabel\":\"").append(TuningHub.esc(sampleLabel))
                 .append("\",\"samples\":").append(samples.size())
@@ -1707,7 +1709,8 @@ public class MechanismTuner extends OpMode {
             String[] e = out.get(i);
             String shipped = shippedValues.get(e[0] + "#" + e[1]);
             if (i > 0) sb.append(',');
-            sb.append("{\"file\":\"").append(e[0])
+            sb.append("{\"file\":\"").append(EXPORT_FILE)
+                    .append("\",\"group\":\"").append(e[0])
                     .append("\",\"name\":\"").append(e[1])
                     .append("\",\"value\":\"").append(TuningHub.esc(e[2]))
                     .append("\",\"shipped\":").append(shipped == null ? "null"
@@ -1716,16 +1719,19 @@ public class MechanismTuner extends OpMode {
         return sb.append(']').toString();
     }
 
+    /** Every exported value lives in SystemConstants.java; e[0] of an entry is its --only group. */
+    static final String EXPORT_FILE = "SystemConstants.java";
+
     private List<String[]> exportEntries() {
         List<String[]> out = new ArrayList<>();
-        String fw = "systems/flywheel.java";
+        String fw = "flywheel";
         out.add(new String[]{fw, "POLLEN_FLYWHEEL_REVERSED", Boolean.toString(wheels[0].reversed)});
         out.add(new String[]{fw, "NECTAR_FLYWHEEL_REVERSED", Boolean.toString(wheels[1].reversed)});
         out.add(new String[]{fw, "AT_SPEED_FRACTION", Double.toString(atSpeedFrac)});
         out.add(new String[]{fw, "IDLE_FRACTION", Double.toString(idleFrac)});
         out.add(new String[]{fw, "POLLEN_PIDF", pidfSource(wheels[0])});
         out.add(new String[]{fw, "NECTAR_PIDF", pidfSource(wheels[1])});
-        String tu = "systems/turret.java";
+        String tu = "turret";
         out.add(new String[]{tu, "POLLEN_TURRET_CENTER", FlyRecorder.r(turrets[0].center, 4)});
         out.add(new String[]{tu, "NECTAR_TURRET_CENTER", FlyRecorder.r(turrets[1].center, 4)});
         out.add(new String[]{tu, "POLLEN_TURRET_REVERSED", Boolean.toString(turrets[0].reversed)});
@@ -1741,15 +1747,15 @@ public class MechanismTuner extends OpMode {
         out.add(new String[]{tu, "NECTAR_TURRET_START", FlyRecorder.r(turrets[1].start, 4)});
         out.add(new String[]{tu, "pollenTurretOffset", arraySource(turrets[0].offset)});
         out.add(new String[]{tu, "nectarTurretOffset", arraySource(turrets[1].offset)});
-        String sh = "systems/shooter.java";
+        String sh = "shooter";
         out.add(new String[]{sh, "MIN_GATE_OPEN_S", Double.toString(minGateOpenS)});
         out.add(new String[]{sh, "HOLD_SPEED_FRACTION", Double.toString(holdFrac)});
-        String in = "systems/intake.java";
-        String cc = "systems/ColorCheck.java";
-        out.add(new String[]{cc, "RED_OVER_BLUE", trim(ColorCheck.RED_OVER_BLUE)});
-        out.add(new String[]{cc, "BLUE_OVER_RED", trim(ColorCheck.BLUE_OVER_RED)});
-        out.add(new String[]{cc, "MAX_DIST_CM", trim(ColorCheck.MAX_DIST_CM)});
-        out.add(new String[]{in, "REVERSE_BRAKE_MS", trim(Intake.REVERSE_BRAKE_MS)});
+        String in = "intake";
+        String cc = "ColorCheck";
+        out.add(new String[]{cc, "RED_OVER_BLUE", trim(SystemConstants.ColorCheck.RED_OVER_BLUE)});
+        out.add(new String[]{cc, "BLUE_OVER_RED", trim(SystemConstants.ColorCheck.BLUE_OVER_RED)});
+        out.add(new String[]{cc, "MAX_DIST_CM", trim(SystemConstants.ColorCheck.MAX_DIST_CM)});
+        out.add(new String[]{in, "REVERSE_BRAKE_MS", trim(SystemConstants.Intake.REVERSE_BRAKE_MS)});
         for (ServoCal s : servos) {
             for (Map.Entry<String, Double> m : s.marks.entrySet()) {
                 if (m.getValue() != null) {

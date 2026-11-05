@@ -927,7 +927,7 @@ fly:
 '- Search with steps and kicks; accept only on real shots (randomised interleaved `mechtune.py ab --test shots`, ' +
 '95% CI excluding zero).\n\n' +
 'Deliverable: tuned POLLEN_PIDF / NECTAR_PIDF (and AT_SPEED_FRACTION only if the data supports it) spliced into ' +
-'systems/flywheel.java with `mechtune.py export --only flywheel --write`, built, committed one value per commit ' +
+'SystemConstants.java (Flywheel) with `mechtune.py export --only flywheel --write`, built, committed one value per commit ' +
 'with the A/B output in the message, then pushed.',
 color:
 'Tune the intake color sensor thresholds on our FTC robot (RuckusBioBuzz, BIOBUZZ 2026-27).\n\n' +
@@ -939,7 +939,7 @@ color:
 '- Ask me to hold each piece at the sensor with `mechtune.py color sample LABEL --ask "..."`. Capture RED, BLUE, ' +
 'EMPTY and every other thing the sensor can see, at least twice each at different positions.\n' +
 '- The suggestion must call every sample correctly; then check reject live in WATCH mode for both alliances.\n\n' +
-'Deliverable: RED_OVER_BLUE / BLUE_OVER_RED / MAX_DIST_CM spliced into systems/ColorCheck.java with ' +
+'Deliverable: RED_OVER_BLUE / BLUE_OVER_RED / MAX_DIST_CM spliced into SystemConstants.java (ColorCheck) with ' +
 '`mechtune.py export --only ColorCheck --write`, built, committed with the confusion counts, then pushed.'
 };
 
@@ -1373,14 +1373,14 @@ function render() {
   var rows = S.export.map(function (e) { return [e, entryStatus(e)]; });
   var shown = rows.filter(function (r) { return showAll || r[1] === 'changed' || r[1] === 'new'; });
   var label = {changed: '<span class="badge warn">changed</span>', 'new': '<span class="badge warn">new</span>', shipped: '<span class="badge">as shipped</span>'};
-  setHtml('exportTable', shown.length ? '<tr><th>file</th><th>field</th><th style="text-align:left">in the code (at init)</th><th style="text-align:left">this run</th><th></th></tr>' +
+  setHtml('exportTable', shown.length ? '<tr><th>file</th><th>group</th><th>field</th><th style="text-align:left">in the code (at init)</th><th style="text-align:left">this run</th><th></th></tr>' +
     shown.map(function (r) { var e = r[0];
-      return '<tr' + (r[1] === 'shipped' ? '' : ' class="changed"') + '><td>' + e.file + '</td><td>' + e.name + '</td><td style="text-align:left"><code>' +
+      return '<tr' + (r[1] === 'shipped' ? '' : ' class="changed"') + '><td>' + e.file + '</td><td>' + (e.group || '') + '</td><td>' + e.name + '</td><td style="text-align:left"><code>' +
         (e.shipped == null ? '<span class="hint">not readable by the tool</span>' : esc(e.shipped)) + '</code></td><td style="text-align:left"><code>' + esc(e.value) + '</code></td><td>' + label[r[1]] + '</td></tr>';
     }).join('') : '<tr><td class="hint">Nothing changed yet — every value is still what the code ships. Tick “show unchanged values too” to see them.</td></tr>');
   var byFile = {}, files = {};
   shown.forEach(function (r) { var e = r[0]; (byFile[e.file] = byFile[e.file] || []).push(e.name + ' = ' + e.value + ';');
-    files[e.file.replace(/^.*\//, '').replace(/\.java$/, '')] = true; });
+    files[e.group || e.file.replace(/^.*\//, '').replace(/\.java$/, '')] = true; });
   setText('exportJava', Object.keys(byFile).map(function (k) { return '// ' + k + '\n' + byFile[k].join('\n'); }).join('\n\n'));
   var only = Object.keys(files);
   setText('exportCmd', 'python tools/mechtune/mechtune.py export' + (only.length && !showAll ? ' --only ' + only.join(',') : ''));

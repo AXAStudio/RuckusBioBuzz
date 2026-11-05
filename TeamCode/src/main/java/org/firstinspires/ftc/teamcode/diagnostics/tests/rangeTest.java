@@ -37,7 +37,8 @@ public class rangeTest extends LinearOpMode {
         while (opModeIsActive()) {
             Pose pose = pinpoint.pose();
             pollenTurret.setVelocity(pollenTurretVel);
-            zoneCheck.inZone(pose);
+            telemetry.addData("inZone", zoneCheck.inZone(pose));
+            telemetry.update();
 
         }
 

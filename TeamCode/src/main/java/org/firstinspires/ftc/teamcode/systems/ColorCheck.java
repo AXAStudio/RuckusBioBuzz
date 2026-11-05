@@ -1,7 +1,7 @@
 package org.firstinspires.ftc.teamcode.systems;
 
-import com.acmerobotics.dashboard.config.Config;
-import com.bylazar.configurables.annotations.Configurable;
+import org.firstinspires.ftc.teamcode.SystemConstants;
+
 import com.qualcomm.robotcore.hardware.ColorSensor;
 import com.qualcomm.robotcore.hardware.DistanceSensor;
 
@@ -26,13 +26,8 @@ import org.firstinspires.ftc.teamcode.helpers.Alliance;
  * Thinnest margin: BLUE_OVER_RED, ~7% to EMPTY and ~6% to BLUE; the distance gate covers EMPTY there.
  * Not yet sampled: a half-in piece, field tiles, a hand.
  */
-@Config
-@Configurable
 public class ColorCheck {
-    public static double RED_OVER_BLUE = 0.93;
-    public static double BLUE_OVER_RED = 1.62;
-    /** Piece-present gate. A read of NaN (no distance device) is treated as present. */
-    public static double MAX_DIST_CM = 6.7;
+    // Thresholds (RED_OVER_BLUE, BLUE_OVER_RED, MAX_DIST_CM): SystemConstants.ColorCheck.
 
     private final ColorSensor colorSensor;
     private final DistanceSensor distanceSensor;
@@ -63,9 +58,9 @@ public class ColorCheck {
     }
 
     // Pure rule, shared with diagnostics/tuning/MechanismTuner so the tool cannot drift from it.
-    public static boolean isRed(int r, int b) { return r > RED_OVER_BLUE * b; }
-    public static boolean isBlue(int r, int b) { return b > BLUE_OVER_RED * r; }
-    public static boolean present(double distCm) { return !(distCm >= MAX_DIST_CM); }
+    public static boolean isRed(int r, int b) { return r > SystemConstants.ColorCheck.RED_OVER_BLUE * b; }
+    public static boolean isBlue(int r, int b) { return b > SystemConstants.ColorCheck.BLUE_OVER_RED * r; }
+    public static boolean present(double distCm) { return !(distCm >= SystemConstants.ColorCheck.MAX_DIST_CM); }
     public static boolean calledRed(int r, int b, double distCm) { return present(distCm) && isRed(r, b); }
     public static boolean calledBlue(int r, int b, double distCm) { return present(distCm) && isBlue(r, b); }
 }

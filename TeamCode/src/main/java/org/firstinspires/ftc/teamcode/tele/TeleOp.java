@@ -1,9 +1,9 @@
 package org.firstinspires.ftc.teamcode.tele;
 
+import org.firstinspires.ftc.teamcode.SystemConstants;
+
 import com.acmerobotics.dashboard.FtcDashboard;
-import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
-import com.bylazar.configurables.annotations.Configurable;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.math.Pose;
 import com.pedropathing.revhub.drivetrains.Swerve;
@@ -21,13 +21,8 @@ import org.firstinspires.ftc.teamcode.systems.Scoopula;
 import org.firstinspires.ftc.teamcode.systems.Shooter;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 
-@Config
-@Configurable
 @com.qualcomm.robotcore.eventloop.opmode.TeleOp(name = "TeleOp", group = "TeleOp")
 public class TeleOp extends OpMode {
-    public static double INTAKE_FEED_POWER = 1.0;
-    public static boolean INTAKE_REVERSED = false;
-    public static double TRANSLATION_PRIORITY = 0.75;
 
     private Follower follower;
     private PredictiveAiming predictor;
@@ -78,7 +73,7 @@ public class TeleOp extends OpMode {
             hub.clearBulkCache();
         }
 
-        Swerve.setTranslationPriority(TRANSLATION_PRIORITY);
+        Swerve.setTranslationPriority(SystemConstants.TeleOp.TRANSLATION_PRIORITY);
         follower.manual(-gamepad1.left_stick_y, -gamepad1.left_stick_x, -gamepad1.right_stick_x);
         follower.update();
         // Shooter first, so the intake follows this loop's SHOOT decision, not last loop's.

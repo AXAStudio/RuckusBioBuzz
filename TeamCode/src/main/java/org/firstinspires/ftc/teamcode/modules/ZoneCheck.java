@@ -1,16 +1,10 @@
 package org.firstinspires.ftc.teamcode.modules;
 
-import static org.firstinspires.ftc.robotcore.external.BlocksOpModeCompanion.telemetry;
-
-import com.acmerobotics.dashboard.config.Config;
-import com.bylazar.configurables.annotations.Configurable;
 import com.pedropathing.math.Pose;
 
-import org.firstinspires.ftc.teamcode.configs.ZoneCheckConfig;
+import org.firstinspires.ftc.teamcode.SystemConstants;
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
 
-@Config
-@Configurable
 public class ZoneCheck {
     private static Alliance alliance;
     private static ShooterType shooterType;
@@ -19,35 +13,30 @@ public class ZoneCheck {
     }
 
     public ZoneCheck(Alliance alliance, ShooterType shooterType) {
-        this.shooterType = shooterType;
-        this.alliance = alliance;
-
+        ZoneCheck.shooterType = shooterType;
+        ZoneCheck.alliance = alliance;
     }
 
-
+    public void setAlliance(Alliance alliance) {
+        ZoneCheck.alliance = alliance;
+    }
 
     public static boolean inZone(Pose pose) {
-        int offsetX;
-        int offsetY;
-        offsetX = (int) (-(shooterType == ShooterType.POLLEN? ZoneCheckConfig.yOffsetPollen: ZoneCheckConfig.yOffsetNectar) * Math.sin(pose.heading())); //this just spins the vecter
-        offsetY = (int) ((shooterType == ShooterType.POLLEN? ZoneCheckConfig.yOffsetPollen: ZoneCheckConfig.yOffsetNectar) * Math.cos(pose.heading())); //this just spins the vecter
-        double x = pose.x()+offsetX;
-        double y = pose.y()+offsetY;
-        if(alliance == Alliance.BLUE){
-            x = ZoneCheckConfig.xQuality-x;
-            y = ZoneCheckConfig.yQuality-y;
+        boolean pollen = shooterType == ShooterType.POLLEN;
+        double offset = pollen ? SystemConstants.Zone.yOffsetPollen : SystemConstants.Zone.yOffsetNectar;
+        double x = pose.x() - offset * Math.sin(pose.heading());
+        double y = pose.y() + offset * Math.cos(pose.heading());
+        if (alliance == Alliance.BLUE) {
+            x = SystemConstants.Zone.FIELD_SIZE - x;
+            y = SystemConstants.Zone.FIELD_SIZE - y;
         }
-        int xQuad = (int)(x/(ZoneCheckConfig.FIELD_SIZE/ZoneCheckConfig.xQuality));
-        int yQuad = (int)(y/(ZoneCheckConfig.FIELD_SIZE/ZoneCheckConfig.yQuality));
-        telemetry.addData("xQuad", xQuad);
-        telemetry.addData("yQuad", yQuad);
-        telemetry.update();
-        if(ZoneCheckConfig.mapNectar[xQuad][yQuad] == 1){
-            return true;
+        int[][] map = pollen ? SystemConstants.Zone.mapPollen : SystemConstants.Zone.mapNectar;
+        int xQuad = (int) Math.floor(x / (SystemConstants.Zone.FIELD_SIZE / SystemConstants.Zone.xQuality));
+        int yQuad = (int) Math.floor(y / (SystemConstants.Zone.FIELD_SIZE / SystemConstants.Zone.yQuality));
+        if (map == null || yQuad < 0 || yQuad >= map.length || map[yQuad] == null
+                || xQuad < 0 || xQuad >= map[yQuad].length) {
+            return false;
         }
-        return false;
-//        double reach = ROBOT_LENGTH / 2 * Math.abs(Math.sin(pose.heading()))
-//            + ROBOT_WIDTH / 2 * Math.abs(Math.cos(pose.heading()));
-//        return pose.y() - reach <= ZONE_Y || pose.y() + reach >= FIELD_SIZE - ZONE_Y;
+        return map[yQuad][xQuad] == 1;
     }
 }

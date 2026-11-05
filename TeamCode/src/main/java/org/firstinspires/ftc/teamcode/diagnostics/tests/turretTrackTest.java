@@ -1,5 +1,7 @@
 package org.firstinspires.ftc.teamcode.diagnostics.tests;
 
+import org.firstinspires.ftc.teamcode.SystemConstants;
+
 import android.util.Log;
 
 import com.acmerobotics.dashboard.FtcDashboard;
@@ -104,10 +106,10 @@ public class turretTrackTest extends LinearOpMode {
 
             double thetaDeg = Math.toDegrees(t.aimPollen().theta);
             double pos = pollen.getPosition();
-            double range = Turret.SERVO_RANGE_DEG * Turret.POLLEN_TURRET_GEAR_RATIO[1]
-                    / Turret.POLLEN_TURRET_GEAR_RATIO[0];
-            double impliedDeg = (Turret.POLLEN_TURRET_REVERSED ? -1 : 1)
-                    * (pos - Turret.POLLEN_TURRET_CENTER) * range;
+            double range = SystemConstants.Turret.SERVO_RANGE_DEG * SystemConstants.Turret.POLLEN_TURRET_GEAR_RATIO[1]
+                    / SystemConstants.Turret.POLLEN_TURRET_GEAR_RATIO[0];
+            double impliedDeg = (SystemConstants.Turret.POLLEN_TURRET_REVERSED ? -1 : 1)
+                    * (pos - SystemConstants.Turret.POLLEN_TURRET_CENTER) * range;
             double err = AngleUnit.normalizeDegrees(impliedDeg - thetaDeg);
 
             telemetry.addData("scenario", SCENARIO);

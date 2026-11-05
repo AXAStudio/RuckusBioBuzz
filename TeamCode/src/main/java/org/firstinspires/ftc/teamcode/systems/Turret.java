@@ -1,6 +1,6 @@
 package org.firstinspires.ftc.teamcode.systems;
-import com.acmerobotics.dashboard.config.Config;
-import com.bylazar.configurables.annotations.Configurable;
+
+import org.firstinspires.ftc.teamcode.SystemConstants;
 import com.pedropathing.math.Pose;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.hardware.PwmControl;
@@ -12,29 +12,8 @@ import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.teamcode.helpers.HivePosition;
 import org.firstinspires.ftc.teamcode.modules.PredictiveAiming;
 
-@Config
-@Configurable
 public class Turret {
-
-    public static double[] nectarTurretOffset = {3.22, 0};
-    public static double[] pollenTurretOffset = {-5.91, 0};
-
-    public static double POLLEN_TURRET_CENTER = 0.5;
-    public static double NECTAR_TURRET_CENTER = 0.5;
-    public static double POLLEN_TURRET_MIN = 0.0;
-    public static double POLLEN_TURRET_MAX = 1.0;
-    public static double NECTAR_TURRET_MIN = 0.0;
-    public static double NECTAR_TURRET_MAX = 1.0;
-    public static double POLLEN_TURRET_START = 0.5;
-    public static double NECTAR_TURRET_START = 0.5;
-    public static boolean POLLEN_TURRET_REVERSED = false;
-    public static boolean NECTAR_TURRET_REVERSED = false;
-    public static double[] POLLEN_TURRET_GEAR_RATIO = {355, 370};
-    public static double[] NECTAR_TURRET_GEAR_RATIO = {355, 370};
-    public static double SERVO_RANGE_DEG = 358.6; // Axon Max MK1
-    public static final double PWM_LOWER_US = 500, PWM_UPPER_US = 2500;
-    public static double UNWIND_HYSTERESIS_DEG = 10;
-    public static double UNWIND_SETTLE_S = 1.0;
+    // Tunables (centers, limits, gear ratios, offsets, PWM, unwind): SystemConstants.Turret.
 
     private final PredictiveAiming predictor;
     private Alliance alliance;
@@ -58,16 +37,16 @@ public class Turret {
 
     public static void configurePwm(Servo servo) {
         if (servo instanceof ServoImplEx) {
-            ((ServoImplEx) servo).setPwmRange(new PwmControl.PwmRange(PWM_LOWER_US, PWM_UPPER_US));
+            ((ServoImplEx) servo).setPwmRange(new PwmControl.PwmRange(SystemConstants.Turret.PWM_LOWER_US, SystemConstants.Turret.PWM_UPPER_US));
         }
     }
 
     public Turret(HardwareMap hardwareMap, PredictiveAiming predictor, HivePosition hivePosition) {
         this.predictor = predictor;
         pollenTurret = new TurretServo(hardwareMap.get(Servo.class, "pollenTurretServo"),
-                limit(POLLEN_TURRET_START, POLLEN_TURRET_MIN, POLLEN_TURRET_MAX));
+                limit(SystemConstants.Turret.POLLEN_TURRET_START, SystemConstants.Turret.POLLEN_TURRET_MIN, SystemConstants.Turret.POLLEN_TURRET_MAX));
         nectarTurret = new TurretServo(hardwareMap.get(Servo.class, "nectarTurretServo"),
-                limit(NECTAR_TURRET_START, NECTAR_TURRET_MIN, NECTAR_TURRET_MAX));
+                limit(SystemConstants.Turret.NECTAR_TURRET_START, SystemConstants.Turret.NECTAR_TURRET_MIN, SystemConstants.Turret.NECTAR_TURRET_MAX));
         this.hivePosition = hivePosition;
     }
 
@@ -77,21 +56,21 @@ public class Turret {
 
 //in form dist, theta
     public void update(){
-        pollenAimed = pollenTurret.track(aimPollen().theta, POLLEN_TURRET_CENTER, POLLEN_TURRET_REVERSED, POLLEN_TURRET_GEAR_RATIO,
-                POLLEN_TURRET_MIN, POLLEN_TURRET_MAX);
-        nectarAimed = nectarTurret.track(aimNectar().theta, NECTAR_TURRET_CENTER, NECTAR_TURRET_REVERSED, NECTAR_TURRET_GEAR_RATIO,
-                NECTAR_TURRET_MIN, NECTAR_TURRET_MAX);
+        pollenAimed = pollenTurret.track(aimPollen().theta, SystemConstants.Turret.POLLEN_TURRET_CENTER, SystemConstants.Turret.POLLEN_TURRET_REVERSED, SystemConstants.Turret.POLLEN_TURRET_GEAR_RATIO,
+                SystemConstants.Turret.POLLEN_TURRET_MIN, SystemConstants.Turret.POLLEN_TURRET_MAX);
+        nectarAimed = nectarTurret.track(aimNectar().theta, SystemConstants.Turret.NECTAR_TURRET_CENTER, SystemConstants.Turret.NECTAR_TURRET_REVERSED, SystemConstants.Turret.NECTAR_TURRET_GEAR_RATIO,
+                SystemConstants.Turret.NECTAR_TURRET_MIN, SystemConstants.Turret.NECTAR_TURRET_MAX);
     }
 
     public boolean unwinding(){
         return pollenTurret.unwinding() || nectarTurret.unwinding();
     }
     public aimer aimNectar() {
-        return aimFrom(predictor.leadPose(nectarTurretOffset));
+        return aimFrom(predictor.leadPose(SystemConstants.Turret.nectarTurretOffset));
     }
 
     public aimer aimPollen() {
-        return aimFrom(predictor.leadPose(pollenTurretOffset));
+        return aimFrom(predictor.leadPose(SystemConstants.Turret.pollenTurretOffset));
     }
 
     public boolean pollenAimed() { return pollenAimed; }
@@ -122,7 +101,7 @@ public class Turret {
             double lo = Math.max(0, Math.min(min, max)), hi = Math.min(1, Math.max(min, max)); //tolerate swapped limits
             min = lo;
             max = hi;
-            double range = SERVO_RANGE_DEG * gearRatio[1] / gearRatio[0]; //turret degrees across the full servo travel 0-1
+            double range = SystemConstants.Turret.SERVO_RANGE_DEG * gearRatio[1] / gearRatio[0]; //turret degrees across the full servo travel 0-1
             double turn = 360.0 / range; //one full turret revolution in servo position units
             double last = Double.isNaN(position) ? center : position; //last commanded position or center on the first call
             double base = center + (reversed ? -1 : 1) * Math.toDegrees(theta) / range; //servo position that points at theta
@@ -133,13 +112,13 @@ public class Turret {
             if (overshoot <= 0) {
                 position = follow;
                 aimed = true;
-            } else if (overshoot <= UNWIND_HYSTERESIS_DEG / range) {
+            } else if (overshoot <= SystemConstants.Turret.UNWIND_HYSTERESIS_DEG / range) {
                 position = limit(follow, min, max);
             } else {
                 double unwound = follow - Math.signum(follow - (min + max) / 2) * turn;
                 if (unwound >= min && unwound <= max) {
                     position = unwound;
-                    settleUntilNanos = System.nanoTime() + (long) (UNWIND_SETTLE_S * 1e9);
+                    settleUntilNanos = System.nanoTime() + (long) (SystemConstants.Turret.UNWIND_SETTLE_S * 1e9);
                 } else {
                     position = limit(follow, min, max);
                 }

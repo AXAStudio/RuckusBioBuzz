@@ -1,8 +1,8 @@
 package org.firstinspires.ftc.teamcode.systems;
 
+import org.firstinspires.ftc.teamcode.SystemConstants;
 
-import com.acmerobotics.dashboard.config.Config;
-import com.bylazar.configurables.annotations.Configurable;
+
 import com.pedropathing.control.PIDFCoefficients;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
@@ -11,15 +11,7 @@ import com.qualcomm.robotcore.hardware.HardwareMap;
 
 import org.firstinspires.ftc.teamcode.modules.ShootingRegression;
 
-@Config
-@Configurable
 public class Flywheel {
-    public static boolean POLLEN_FLYWHEEL_REVERSED = false;
-    public static boolean NECTAR_FLYWHEEL_REVERSED = false;
-    public static double AT_SPEED_FRACTION = 0.05;
-    public static double IDLE_FRACTION = 0.5;
-    public static PIDFCoefficients POLLEN_PIDF = new PIDFCoefficients(500, 0, 0, 11.7);
-    public static PIDFCoefficients NECTAR_PIDF = new PIDFCoefficients(500, 0, 0, 11.7);
 
     private final ShootingRegression regression;
 
@@ -39,8 +31,8 @@ public class Flywheel {
         nectarFlywheel.setMode(DcMotor.RunMode.RUN_USING_ENCODER);
         pollenFlywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
         nectarFlywheel.setZeroPowerBehavior(DcMotor.ZeroPowerBehavior.FLOAT);
-        setVelocityPidf(pollenFlywheel, POLLEN_PIDF);
-        setVelocityPidf(nectarFlywheel, NECTAR_PIDF);
+        setVelocityPidf(pollenFlywheel, SystemConstants.Flywheel.POLLEN_PIDF);
+        setVelocityPidf(nectarFlywheel, SystemConstants.Flywheel.NECTAR_PIDF);
 
     }
     private static void setVelocityPidf(DcMotorEx flywheel, PIDFCoefficients pidf) {
@@ -48,9 +40,9 @@ public class Flywheel {
                 new com.qualcomm.robotcore.hardware.PIDFCoefficients(pidf.P, pidf.I, pidf.D, pidf.F));
     }
     public void update(boolean inZone){
-        pollenFlywheel.setDirection(POLLEN_FLYWHEEL_REVERSED ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD);
-        nectarFlywheel.setDirection(NECTAR_FLYWHEEL_REVERSED ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD);
-        double scale = inZone ? 1 : IDLE_FRACTION;
+        pollenFlywheel.setDirection(SystemConstants.Flywheel.POLLEN_FLYWHEEL_REVERSED ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD);
+        nectarFlywheel.setDirection(SystemConstants.Flywheel.NECTAR_FLYWHEEL_REVERSED ? DcMotorSimple.Direction.REVERSE : DcMotorSimple.Direction.FORWARD);
+        double scale = inZone ? 1 : SystemConstants.Flywheel.IDLE_FRACTION;
         pollenTarget = regression.shooterspeedpollen();
         nectarTarget = regression.shooterspeednectar();
         pollenFlywheel.setVelocity(pollenTarget * scale);
@@ -58,8 +50,8 @@ public class Flywheel {
         pollenVelocity = pollenFlywheel.getVelocity();
         nectarVelocity = nectarFlywheel.getVelocity();
     }
-    public boolean atSpeedPollen() { return atSpeedPollen(AT_SPEED_FRACTION); }
-    public boolean atSpeedNectar() { return atSpeedNectar(AT_SPEED_FRACTION); }
+    public boolean atSpeedPollen() { return atSpeedPollen(SystemConstants.Flywheel.AT_SPEED_FRACTION); }
+    public boolean atSpeedNectar() { return atSpeedNectar(SystemConstants.Flywheel.AT_SPEED_FRACTION); }
     public boolean atSpeedPollen(double fraction) { return atSpeed(pollenVelocity, pollenTarget, fraction); }
     public boolean atSpeedNectar(double fraction) { return atSpeed(nectarVelocity, nectarTarget, fraction); }
 

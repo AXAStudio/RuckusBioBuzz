@@ -1,7 +1,7 @@
 package org.firstinspires.ftc.teamcode.systems;
 
-import com.acmerobotics.dashboard.config.Config;
-import com.bylazar.configurables.annotations.Configurable;
+import org.firstinspires.ftc.teamcode.SystemConstants;
+
 import com.pedropathing.math.Pose;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 import com.qualcomm.robotcore.util.ElapsedTime;
@@ -11,14 +11,8 @@ import org.firstinspires.ftc.teamcode.modules.PredictiveAiming;
 import org.firstinspires.ftc.teamcode.modules.ZoneCheck;
 import org.firstinspires.ftc.teamcode.helpers.HivePosition;
 
-@Config
-@Configurable
 public class Shooter {
-    // Placeholders until the shooter is built and a shot can be timed.
-    /** Once the gate opens it stays open at least this long, whatever the wheel speed does. */
-    public static double MIN_GATE_OPEN_S = 0.3;
-    /** Speed band that keeps SHOOT once entered (entry uses flywheel.AT_SPEED_FRACTION). */
-    public static double HOLD_SPEED_FRACTION = 0.20;
+    // Tunables (MIN_GATE_OPEN_S, HOLD_SPEED_FRACTION): SystemConstants.Shooter.
 
     private final ElapsedTime shootTimer = new ElapsedTime();
     private final ZoneCheck zone;
@@ -49,6 +43,7 @@ public class Shooter {
 
     public void setAlliance(Alliance alliance) {
         aiming.setAlliance(alliance);
+        zone.setAlliance(alliance);
         intake.setAlliance(alliance) ;
 
     }
@@ -76,9 +71,9 @@ public class Shooter {
                     // the entry condition here closed the gate on that ball and handed the intake
                     // back to the driver mid-shot, so hold SHOOT for a minimum open time and then
                     // on a wider speed band. Leaving the zone still ends it at once.
-                    boolean hold = shootTimer.seconds() < MIN_GATE_OPEN_S
-                            || (aimed && flywheel.atSpeedPollen(HOLD_SPEED_FRACTION)
-                                && flywheel.atSpeedNectar(HOLD_SPEED_FRACTION));
+                    boolean hold = shootTimer.seconds() < SystemConstants.Shooter.MIN_GATE_OPEN_S
+                            || (aimed && flywheel.atSpeedPollen(SystemConstants.Shooter.HOLD_SPEED_FRACTION)
+                                && flywheel.atSpeedNectar(SystemConstants.Shooter.HOLD_SPEED_FRACTION));
                     if (!inZone || !hold) state = states.TRACK;
                 } else if (inZone && aimed && flywheel.atSpeedPollen() && flywheel.atSpeedNectar()) {
                     state = states.SHOOT;

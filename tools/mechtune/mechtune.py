@@ -33,7 +33,7 @@ library only. See MECHANISM_TUNING_TASK.md at repo root for the procedure this s
 
   Shipping:
     python mechtune.py export [--write] [--only flywheel,intake,...]
-                                                   splice the tool's values into systems/*.java by name
+                                                   splice the tool's values into SystemConstants.java by name
                                                    (dry run without --write). A SHIPPED change.
 
 Override the robot address with MECHTUNE_HOST=ip:port.
@@ -344,19 +344,16 @@ def set_pidf(wheel: str, coeffs: list[float]) -> None:
 
 # ---------------------------------------------------------------------------------- export
 
-FILE_KEYS = {
-    "flywheel": "systems/flywheel.java", "turret": "systems/turret.java",
-    "intake": "systems/intake.java", "gate": "systems/gate.java",
-    "scoopula": "systems/scoopula.java", "shooter": "systems/shooter.java",
-    "ColorCheck": "systems/ColorCheck.java",
-}
+# Every exported value lives in SystemConstants.java (one nested @Config class per mechanism, field
+# names unique across the file); --only filters on the export entry's group.
+FILE_KEYS = ("flywheel", "turret", "intake", "gate", "scoopula", "shooter", "ColorCheck")
 
 
 def splice(export: list[dict], write: bool, only: set[str] | None) -> int:
     files: dict[str, list[dict]] = {}
     for e in export:
-        stem = os.path.splitext(os.path.basename(e["file"]))[0]
-        if only and stem not in only:
+        group = e.get("group") or os.path.splitext(os.path.basename(e["file"]))[0]
+        if only and group not in only:
             continue
         files.setdefault(e["file"], []).append(e)
     changed = 0

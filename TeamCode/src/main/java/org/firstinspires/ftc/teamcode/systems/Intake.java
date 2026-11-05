@@ -1,16 +1,14 @@
 package org.firstinspires.ftc.teamcode.systems;
 
+import org.firstinspires.ftc.teamcode.SystemConstants;
 
-import com.acmerobotics.dashboard.config.Config;
-import com.bylazar.configurables.annotations.Configurable;
+
 import com.qualcomm.robotcore.hardware.ColorSensor;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.HardwareMap;
 
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
 
-@Config
-@Configurable
 public class Intake {
     private DcMotor intakeLeft, intakeRight;
     private ColorSensor colorSensor;
@@ -21,7 +19,6 @@ public class Intake {
     public enum intakeState {
         INTAKE, STOP, REJECT
     }
-    public static double REVERSE_BRAKE_MS = 60;
     private int lastSign = 0;
     private long lastDriveNanos = 0;
 
@@ -54,19 +51,21 @@ public class Intake {
         }else{
             currentState = intakeState.STOP;
         }
-        int powerL = 0;
-        int powerR = 0;
+        double power = 0;
         if (currentState == intakeState.INTAKE) {
-            powerL = 1;
-            powerR = 1;
+            power = SystemConstants.Intake.INTAKE_FEED_POWER;
         } else if (currentState == intakeState.REJECT) {
-            powerL = -1;
-            powerR = -1;
+            power = -SystemConstants.Intake.INTAKE_FEED_POWER;
         }
+        if (SystemConstants.Intake.INTAKE_REVERSED) {
+            power = -power;
+        }
+        double powerL = power;
+        double powerR = power;
 
         long now = System.nanoTime();
-        int sign = Integer.signum(powerL);
-        if (sign != 0 && lastSign != 0 && sign != lastSign && now - lastDriveNanos < REVERSE_BRAKE_MS * 1e6) {
+        int sign = (int) Math.signum(powerL);
+        if (sign != 0 && lastSign != 0 && sign != lastSign && now - lastDriveNanos < SystemConstants.Intake.REVERSE_BRAKE_MS * 1e6) {
             powerL = 0;
             powerR = 0;
         } else if (sign != 0) {

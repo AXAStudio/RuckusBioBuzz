@@ -56,6 +56,10 @@ contradicts the code, the code wins — fix this file in the same commit.**
 
 ```
 TeamCode/src/main/java/org/firstinspires/ftc/teamcode/
+├── SystemConstants.java                every mechanism / TeleOp / zone / field tunable, one nested @Config +
+│                                        @Configurable class per subsystem (Dashboard + Panels groups). The
+│                                        mechtune.py export splices here. Pedro stays in pedroPathing/Constants.java,
+│                                        auto poses stay in the generated auto/*.java (configs/ removed 2026-11-05)
 ├── pedroPathing/
 │   ├── Constants.java                  THE constants file (swerve only, Quickstart layout): TUNED VALUES block on top
 │   │                                    (what robot.py constants splices), then follower / localizer / drivetrain + provenance

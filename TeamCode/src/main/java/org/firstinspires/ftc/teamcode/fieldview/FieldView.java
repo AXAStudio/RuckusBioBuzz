@@ -2,13 +2,10 @@ package org.firstinspires.ftc.teamcode.fieldview;
 
 import com.pedropathing.math.Pose;
 
-import org.firstinspires.ftc.teamcode.configs.ZoneCheckConfig;
+import org.firstinspires.ftc.teamcode.SystemConstants;
 import org.firstinspires.ftc.teamcode.modules.ZoneCheck;
-import org.firstinspires.ftc.teamcode.modules.predictiveAiming;
 
 public final class FieldView {
-    private static final long PUBLISH_INTERVAL_NS = 50_000_000L;
-
     private static volatile String snapshot;
     private static volatile long publishedAtNs;
     private static long lastPublishNs;
@@ -17,7 +14,7 @@ public final class FieldView {
 
     public static void publish(Pose robot, Pose predicted) {
         long now = System.nanoTime();
-        if (now - lastPublishNs < PUBLISH_INTERVAL_NS) {
+        if (now - lastPublishNs < SystemConstants.FieldView.PUBLISH_INTERVAL_MS * 1e6) {
             return;
         }
         lastPublishNs = now;
@@ -31,10 +28,10 @@ public final class FieldView {
             .append(",\"ph\":").append(predicted.heading())
             .append(",\"inZonePollen\":").append(ZoneCheck.inZone(robot))
             .append(",\"predInZonePollen\":").append(ZoneCheck.inZone(predicted))
-            .append(",\"predictMs\":").append(predictiveAiming.PREDICT_MS)
-            .append(",\"field\":").append(ZoneCheckConfig.FIELD_SIZE)
-            .append(",\"robotL\":").append(ZoneCheckConfig.ROBOT_LENGTH)
-            .append(",\"robotW\":").append(ZoneCheckConfig.ROBOT_WIDTH);
+            .append(",\"predictMs\":").append(SystemConstants.PredictiveAiming.PREDICT_MS)
+            .append(",\"field\":").append(SystemConstants.Zone.FIELD_SIZE)
+            .append(",\"robotL\":").append(SystemConstants.Zone.ROBOT_LENGTH)
+            .append(",\"robotW\":").append(SystemConstants.Zone.ROBOT_WIDTH);
         snapshot = sb.toString();
         publishedAtNs = now;
     }
