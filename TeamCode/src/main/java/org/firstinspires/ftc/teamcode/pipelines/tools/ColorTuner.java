@@ -14,10 +14,8 @@ import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
 
-import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 
-
-public class colorTuner implements VisionProcessor {
+public class ColorTuner implements VisionProcessor {
 
     int x, y, x2, y2;
 
@@ -31,7 +29,7 @@ public class colorTuner implements VisionProcessor {
     public int g;
     public int b;
     private final Telemetry telemetry;
-    public colorTuner(Telemetry telemetry) {
+    public ColorTuner(Telemetry telemetry) {
         this.telemetry = telemetry;
     }
 

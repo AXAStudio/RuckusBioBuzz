@@ -2,7 +2,7 @@ package org.firstinspires.ftc.teamcode.pipelines.tools;
 
 import java.util.List;
 
-public class getMedian {
+public class GetMedian {
     public static double getMedian(List<Integer> data) {
         if (data.size() % 2 == 0) {
             return (data.get(data.size() / 2) + data.get((data.size() / 2) - 1)) / 2.0;

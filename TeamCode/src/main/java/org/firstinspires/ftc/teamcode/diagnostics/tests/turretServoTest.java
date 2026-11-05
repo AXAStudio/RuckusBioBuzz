@@ -7,7 +7,7 @@ import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
 import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.Servo;
 
-import org.firstinspires.ftc.teamcode.systems.turret;
+import org.firstinspires.ftc.teamcode.systems.Turret;
 
 /**
  * DIAGNOSTIC ONLY. Drives the pollen turret servo (Control Hub servo port 5,
@@ -44,7 +44,7 @@ public class turretServoTest extends LinearOpMode {
             }
             return;
         }
-        turret.configurePwm(servo);
+        Turret.configurePwm(servo);
 
         long t0 = System.nanoTime();
         while (!isStopRequested()) {
@@ -62,7 +62,7 @@ public class turretServoTest extends LinearOpMode {
             telemetry.addData("servo", SERVO_NAME + " (port " + servo.getPortNumber() + ")");
             telemetry.addData("mode", SWEEP ? "SWEEP" : "POSITION");
             telemetry.addData("commanded", cmd);
-            telemetry.addData("approx deg from 0", cmd * turret.SERVO_RANGE_DEG);
+            telemetry.addData("approx deg from 0", cmd * Turret.SERVO_RANGE_DEG);
             telemetry.addData("state", isStarted() ? "RUNNING" : "INIT (already driving)");
             telemetry.update();
             sleep(20);

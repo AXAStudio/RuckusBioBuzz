@@ -8,14 +8,14 @@ import com.pedropathing.math.Velocity;
 
 @Config
 @Configurable
-public class predictiveAiming {
+public class PredictiveAiming {
 
     public static double PREDICT_MS = 150;
     private static final double[] CENTER = {0, 0};
 
     private final Follower follower;
 
-    public predictiveAiming(Follower follower) {
+    public PredictiveAiming(Follower follower) {
         this.follower = follower;
     }
     public Pose predictPose() {

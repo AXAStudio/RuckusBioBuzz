@@ -11,7 +11,7 @@ import org.firstinspires.ftc.teamcode.helpers.Alliance;
 
 @Config
 @Configurable
-public class intake {
+public class Intake {
     private DcMotor intakeLeft, intakeRight;
     private ColorSensor colorSensor;
     HardwareMap hardwareMap;
@@ -25,7 +25,7 @@ public class intake {
     private int lastSign = 0;
     private long lastDriveNanos = 0;
 
-    public intake(HardwareMap hardwareMap) {
+    public Intake(HardwareMap hardwareMap) {
         this.hardwareMap = hardwareMap;
 
         intakeLeft = hardwareMap.get(DcMotor.class, "intakeLeft");

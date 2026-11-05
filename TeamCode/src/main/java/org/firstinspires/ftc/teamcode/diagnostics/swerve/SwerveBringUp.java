@@ -5,6 +5,8 @@ import com.pedropathing.control.PIDFController;
 import com.pedropathing.revhub.drivetrains.CoaxialPod;
 import com.pedropathing.revhub.drivetrains.Swerve;
 import com.pedropathing.revhub.drivetrains.SwervePod;
+
+import org.firstinspires.ftc.teamcode.modules.ZoneCheck;
 import org.firstinspires.ftc.teamcode.pedroPathing.PositionalPod;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 import com.pedropathing.revhub.drivetrains.SwerveConfig;
@@ -620,8 +622,8 @@ public class SwerveBringUp extends OpMode {
     /** /state's keep-out list, built once when the fence is armed - not on every publish. */
     private String keepOutsJson = "[]";
     /** Robot footprint the field fence protects, inches. Defaults to the FTC 18 in maximum. */
-    private double fenceRobotL = org.firstinspires.ftc.teamcode.modules.zoneCheck.ROBOT_LENGTH;
-    private double fenceRobotW = org.firstinspires.ftc.teamcode.modules.zoneCheck.ROBOT_WIDTH;
+    private double fenceRobotL = ZoneCheck.ROBOT_LENGTH;
+    private double fenceRobotW = ZoneCheck.ROBOT_WIDTH;
 
     private static final String FIELD_RESOURCE =
             "/org/firstinspires/ftc/teamcode/field/biobuzz_field.json";

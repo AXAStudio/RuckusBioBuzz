@@ -10,7 +10,7 @@ import org.firstinspires.ftc.teamcode.helpers.Alliance;
 
 @Config
 @Configurable
-public class zoneCheck {
+public class ZoneCheck {
     public static double ZONE_Y = 39;
     public static final double FIELD_SIZE = 141.5;
     public static final double ROBOT_LENGTH = 18;
@@ -23,7 +23,7 @@ public class zoneCheck {
     private static int[][] mapPollen;
     private static Alliance alliance;
 
-    public zoneCheck(Alliance alliance) {
+    public ZoneCheck(Alliance alliance) {
         this.alliance = alliance;
         mapPollen = new int[yQuality][xQuality];
         mapNectar = new int[yQuality][xQuality];

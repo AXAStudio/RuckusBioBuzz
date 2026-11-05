@@ -16,10 +16,10 @@ import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
 import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
 import org.firstinspires.ftc.teamcode.systems.ColorCheck;
-import org.firstinspires.ftc.teamcode.systems.flywheel;
-import org.firstinspires.ftc.teamcode.systems.intake;
-import org.firstinspires.ftc.teamcode.systems.shooter;
-import org.firstinspires.ftc.teamcode.systems.turret;
+import org.firstinspires.ftc.teamcode.systems.Flywheel;
+import org.firstinspires.ftc.teamcode.systems.Intake;
+import org.firstinspires.ftc.teamcode.systems.Shooter;
+import org.firstinspires.ftc.teamcode.systems.Turret;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -36,7 +36,7 @@ import java.util.Map;
  * shooting sequence ({@code shooter.java}'s gate logic: entry band, hold band, minimum open time,
  * fed by the shipped intake), both turret servos (center, direction, gear ratio, mount offset),
  * the gate and scoopula servo positions, and the intake (color thresholds with labelled samples,
- * reverse brake, live reject check through the shipped {@link intake} class). The drivetrain is
+ * reverse brake, live reject check through the shipped {@link Intake} class). The drivetrain is
  * never touched: swerve tuning stays in Swerve Bring-Up.
  *
  * <p>Starting values are read from the shipped statics at init, and anything changed here is
@@ -79,7 +79,7 @@ public class MechanismTuner extends OpMode {
     private final TurretCal[] turrets = new TurretCal[2];
     private final ServoCal[] servos = new ServoCal[2];
 
-    private intake intakeSys;
+    private Intake intakeSys;
     private String intakeError = "";
     private String intakeMode = "OFF";
     private Alliance alliance = Alliance.RED;
@@ -143,23 +143,23 @@ public class MechanismTuner extends OpMode {
                 ? hardwareMap.voltageSensor.iterator().next() : null;
 
         sessionId = System.currentTimeMillis();
-        atSpeedFrac = flywheel.AT_SPEED_FRACTION;
-        idleFrac = flywheel.IDLE_FRACTION;
-        holdFrac = shooter.HOLD_SPEED_FRACTION;
-        minGateOpenS = shooter.MIN_GATE_OPEN_S;
-        wheels[0] = new Wheel("pollen", "pollenTurret", flywheel.POLLEN_FLYWHEEL_REVERSED,
-                flywheel.POLLEN_PIDF);
-        wheels[1] = new Wheel("nectar", "nectarTurret", flywheel.NECTAR_FLYWHEEL_REVERSED,
-                flywheel.NECTAR_PIDF);
+        atSpeedFrac = Flywheel.AT_SPEED_FRACTION;
+        idleFrac = Flywheel.IDLE_FRACTION;
+        holdFrac = Shooter.HOLD_SPEED_FRACTION;
+        minGateOpenS = Shooter.MIN_GATE_OPEN_S;
+        wheels[0] = new Wheel("pollen", "pollenTurret", Flywheel.POLLEN_FLYWHEEL_REVERSED,
+                Flywheel.POLLEN_PIDF);
+        wheels[1] = new Wheel("nectar", "nectarTurret", Flywheel.NECTAR_FLYWHEEL_REVERSED,
+                Flywheel.NECTAR_PIDF);
 
-        turrets[0] = new TurretCal("pollen", "pollenTurretServo", turret.POLLEN_TURRET_CENTER,
-                turret.POLLEN_TURRET_REVERSED, turret.POLLEN_TURRET_GEAR_RATIO,
-                turret.pollenTurretOffset, turret.POLLEN_TURRET_MIN, turret.POLLEN_TURRET_MAX,
-                turret.POLLEN_TURRET_START);
-        turrets[1] = new TurretCal("nectar", "nectarTurretServo", turret.NECTAR_TURRET_CENTER,
-                turret.NECTAR_TURRET_REVERSED, turret.NECTAR_TURRET_GEAR_RATIO,
-                turret.nectarTurretOffset, turret.NECTAR_TURRET_MIN, turret.NECTAR_TURRET_MAX,
-                turret.NECTAR_TURRET_START);
+        turrets[0] = new TurretCal("pollen", "pollenTurretServo", Turret.POLLEN_TURRET_CENTER,
+                Turret.POLLEN_TURRET_REVERSED, Turret.POLLEN_TURRET_GEAR_RATIO,
+                Turret.pollenTurretOffset, Turret.POLLEN_TURRET_MIN, Turret.POLLEN_TURRET_MAX,
+                Turret.POLLEN_TURRET_START);
+        turrets[1] = new TurretCal("nectar", "nectarTurretServo", Turret.NECTAR_TURRET_CENTER,
+                Turret.NECTAR_TURRET_REVERSED, Turret.NECTAR_TURRET_GEAR_RATIO,
+                Turret.nectarTurretOffset, Turret.NECTAR_TURRET_MIN, Turret.NECTAR_TURRET_MAX,
+                Turret.NECTAR_TURRET_START);
 
         servos[0] = new ServoCal("gate", "turretGate", "systems/gate.java",
                 new String[]{"open", "openPos", "close", "closePos"});
@@ -169,9 +169,9 @@ public class MechanismTuner extends OpMode {
         origRedOverBlue = ColorCheck.RED_OVER_BLUE;
         origBlueOverRed = ColorCheck.BLUE_OVER_RED;
         origMaxDist = ColorCheck.MAX_DIST_CM;
-        origBrakeMs = intake.REVERSE_BRAKE_MS;
+        origBrakeMs = Intake.REVERSE_BRAKE_MS;
         try {
-            intakeSys = new intake(hardwareMap);
+            intakeSys = new Intake(hardwareMap);
             intakeSys.setAlliance(alliance);
         } catch (RuntimeException e) {
             intakeSys = null;
@@ -212,7 +212,7 @@ public class MechanismTuner extends OpMode {
         ColorCheck.RED_OVER_BLUE = origRedOverBlue;
         ColorCheck.BLUE_OVER_RED = origBlueOverRed;
         ColorCheck.MAX_DIST_CM = origMaxDist;
-        intake.REVERSE_BRAKE_MS = origBrakeMs;
+        Intake.REVERSE_BRAKE_MS = origBrakeMs;
         TuningHub.INSTANCE.markStopped();
     }
 
@@ -621,8 +621,8 @@ public class MechanismTuner extends OpMode {
                 break;
             }
             case "intakeParams":
-                intake.REVERSE_BRAKE_MS = clamp(num(c, "brakeMs", intake.REVERSE_BRAKE_MS), 0, 1000);
-                message = "Intake REVERSE_BRAKE_MS " + FlyRecorder.r(intake.REVERSE_BRAKE_MS, 0)
+                Intake.REVERSE_BRAKE_MS = clamp(num(c, "brakeMs", Intake.REVERSE_BRAKE_MS), 0, 1000);
+                message = "Intake REVERSE_BRAKE_MS " + FlyRecorder.r(Intake.REVERSE_BRAKE_MS, 0)
                         + " applied live (restored on STOP unless exported).";
                 break;
             case "colorParams":
@@ -1295,7 +1295,7 @@ public class MechanismTuner extends OpMode {
         double center;
         boolean reversed;
         double gearA, gearB;
-        double servoRange = turret.SERVO_RANGE_DEG;
+        double servoRange = Turret.SERVO_RANGE_DEG;
         /** Turret pivot from the robot's pose center, inches, robot frame {forward, left}. */
         final double[] offset;
         /** Wiring limits and INIT position, servo units, as turret.*_TURRET_MIN / MAX / START. */
@@ -1314,7 +1314,7 @@ public class MechanismTuner extends OpMode {
             this.gearA = gear[0];
             this.gearB = gear[1];
             servo = hardwareMap.tryGet(Servo.class, device);
-            turret.configurePwm(servo); // same pulse range as the competition turret
+            Turret.configurePwm(servo); // same pulse range as the competition turret
         }
 
         /** Turret degrees across the full 0-1 servo travel, exactly as turret.TurretServo.track. */
@@ -1670,7 +1670,7 @@ public class MechanismTuner extends OpMode {
                 .append(",\"error\":\"").append(TuningHub.esc(intakeError))
                 .append("\",\"mode\":\"").append(intakeMode)
                 .append("\",\"alliance\":\"").append(alliance)
-                .append("\",\"brakeMs\":").append(FlyRecorder.r(intake.REVERSE_BRAKE_MS, 1)).append('}');
+                .append("\",\"brakeMs\":").append(FlyRecorder.r(Intake.REVERSE_BRAKE_MS, 1)).append('}');
 
         sb.append(",\"color\":{\"ok\":").append(color != null)
                 .append(",\"hasDistance\":").append(colorDistance != null)
@@ -1749,7 +1749,7 @@ public class MechanismTuner extends OpMode {
         out.add(new String[]{cc, "RED_OVER_BLUE", trim(ColorCheck.RED_OVER_BLUE)});
         out.add(new String[]{cc, "BLUE_OVER_RED", trim(ColorCheck.BLUE_OVER_RED)});
         out.add(new String[]{cc, "MAX_DIST_CM", trim(ColorCheck.MAX_DIST_CM)});
-        out.add(new String[]{in, "REVERSE_BRAKE_MS", trim(intake.REVERSE_BRAKE_MS)});
+        out.add(new String[]{in, "REVERSE_BRAKE_MS", trim(Intake.REVERSE_BRAKE_MS)});
         for (ServoCal s : servos) {
             for (Map.Entry<String, Double> m : s.marks.entrySet()) {
                 if (m.getValue() != null) {

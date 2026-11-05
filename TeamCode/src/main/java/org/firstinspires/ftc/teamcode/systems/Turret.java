@@ -10,11 +10,11 @@ import org.firstinspires.ftc.teamcode.helpers.Alliance;
 
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.teamcode.helpers.HivePosition;
-import org.firstinspires.ftc.teamcode.modules.predictiveAiming;
+import org.firstinspires.ftc.teamcode.modules.PredictiveAiming;
 
 @Config
 @Configurable
-public class turret{
+public class Turret {
 
     public static double[] nectarTurretOffset = {3.22, 0};
     public static double[] pollenTurretOffset = {-5.91, 0};
@@ -36,7 +36,7 @@ public class turret{
     public static double UNWIND_HYSTERESIS_DEG = 10;
     public static double UNWIND_SETTLE_S = 1.0;
 
-    private final predictiveAiming predictor;
+    private final PredictiveAiming predictor;
     private Alliance alliance;
 
     private final TurretServo pollenTurret;
@@ -62,7 +62,7 @@ public class turret{
         }
     }
 
-    public turret(HardwareMap hardwareMap, predictiveAiming predictor, HivePosition hivePosition) {
+    public Turret(HardwareMap hardwareMap, PredictiveAiming predictor, HivePosition hivePosition) {
         this.predictor = predictor;
         pollenTurret = new TurretServo(hardwareMap.get(Servo.class, "pollenTurretServo"),
                 limit(POLLEN_TURRET_START, POLLEN_TURRET_MIN, POLLEN_TURRET_MAX));

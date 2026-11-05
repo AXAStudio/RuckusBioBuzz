@@ -15,10 +15,10 @@ import com.qualcomm.robotcore.util.ElapsedTime;
 
 import org.firstinspires.ftc.robotcore.external.navigation.CurrentUnit;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
-import org.firstinspires.ftc.teamcode.systems.flywheel;
-import org.firstinspires.ftc.teamcode.systems.gate;
-import org.firstinspires.ftc.teamcode.systems.scoopula;
-import org.firstinspires.ftc.teamcode.systems.turret;
+import org.firstinspires.ftc.teamcode.systems.Flywheel;
+import org.firstinspires.ftc.teamcode.systems.Gate;
+import org.firstinspires.ftc.teamcode.systems.Scoopula;
+import org.firstinspires.ftc.teamcode.systems.Turret;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -102,8 +102,8 @@ public class PreMatchSystemCheck extends OpMode {
     private Servo pollenTurretServo;
     private Servo nectarTurretServo;
     private ColorSensor colorSensor;
-    private gate shooterGate;
-    private scoopula scoopula;
+    private Gate shooterGate;
+    private Scoopula scoopula;
 
     private int mechIndex;
     /** Signed velocity of largest magnitude seen this step, ticks/s. */
@@ -326,18 +326,18 @@ public class PreMatchSystemCheck extends OpMode {
         intakeRight = device(DcMotorEx.class, "intakeRight", "intake");
         pollenTurretServo = device(Servo.class, "pollenTurretServo", "pollen turret");
         nectarTurretServo = device(Servo.class, "nectarTurretServo", "nectar turret");
-        turret.configurePwm(pollenTurretServo); // same pulse range as the competition turret
-        turret.configurePwm(nectarTurretServo);
+        Turret.configurePwm(pollenTurretServo); // same pulse range as the competition turret
+        Turret.configurePwm(nectarTurretServo);
         colorSensor = device(ColorSensor.class, "colorSensor", "intake color sensor");
         if (device(Servo.class, "turretGate", "shooter gate") != null) {
-            shooterGate = new gate(hardwareMap);
+            shooterGate = new Gate(hardwareMap);
         }
         if (device(Servo.class, "scoopula", "scoopula") != null) {
-            scoopula = new scoopula(hardwareMap);
+            scoopula = new Scoopula(hardwareMap);
         }
 
-        checkTurretTravel("Pollen", turret.POLLEN_TURRET_GEAR_RATIO);
-        checkTurretTravel("Nectar", turret.NECTAR_TURRET_GEAR_RATIO);
+        checkTurretTravel("Pollen", Turret.POLLEN_TURRET_GEAR_RATIO);
+        checkTurretTravel("Nectar", Turret.NECTAR_TURRET_GEAR_RATIO);
     }
 
     private <T> T device(Class<T> type, String name, String what) {
@@ -351,7 +351,7 @@ public class PreMatchSystemCheck extends OpMode {
 
     /** turret.track can only reach every heading if the turret covers a full turn. */
     private void checkTurretTravel(String name, double[] gearRatio) {
-        double range = turret.SERVO_RANGE_DEG * gearRatio[1] / gearRatio[0];
+        double range = Turret.SERVO_RANGE_DEG * gearRatio[1] / gearRatio[0];
         if (!isFinite(range) || range < 360.0) {
             addWarning(name + " turret covers " + format(range) + " deg over the servo's travel; "
                     + "under 360 it cannot aim at every heading.");
@@ -400,10 +400,10 @@ public class PreMatchSystemCheck extends OpMode {
 
         switch (step) {
             case POLLEN_FLYWHEEL:
-                startFlywheel(pollenFlywheel, flywheel.POLLEN_FLYWHEEL_REVERSED);
+                startFlywheel(pollenFlywheel, Flywheel.POLLEN_FLYWHEEL_REVERSED);
                 break;
             case NECTAR_FLYWHEEL:
-                startFlywheel(nectarFlywheel, flywheel.NECTAR_FLYWHEEL_REVERSED);
+                startFlywheel(nectarFlywheel, Flywheel.NECTAR_FLYWHEEL_REVERSED);
                 break;
             case INTAKE:
                 // Same sign systems/intake uses for INTAKE.
@@ -412,10 +412,10 @@ public class PreMatchSystemCheck extends OpMode {
                 break;
             case TURRETS:
                 if (pollenTurretServo != null) {
-                    pollenTurretServo.setPosition(turret.POLLEN_TURRET_CENTER);
+                    pollenTurretServo.setPosition(Turret.POLLEN_TURRET_CENTER);
                 }
                 if (nectarTurretServo != null) {
-                    nectarTurretServo.setPosition(turret.NECTAR_TURRET_CENTER);
+                    nectarTurretServo.setPosition(Turret.NECTAR_TURRET_CENTER);
                 }
                 break;
             case GATE:

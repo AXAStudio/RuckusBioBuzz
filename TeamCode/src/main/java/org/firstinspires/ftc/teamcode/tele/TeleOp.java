@@ -1,7 +1,5 @@
 package org.firstinspires.ftc.teamcode.tele;
 
-import static org.firstinspires.ftc.teamcode.systems.intake.intakeState;
-
 import com.acmerobotics.dashboard.FtcDashboard;
 import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
@@ -11,16 +9,16 @@ import com.pedropathing.math.Pose;
 import com.pedropathing.revhub.drivetrains.Swerve;
 import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
-import org.firstinspires.ftc.teamcode.systems.intake;
+import org.firstinspires.ftc.teamcode.systems.Intake;
 
 import java.util.List;
 
 import org.firstinspires.ftc.teamcode.fieldview.FieldView;
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
 import org.firstinspires.ftc.teamcode.helpers.PoseStorage;
-import org.firstinspires.ftc.teamcode.modules.predictiveAiming;
-import org.firstinspires.ftc.teamcode.systems.scoopula;
-import org.firstinspires.ftc.teamcode.systems.shooter;
+import org.firstinspires.ftc.teamcode.modules.PredictiveAiming;
+import org.firstinspires.ftc.teamcode.systems.Scoopula;
+import org.firstinspires.ftc.teamcode.systems.Shooter;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 
 @Config
@@ -32,12 +30,12 @@ public class TeleOp extends OpMode {
     public static double TRANSLATION_PRIORITY = 0.75;
 
     private Follower follower;
-    private predictiveAiming predictor;
-    private shooter shooterSystem;
+    private PredictiveAiming predictor;
+    private Shooter shooterSystem;
     private List<LynxModule> hubs;
     private Alliance alliance = Alliance.RED;
-    private intake intake;
-    private scoopula scoopula;
+    private Intake intake;
+    private Scoopula scoopula;
 
     @Override
     public void init() {
@@ -51,10 +49,10 @@ public class TeleOp extends OpMode {
         if (autoEndPose != null) {
             follower.setPose(autoEndPose);
         }
-        predictor = new predictiveAiming(follower);
-        shooterSystem = new shooter(hardwareMap, predictor, alliance);
-        intake = new intake(hardwareMap);
-        scoopula = new scoopula(hardwareMap);
+        predictor = new PredictiveAiming(follower);
+        shooterSystem = new Shooter(hardwareMap, predictor, alliance);
+        intake = new Intake(hardwareMap);
+        scoopula = new Scoopula(hardwareMap);
 
     }
 

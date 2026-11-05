@@ -19,7 +19,7 @@ import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 
 @Disabled
 
-public class blobDetection implements VisionProcessor {
+public class BlobDetection implements VisionProcessor {
     public String hex = "";
     int x, y, x2, y2;
     public double rawAngle;
@@ -90,7 +90,7 @@ public class blobDetection implements VisionProcessor {
         //Get Median
         rgb.release();
         if(!xList.isEmpty()) {
-            median = getMedian.getMedianDown(xList);
+            median = GetMedian.getMedianDown(xList);
             rawAngle = -(frameWidth/2-median);
         }else{
             rawAngle = NaN;
