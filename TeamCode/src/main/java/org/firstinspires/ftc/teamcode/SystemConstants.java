@@ -15,6 +15,16 @@ public final class SystemConstants {
 
     @Config
     @Configurable
+    public static class Cache {
+        public static boolean VELOCITY_WRITES = true;
+        public static boolean SERVO_WRITES = true;
+        public static double REFRESH_MS = 250;
+        public static double COLOR_READ_INTERVAL_MS = 50;
+        public static double TELEMETRY_INTERVAL_MS = 100;
+    }
+
+    @Config
+    @Configurable
     public static class Shooter {
         public static double MIN_GATE_OPEN_S = 0.3;
         public static double HOLD_SPEED_FRACTION = 0.20;

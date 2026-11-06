@@ -10,6 +10,7 @@ import org.firstinspires.ftc.teamcode.helpers.Alliance;
 
 import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
 import org.firstinspires.ftc.teamcode.helpers.HivePosition;
+import org.firstinspires.ftc.teamcode.modules.Cache;
 import org.firstinspires.ftc.teamcode.modules.PredictiveAiming;
 
 public class Turret {
@@ -89,12 +90,25 @@ public class Turret {
         private final Servo servo;
         private double position = Double.NaN;
         private long settleUntilNanos;
+        private final boolean cacheable;
+        private final double pwmLower, pwmUpper;
+        private final Cache cache = new Cache();
 
         TurretServo(Servo servo, double start) {
             this.servo = servo;
             configurePwm(servo); // SDK default 600-2400 us only reaches ~90% of the Axon's travel
+            cacheable = servo instanceof ServoImplEx;
+            pwmLower = SystemConstants.Turret.PWM_LOWER_US;
+            pwmUpper = SystemConstants.Turret.PWM_UPPER_US;
             position = start;
-            servo.setPosition(start);
+            write(start);
+        }
+
+        private void write(double p) {
+            long key = Cache.servoKey(p, servo.getDirection() == Servo.Direction.REVERSE, pwmLower, pwmUpper);
+            if (cache.changed(key, SystemConstants.Cache.SERVO_WRITES && cacheable, SystemConstants.Cache.REFRESH_MS)) {
+                servo.setPosition(p);
+            }
         }
 
         boolean track(double theta, double center, boolean reversed, double[] gearRatio, double min, double max) {
@@ -123,7 +137,7 @@ public class Turret {
                     position = limit(follow, min, max);
                 }
             }
-            servo.setPosition(position);
+            write(position);
             return aimed && System.nanoTime() >= settleUntilNanos;
         }
 

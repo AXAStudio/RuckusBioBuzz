@@ -7,6 +7,7 @@ import com.qualcomm.robotcore.hardware.DistanceSensor;
 
 import org.firstinspires.ftc.robotcore.external.navigation.DistanceUnit;
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
+import org.firstinspires.ftc.teamcode.modules.Cache;
 
 /**
  * Wrong-alliance piece detector for the intake.
@@ -32,6 +33,8 @@ public class ColorCheck {
     private final ColorSensor colorSensor;
     private final DistanceSensor distanceSensor;
     private Alliance alliance;
+    private boolean cachedReject;
+    private final Cache readCache = new Cache();
 
     public ColorCheck(ColorSensor colorSensor, Alliance alliance) {
         this.colorSensor = colorSensor;
@@ -41,11 +44,19 @@ public class ColorCheck {
 
     public void setAlliance(Alliance alliance) {
         this.alliance = alliance;
+        readCache.invalidate();
     }
 
     /** True when the piece in the intake belongs to the other alliance. No alliance set: never. */
     public boolean reject() {
         if (alliance == null) return false;
+        if (readCache.due(SystemConstants.Cache.COLOR_READ_INTERVAL_MS)) {
+            cachedReject = readReject();
+        }
+        return cachedReject;
+    }
+
+    private boolean readReject() {
         int r = colorSensor.red();
         int b = colorSensor.blue();
         boolean wrongColor = alliance == Alliance.BLUE ? isRed(r, b) : isBlue(r, b);

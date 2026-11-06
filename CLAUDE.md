@@ -68,6 +68,9 @@ TeamCode/src/main/java/org/firstinspires/ftc/teamcode/
 │   (Tuning.java + procedures/ = Pedro 3 AutoTune, REMOVED 2026-11-01 with Sloth; branch autotune-sloth)
 ├── tele/TeleOp.java                      COMPETITION drive OpMode: follower.manual() from the sticks, robot-centric,
 │                                         TRANSLATION_PRIORITY 0.75 (vendored Swerve; manual only, unmeasured on the robot)
+│                                         telemetry throttled (TELEMETRY_INTERVAL_MS) and shows loop Hz = 1/mean(dt), dt mean/p90;
+│                                         flywheel velocity + turret servo writes deduped, color read throttled - all through
+│                                         modules/Cache, switches in SystemConstants.Cache
 ├── auto/{RedPollenAuto,shortAutoRed,redOption2,ExampleSwerveAuto,PathStep}.java   Red only, no mirroring
 │   └── visualizerAutos/*.pp             visualizer sources the auto .java files are exported from
 ├── modules/                             compute only, no hardware: predictiveAiming, shootingRegression, zoneCheck
