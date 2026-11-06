@@ -16,6 +16,8 @@ import java.util.ArrayList;
 import java.util.List;
 
 
+import org.firstinspires.ftc.teamcode.auto.modules.AutoMechanisms;
+import org.firstinspires.ftc.teamcode.auto.modules.PathStep;
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
 import org.firstinspires.ftc.teamcode.helpers.PoseStorage;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;

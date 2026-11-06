@@ -1,4 +1,4 @@
-package org.firstinspires.ftc.teamcode.auto;
+package org.firstinspires.ftc.teamcode.auto.legacy;
 
 import com.pedropathing.algorithm.Foresight;
 import com.pedropathing.api.Paths;
@@ -11,6 +11,7 @@ import com.pedropathing.utils.Angle;
 import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 
+import org.firstinspires.ftc.teamcode.auto.modules.PathStep;
 import org.firstinspires.ftc.teamcode.helpers.PoseStorage;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 

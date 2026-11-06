@@ -1,4 +1,4 @@
-package org.firstinspires.ftc.teamcode.auto;
+package org.firstinspires.ftc.teamcode.auto.legacy;
 
 import com.acmerobotics.dashboard.config.Config;
 import com.bylazar.configurables.annotations.Configurable;
@@ -17,6 +17,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 
+import org.firstinspires.ftc.teamcode.auto.modules.PathStep;
 import org.firstinspires.ftc.teamcode.helpers.PoseStorage;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 
