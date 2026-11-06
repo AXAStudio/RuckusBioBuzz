@@ -56,6 +56,15 @@
   .badge.good { background: #123122; border-color: var(--good); color: #7ee095; }
   .badge.warn { background: #2a2416; border-color: var(--warn); color: #f0c674; }
   .badge.link { cursor: pointer; }
+  .zgrid { border-collapse: collapse; user-select: none; }
+  .zgrid td { width: 34px; height: 34px; border: 1px solid var(--line); cursor: pointer; padding: 0;
+    text-align: center; font-size: 10px; color: var(--muted); }
+  .zgrid td.on { background: #123122; border-color: var(--good); color: #7ee095; }
+  .zgrid td.on.nectar { background: #10263f; border-color: var(--nectar); color: #9ccaff; }
+  .zgrid td.ax { cursor: default; border: none; width: auto; padding: 0 4px; }
+  .zgrid td:not(.ax):hover { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .bar { height: 10px; background: #0c1015; border: 1px solid var(--line); border-radius: 5px; overflow: hidden; }
+  .bar > div { height: 100%; background: var(--good); }
   input[type=number], input[type=text], select { font: inherit; background: #0c1015; color: var(--text);
     border: 1px solid var(--line); border-radius: 6px; padding: 5px 7px; width: 86px;
     font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
@@ -128,6 +137,8 @@
   <button data-tab="turret">Turrets &amp; servos</button>
   <button data-tab="tlimits">Turret limits</button>
   <button data-tab="color">Intake &amp; color</button>
+  <button data-tab="breakin">Intake break-in</button>
+  <button data-tab="zone">Zone map</button>
   <button data-tab="swerve">Swerve</button>
   <button data-tab="export">Export</button>
 </nav>
@@ -479,6 +490,78 @@
     <textarea id="promptColor" readonly style="min-height:150px"></textarea>
     <div class="row"><button class="primary" onclick="copy('promptColor', this)">Copy prompt</button></div>
   </section>
+</div>
+
+<div class="tab" id="tab-breakin">
+  <section>
+    <h2>Intake break-in</h2>
+    <div class="row">
+      <label class="inline">power <input type="number" id="biPower" step="0.05" min="0.05" max="1" value="0.6"></label>
+      <label class="inline">total <input type="number" id="biMin" step="1" min="1" max="120" value="10"> min</label>
+      <label class="inline">reverse every <input type="number" id="biFlip" step="5" min="0" value="30"> s</label>
+      <label class="inline">rest before reversing <input type="number" id="biRest" step="0.5" min="0" value="1"> s</label>
+    </div>
+    <div class="row">
+      <label class="inline">stop if current over <input type="number" id="biStallA" step="0.5" min="0.5" max="20" value="9"> A</label>
+      <label class="inline">for <input type="number" id="biStallS" step="0.1" min="0.2" max="10" value="1"> s</label>
+    </div>
+    <div class="row">
+      <button class="primary" onclick="breakInStart()">Start break-in</button>
+      <button class="stop" onclick="cmd('breakInStop')">Stop</button>
+    </div>
+    <p class="hint">Runs <code>intakeLeft</code> and <code>intakeRight</code> open loop at this power, reversing
+      direction every interval (0 = never) with a stopped rest in between. Stops by itself when the time is up or when
+      either motor draws more than the current limit for that long (a jam). Keep this page open: the watchdog stops
+      everything after 30 s with no web client.</p>
+  </section>
+  <section>
+    <h2>Status</h2>
+    <div id="biStatus" class="msg">–</div>
+    <div class="bar" style="margin:10px 0"><div id="biBar" style="width:0%"></div></div>
+    <div class="grid">
+      <div class="card" id="biLive"></div>
+    </div>
+  </section>
+</div>
+
+<div class="tab" id="tab-zone">
+  <section>
+    <h2>Shooting zone map</h2>
+    <p class="hint" style="margin-top:0">Each cell is a square of the field the shooter is allowed to fire from
+      (<code>ZoneCheck.inZone</code>). Red-alliance frame: x → from the red wall, y ↑ from the audience wall; blue
+      is mirrored through the field center. Click a cell to toggle it, or click and drag to paint. Edits are live for
+      this run and restored on STOP; ship them from the Export tab (<code>mechtune.py export --only zone --write</code>).</p>
+    <div class="row">
+      <label class="inline">grid <input type="number" id="zX" min="1" max="48" step="1"> × <input type="number" id="zY" min="1" max="48" step="1"> cells (x × y)</label>
+      <button class="small" onclick="cmd('zoneSize',{x:num('zX'),y:num('zY')})">Resize</button>
+      <span class="stat" id="zInfo"></span>
+    </div>
+    <div class="row">
+      <label class="inline">shooter offset pollen <input type="number" id="zOffP" step="1"> in</label>
+      <label class="inline">nectar <input type="number" id="zOffN" step="1"> in</label>
+      <button class="small" onclick="cmd('zoneOffsets',{pollen:num('zOffP'),nectar:num('zOffN')})">Apply live</button>
+    </div>
+  </section>
+  <div class="grid">
+    <section>
+      <h2>Pollen</h2>
+      <div class="row">
+        <button class="small" onclick="cmd('zoneFill',{map:'pollen',v:1})">Fill</button>
+        <button class="small" onclick="cmd('zoneFill',{map:'pollen',v:0})">Clear</button>
+        <button class="small" onclick="cmd('zoneCopy',{from:'pollen'})">Copy to nectar</button>
+      </div>
+      <div class="tablewrap" id="zonePollen"></div>
+    </section>
+    <section>
+      <h2>Nectar</h2>
+      <div class="row">
+        <button class="small" onclick="cmd('zoneFill',{map:'nectar',v:1})">Fill</button>
+        <button class="small" onclick="cmd('zoneFill',{map:'nectar',v:0})">Clear</button>
+        <button class="small" onclick="cmd('zoneCopy',{from:'nectar'})">Copy to pollen</button>
+      </div>
+      <div class="tablewrap" id="zoneNectar"></div>
+    </section>
+  </div>
 </div>
 
 <!-- ======================================================== SWERVE -->
@@ -869,6 +952,75 @@ function dirtyShoot() {
 function shoot(count) {
   cmd('shoot', {pollen: num('shP'), nectar: num('shN'), count: count, feed: chk('shFeed') ? 1 : 0});
 }
+function breakInStart() {
+  cmd('breakInStart', {power: num('biPower'), totalS: num('biMin') * 60, flipS: num('biFlip'), restS: num('biRest'),
+    stallA: num('biStallA'), stallS: num('biStallS')});
+}
+function renderBreakIn() {
+  var b = S.breakIn; if (!b) return;
+  fillOnce('breakIn', function () {
+    $('biPower').value = b.power; $('biMin').value = Math.round(b.totalS / 60); $('biFlip').value = b.flipS;
+    $('biRest').value = b.restS; $('biStallA').value = b.stallA; $('biStallS').value = b.stallS;
+  });
+  var state = !b.ok ? 'no intake motors found' : b.running ? (b.resting ? 'RESTING' : b.dir > 0 ? 'RUNNING — intake direction' : 'RUNNING — reverse direction')
+    : b.end ? 'stopped: ' + b.end : 'idle';
+  $('biStatus').className = 'msg' + (!b.ok || /STALL/.test(b.end) ? ' bad' : '');
+  setText('biStatus', state);
+  $('biBar').style.width = Math.min(100, 100 * b.runS / Math.max(1, b.totalS)).toFixed(1) + '%';
+  var mmss = function (t) { t = Math.max(0, Math.round(t)); return Math.floor(t / 60) + ':' + ('0' + t % 60).slice(-2); };
+  setHtml('biLive',
+    '<div class="kv"><span>elapsed / total</span><span>' + mmss(b.runS) + ' / ' + mmss(b.totalS) + '</span></div>' +
+    '<div class="kv"><span>reversals</span><span>' + b.flips + '</span></div>' +
+    '<div class="kv"><span>current left / right</span><span>' + f(b.amps[0], 2) + ' / ' + f(b.amps[1], 2) + ' A</span></div>' +
+    '<div class="kv"><span>peak left / right</span><span>' + f(b.maxAmps[0], 2) + ' / ' + f(b.maxAmps[1], 2) + ' A</span></div>' +
+    '<div class="kv"><span>battery</span><span>' + f(S.volts, 2) + ' V</span></div>');
+}
+var zonePaint = null;
+function zoneGrid(name, map, z) {
+  var cw = z.field / Math.max(1, z.x), ch = z.field / Math.max(1, z.y);
+  var h = '<table class="zgrid">';
+  for (var y = map.length - 1; y >= 0; y--) {
+    h += '<tr><td class="ax">' + f(y * ch, 0) + '</td>';
+    for (var x = 0; x < map[y].length; x++) {
+      h += '<td data-map="' + name + '" data-x="' + x + '" data-y="' + y + '" class="' + (map[y][x] ? 'on ' + name : '') +
+        '" title="x ' + f(x * cw, 1) + '–' + f((x + 1) * cw, 1) + ' in, y ' + f(y * ch, 1) + '–' + f((y + 1) * ch, 1) + ' in">' +
+        (map[y][x] ? '●' : '') + '</td>';
+    }
+    h += '</tr>';
+  }
+  h += '<tr><td class="ax"></td>';
+  for (var i = 0; i < z.x; i++) h += '<td class="ax">' + f(i * cw, 0) + '</td>';
+  return h + '</tr></table>';
+}
+function renderZone() {
+  var z = S.zone; if (!z) return;
+  fillOnce('zone', function () { $('zX').value = z.x; $('zY').value = z.y; $('zOffP').value = z.offPollen; $('zOffN').value = z.offNectar; });
+  var count = function (m) { return m.reduce(function (a, r) { return a + r.reduce(function (b, v) { return b + v; }, 0); }, 0); };
+  setText('zInfo', z.x + ' × ' + z.y + ' cells of ' + f(z.field / z.x, 1) + ' × ' + f(z.field / z.y, 1) + ' in · pollen ' +
+    count(z.pollen) + ' on · nectar ' + count(z.nectar) + ' on');
+  if (zonePaint !== null) return;
+  setHtml('zonePollen', zoneGrid('pollen', z.pollen, z));
+  setHtml('zoneNectar', zoneGrid('nectar', z.nectar, z));
+}
+function zoneSet(td) {
+  if (!td || !td.dataset.map || zonePaint === null) return;
+  var on = td.classList.contains('on') ? 1 : 0;
+  if (on === zonePaint) return;
+  var m = td.dataset.map, x = +td.dataset.x, y = +td.dataset.y;
+  if (S && S.zone && S.zone[m] && S.zone[m][y]) S.zone[m][y][x] = zonePaint;
+  td.classList.toggle('on', !!zonePaint); td.classList.toggle(m, !!zonePaint); td.textContent = zonePaint ? '●' : '';
+  delete htmlCache[m === 'pollen' ? 'zonePollen' : 'zoneNectar'];
+  cmd('zoneCell', {map: m, x: x, y: y, v: zonePaint});
+}
+['zonePollen', 'zoneNectar'].forEach(function (id) {
+  $(id).addEventListener('mousedown', function (e) {
+    var td = e.target.closest('td[data-map]'); if (!td) return;
+    e.preventDefault(); zonePaint = td.classList.contains('on') ? 0 : 1; zoneSet(td);
+  });
+  $(id).addEventListener('mouseover', function (e) { if (zonePaint !== null) zoneSet(e.target.closest('td[data-map]')); });
+});
+document.addEventListener('mouseup', function () { zonePaint = null; });
+
 function zoneTest() {
   if (!S || !S.shoot) return;
   var idle = S.shoot.idle;
@@ -1353,6 +1505,8 @@ function render() {
   $('btnStream').classList.toggle('on', c.stream); setText('btnStream', c.stream ? 'Streaming on' : 'Streaming off');
   setText('intakeInfo', S.intake.ok ? 'intake ' + S.intake.mode + ' · alliance ' + S.intake.alliance : 'intake unavailable: ' + S.intake.error);
   fillOnce('brake', function () { $('brakeMs').value = S.intake.brakeMs; });
+  renderBreakIn();
+  renderZone();
   setText('sampleInfo', c.sampling ? 'capturing ' + c.samplingLabel + '… ' + c.sampling + ' left' : c.samples + ' samples stored');
   var sm = c.summary || {labels: []};
   setHtml('colorTable', sm.labels.length ? '<tr><th>label</th><th>n</th><th>red mean [min–max]</th><th>green</th><th>blue</th><th>alpha</th><th>called RED</th><th>called BLUE</th></tr>' +

@@ -346,7 +346,7 @@ def set_pidf(wheel: str, coeffs: list[float]) -> None:
 
 # Every exported value lives in SystemConstants.java (one nested @Config class per mechanism, field
 # names unique across the file); --only filters on the export entry's group.
-FILE_KEYS = ("flywheel", "turret", "intake", "gate", "scoopula", "shooter", "ColorCheck")
+FILE_KEYS = ("flywheel", "turret", "intake", "gate", "scoopula", "shooter", "ColorCheck", "zone")
 
 
 def splice(export: list[dict], write: bool, only: set[str] | None) -> int:

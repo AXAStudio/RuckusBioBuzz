@@ -84,6 +84,20 @@ public class MechanismTuner extends OpMode {
     private Intake intakeSys;
     private String intakeError = "";
     private String intakeMode = "OFF";
+
+    private final DcMotorEx[] intakeMotors = new DcMotorEx[2];
+    private boolean breakIn, breakInResting;
+    private double breakInPower = 0.6, breakInFlipS = 30, breakInRestS = 1, breakInTotalS = 600;
+    private double breakInStallA = 9, breakInStallS = 1;
+    private int breakInDir = 1, breakInFlips;
+    private long breakInLastNs, breakInPhaseNs, breakInStallSinceNs;
+    private double breakInRunS;
+    private String breakInEnd = "";
+    private final double[] intakeAmps = new double[2];
+    private final double[] intakeMaxAmps = new double[2];
+
+    private int[][] origMapPollen, origMapNectar;
+    private int origXQuality, origYQuality, origOffPollen, origOffNectar;
     private Alliance alliance = Alliance.RED;
 
     private ColorSensor color;
@@ -172,9 +186,17 @@ public class MechanismTuner extends OpMode {
         origBlueOverRed = SystemConstants.ColorCheck.BLUE_OVER_RED;
         origMaxDist = SystemConstants.ColorCheck.MAX_DIST_CM;
         origBrakeMs = SystemConstants.Intake.REVERSE_BRAKE_MS;
+        origMapPollen = copyMap(SystemConstants.Zone.mapPollen);
+        origMapNectar = copyMap(SystemConstants.Zone.mapNectar);
+        origXQuality = SystemConstants.Zone.xQuality;
+        origYQuality = SystemConstants.Zone.yQuality;
+        origOffPollen = SystemConstants.Zone.yOffsetPollen;
+        origOffNectar = SystemConstants.Zone.yOffsetNectar;
         try {
             intakeSys = new Intake(hardwareMap);
             intakeSys.setAlliance(alliance);
+            intakeMotors[0] = hardwareMap.tryGet(DcMotorEx.class, "intakeLeft");
+            intakeMotors[1] = hardwareMap.tryGet(DcMotorEx.class, "intakeRight");
         } catch (RuntimeException e) {
             intakeSys = null;
             intakeError = shortError(e);
@@ -215,6 +237,12 @@ public class MechanismTuner extends OpMode {
         SystemConstants.ColorCheck.BLUE_OVER_RED = origBlueOverRed;
         SystemConstants.ColorCheck.MAX_DIST_CM = origMaxDist;
         SystemConstants.Intake.REVERSE_BRAKE_MS = origBrakeMs;
+        SystemConstants.Zone.mapPollen = origMapPollen;
+        SystemConstants.Zone.mapNectar = origMapNectar;
+        SystemConstants.Zone.xQuality = origXQuality;
+        SystemConstants.Zone.yQuality = origYQuality;
+        SystemConstants.Zone.yOffsetPollen = origOffPollen;
+        SystemConstants.Zone.yOffsetNectar = origOffNectar;
         TuningHub.INSTANCE.markStopped();
     }
 
@@ -244,7 +272,13 @@ public class MechanismTuner extends OpMode {
             handle(cmd);
         }
 
-        boolean anythingMoving = intakeSys != null && !"OFF".equals(intakeMode);
+        if (breakIn) {
+            updateBreakIn(now, slow);
+        } else if (slow) {
+            readIntakeAmps();
+        }
+
+        boolean anythingMoving = breakIn || (intakeSys != null && !"OFF".equals(intakeMode));
         for (Wheel w : wheels) {
             w.update(now);
             anythingMoving |= w.mode != MODE_OFF;
@@ -257,7 +291,9 @@ public class MechanismTuner extends OpMode {
                     + " s - everything stopped.";
         }
 
-        if (intakeSys != null && shootState != 0 && shootFeed) {
+        if (breakIn) {
+            intakeMode = "OFF";
+        } else if (intakeSys != null && shootState != 0 && shootFeed) {
             // As TeleOp: the intake feeds while SHOOT holds, and idles (reject logic still live) otherwise.
             intakeSys.update(false, shootState == 2);
         } else if (intakeSys != null && !"OFF".equals(intakeMode)) {
@@ -327,6 +363,11 @@ public class MechanismTuner extends OpMode {
             telemetry.addData(w.name, MODE_NAMES[w.mode] + "  tgt " + FlyRecorder.r(w.target, 0)
                     + "  vel " + FlyRecorder.r(w.vel, 0));
         }
+        if (breakIn) {
+            telemetry.addData("Intake break-in", (breakInResting ? "REST" : breakInDir > 0 ? "IN" : "OUT")
+                    + "  " + FlyRecorder.r(breakInRunS, 0) + " / " + FlyRecorder.r(breakInTotalS, 0) + " s"
+                    + "  " + FlyRecorder.r(intakeAmps[0], 2) + " / " + FlyRecorder.r(intakeAmps[1], 2) + " A");
+        }
         if (shootState != 0) {
             telemetry.addData("Shoot", (shootState == 2 ? "SHOOT (gate open)" : "TRACK (waiting for speed)")
                     + "  windows left " + shootLeft);
@@ -341,7 +382,7 @@ public class MechanismTuner extends OpMode {
         switch (action) {
             case "fly": case "flyPower": case "step": case "kick": case "ffSweep":
             case "turretPos": case "turretDeg": case "servoPos": case "gatePulse": case "intake":
-            case "shoot":
+            case "shoot": case "breakInStart":
                 return true;
             default:
                 return false;
@@ -368,6 +409,13 @@ public class MechanismTuner extends OpMode {
         }
         if (isMotion(action)) {
             watchdogTripped = false;
+        }
+        if (breakIn && ("intake".equals(action) || "shoot".equals(action) || "breakInStart".equals(action))) {
+            endBreakIn("interrupted by " + action);
+        }
+        if ("breakInStart".equals(action) && shootState != 0) {
+            message = "REFUSED breakInStart: stop the shoot sequence first.";
+            return;
         }
         if (shootState != 0 && endsShoot(action)) {
             endShoot("interrupted by " + action);
@@ -647,6 +695,101 @@ public class MechanismTuner extends OpMode {
                 }
                 break;
 
+            case "breakInStart": {
+                if (intakeMotors[0] == null && intakeMotors[1] == null) {
+                    message = "Break-in unavailable: no intakeLeft / intakeRight motor.";
+                    break;
+                }
+                breakInPower = clamp(num(c, "power", breakInPower), 0.05, 1);
+                breakInFlipS = clamp(num(c, "flipS", breakInFlipS), 0, 3600);
+                breakInRestS = clamp(num(c, "restS", breakInRestS), 0, 60);
+                breakInTotalS = clamp(num(c, "totalS", breakInTotalS), 1, 7200);
+                breakInStallA = clamp(num(c, "stallA", breakInStallA), 0.5, 20);
+                breakInStallS = clamp(num(c, "stallS", breakInStallS), 0.2, 10);
+                if (intakeSys != null && !"OFF".equals(intakeMode)) {
+                    stopIntake();
+                }
+                intakeMode = "OFF";
+                long now = System.nanoTime();
+                breakIn = true;
+                breakInResting = false;
+                breakInDir = 1;
+                breakInFlips = 0;
+                breakInRunS = 0;
+                breakInLastNs = now;
+                breakInPhaseNs = now;
+                breakInStallSinceNs = 0;
+                breakInEnd = "";
+                intakeMaxAmps[0] = 0;
+                intakeMaxAmps[1] = 0;
+                setIntakePower(breakInPower);
+                message = "Intake break-in started: power " + FlyRecorder.r(breakInPower, 2) + ", "
+                        + FlyRecorder.r(breakInTotalS / 60, 1) + " min"
+                        + (breakInFlipS > 0 ? ", reversing every " + FlyRecorder.r(breakInFlipS, 0) + " s." : ".");
+                break;
+            }
+            case "breakInStop":
+                if (breakIn) {
+                    endBreakIn("stopped from the dashboard");
+                }
+                message = "Intake break-in stopped.";
+                break;
+
+            case "zoneCell": {
+                int[][] map = zoneMap(c.get("map"));
+                int x = (int) num(c, "x", -1), y = (int) num(c, "y", -1);
+                if (map == null || y < 0 || y >= map.length || map[y] == null || x < 0 || x >= map[y].length) {
+                    message = "zoneCell: map=pollen|nectar and x, y inside the grid.";
+                    break;
+                }
+                map[y][x] = num(c, "v", 1) != 0 ? 1 : 0;
+                message = "Zone " + c.get("map") + " cell (" + x + ", " + y + ") = " + map[y][x]
+                        + " (live; restored on STOP unless exported).";
+                break;
+            }
+            case "zoneFill": {
+                int v = num(c, "v", 0) != 0 ? 1 : 0;
+                String which = c.get("map") == null ? "both" : c.get("map");
+                for (String m : new String[]{"pollen", "nectar"}) {
+                    if (!"both".equals(which) && !m.equals(which)) continue;
+                    int[][] map = zoneMap(m);
+                    if (map == null) continue;
+                    for (int[] row : map) {
+                        if (row != null) Arrays.fill(row, v);
+                    }
+                }
+                message = "Zone " + which + " filled with " + v + ".";
+                break;
+            }
+            case "zoneCopy": {
+                String from = c.get("from");
+                int[][] src = zoneMap(from);
+                if (src == null) {
+                    message = "zoneCopy: from=pollen|nectar.";
+                    break;
+                }
+                int[][] copy = copyMap(src);
+                if ("pollen".equals(from)) SystemConstants.Zone.mapNectar = copy;
+                else SystemConstants.Zone.mapPollen = copy;
+                message = "Zone " + from + " copied to the other map.";
+                break;
+            }
+            case "zoneSize": {
+                int nx = (int) clamp(num(c, "x", SystemConstants.Zone.xQuality), 1, 48);
+                int ny = (int) clamp(num(c, "y", SystemConstants.Zone.yQuality), 1, 48);
+                SystemConstants.Zone.mapPollen = resizeMap(SystemConstants.Zone.mapPollen, nx, ny);
+                SystemConstants.Zone.mapNectar = resizeMap(SystemConstants.Zone.mapNectar, nx, ny);
+                SystemConstants.Zone.xQuality = nx;
+                SystemConstants.Zone.yQuality = ny;
+                message = "Zone grid resized to " + nx + " x " + ny + " cells.";
+                break;
+            }
+            case "zoneOffsets":
+                SystemConstants.Zone.yOffsetPollen = (int) Math.round(num(c, "pollen", SystemConstants.Zone.yOffsetPollen));
+                SystemConstants.Zone.yOffsetNectar = (int) Math.round(num(c, "nectar", SystemConstants.Zone.yOffsetNectar));
+                message = "Zone shooter offsets applied live.";
+                break;
+
             default:
                 message = "UNKNOWN COMMAND: \"" + action + "\" - nothing was done.";
                 break;
@@ -661,10 +804,136 @@ public class MechanismTuner extends OpMode {
             w.cancelTests();
             w.off();
         }
+        if (breakIn) {
+            endBreakIn("everything stopped");
+        }
         if (intakeSys != null) {
             stopIntake();
         }
         intakeMode = "OFF";
+    }
+
+    private void updateBreakIn(long now, boolean slow) {
+        double dt = (now - breakInLastNs) / 1e9;
+        breakInLastNs = now;
+        double phaseS = (now - breakInPhaseNs) / 1e9;
+        if (breakInResting) {
+            if (phaseS >= breakInRestS) {
+                breakInResting = false;
+                breakInDir = -breakInDir;
+                breakInFlips++;
+                breakInPhaseNs = now;
+                setIntakePower(breakInDir * breakInPower);
+            }
+        } else {
+            breakInRunS += dt;
+            if (breakInRunS >= breakInTotalS) {
+                endBreakIn("finished");
+                message = "Intake break-in finished: " + FlyRecorder.r(breakInRunS / 60, 1) + " min, "
+                        + breakInFlips + " reversals, peak " + FlyRecorder.r(intakeMaxAmps[0], 2) + " / "
+                        + FlyRecorder.r(intakeMaxAmps[1], 2) + " A.";
+                return;
+            }
+            if (breakInFlipS > 0 && phaseS >= breakInFlipS) {
+                breakInResting = breakInRestS > 0;
+                breakInPhaseNs = now;
+                if (breakInResting) {
+                    setIntakePower(0);
+                } else {
+                    breakInDir = -breakInDir;
+                    breakInFlips++;
+                    setIntakePower(breakInDir * breakInPower);
+                }
+            }
+        }
+        if (slow) {
+            readIntakeAmps();
+            boolean over = !breakInResting && Math.max(intakeAmps[0], intakeAmps[1]) > breakInStallA;
+            if (!over) {
+                breakInStallSinceNs = 0;
+            } else if (breakInStallSinceNs == 0) {
+                breakInStallSinceNs = now;
+            } else if ((now - breakInStallSinceNs) / 1e9 >= breakInStallS) {
+                endBreakIn("STALL: over " + FlyRecorder.r(breakInStallA, 1) + " A for "
+                        + FlyRecorder.r(breakInStallS, 1) + " s");
+                message = "Intake break-in STOPPED - current over " + FlyRecorder.r(breakInStallA, 1)
+                        + " A (" + FlyRecorder.r(intakeAmps[0], 2) + " / " + FlyRecorder.r(intakeAmps[1], 2)
+                        + " A). Check for a jam before restarting.";
+            }
+        }
+    }
+
+    private void endBreakIn(String why) {
+        breakIn = false;
+        breakInResting = false;
+        breakInEnd = why;
+        setIntakePower(0);
+    }
+
+    private void setIntakePower(double p) {
+        for (DcMotorEx m : intakeMotors) {
+            if (m != null) {
+                m.setPower(p);
+            }
+        }
+    }
+
+    private void readIntakeAmps() {
+        for (int i = 0; i < 2; i++) {
+            if (intakeMotors[i] == null) continue;
+            try {
+                intakeAmps[i] = intakeMotors[i].getCurrent(CurrentUnit.AMPS);
+                if (breakIn) intakeMaxAmps[i] = Math.max(intakeMaxAmps[i], intakeAmps[i]);
+            } catch (RuntimeException e) {
+                intakeAmps[i] = Double.NaN;
+            }
+        }
+    }
+
+    private static int[][] zoneMap(String name) {
+        if ("pollen".equals(name)) return SystemConstants.Zone.mapPollen;
+        if ("nectar".equals(name)) return SystemConstants.Zone.mapNectar;
+        return null;
+    }
+
+    private static int[][] copyMap(int[][] map) {
+        if (map == null) return null;
+        int[][] out = new int[map.length][];
+        for (int i = 0; i < map.length; i++) {
+            out[i] = map[i] == null ? new int[0] : map[i].clone();
+        }
+        return out;
+    }
+
+    private static int[][] resizeMap(int[][] map, int nx, int ny) {
+        int[][] out = new int[ny][nx];
+        if (map == null) return out;
+        for (int y = 0; y < Math.min(ny, map.length); y++) {
+            if (map[y] == null) continue;
+            System.arraycopy(map[y], 0, out[y], 0, Math.min(nx, map[y].length));
+        }
+        return out;
+    }
+
+    private static String mapJson(int[][] map) {
+        StringBuilder sb = new StringBuilder("[");
+        if (map != null) {
+            for (int y = 0; y < map.length; y++) {
+                if (y > 0) sb.append(',');
+                sb.append('[');
+                int[] row = map[y] == null ? new int[0] : map[y];
+                for (int x = 0; x < row.length; x++) {
+                    if (x > 0) sb.append(',');
+                    sb.append(row[x]);
+                }
+                sb.append(']');
+            }
+        }
+        return sb.append(']').toString();
+    }
+
+    private static String mapSource(int[][] map) {
+        return mapJson(map).replace('[', '{').replace(']', '}').replace(",", ", ");
     }
 
     /** The shipped intake has no stop; with a null alliance its reject branch cannot fire. */
@@ -1674,6 +1943,30 @@ public class MechanismTuner extends OpMode {
                 .append("\",\"alliance\":\"").append(alliance)
                 .append("\",\"brakeMs\":").append(FlyRecorder.r(SystemConstants.Intake.REVERSE_BRAKE_MS, 1)).append('}');
 
+        sb.append(",\"breakIn\":{\"ok\":").append(intakeMotors[0] != null || intakeMotors[1] != null)
+                .append(",\"running\":").append(breakIn)
+                .append(",\"resting\":").append(breakInResting)
+                .append(",\"dir\":").append(breakInDir)
+                .append(",\"runS\":").append(FlyRecorder.r(breakInRunS, 1))
+                .append(",\"totalS\":").append(FlyRecorder.r(breakInTotalS, 1))
+                .append(",\"power\":").append(FlyRecorder.r(breakInPower, 3))
+                .append(",\"flipS\":").append(FlyRecorder.r(breakInFlipS, 1))
+                .append(",\"restS\":").append(FlyRecorder.r(breakInRestS, 2))
+                .append(",\"stallA\":").append(FlyRecorder.r(breakInStallA, 2))
+                .append(",\"stallS\":").append(FlyRecorder.r(breakInStallS, 2))
+                .append(",\"flips\":").append(breakInFlips)
+                .append(",\"amps\":[").append(nanToNull(intakeAmps[0], 2)).append(',').append(nanToNull(intakeAmps[1], 2))
+                .append("],\"maxAmps\":[").append(FlyRecorder.r(intakeMaxAmps[0], 2)).append(',').append(FlyRecorder.r(intakeMaxAmps[1], 2))
+                .append("],\"end\":\"").append(TuningHub.esc(breakInEnd)).append("\"}");
+
+        sb.append(",\"zone\":{\"x\":").append(SystemConstants.Zone.xQuality)
+                .append(",\"y\":").append(SystemConstants.Zone.yQuality)
+                .append(",\"field\":").append(SystemConstants.Zone.FIELD_SIZE)
+                .append(",\"offPollen\":").append(SystemConstants.Zone.yOffsetPollen)
+                .append(",\"offNectar\":").append(SystemConstants.Zone.yOffsetNectar)
+                .append(",\"pollen\":").append(mapJson(SystemConstants.Zone.mapPollen))
+                .append(",\"nectar\":").append(mapJson(SystemConstants.Zone.mapNectar)).append('}');
+
         sb.append(",\"color\":{\"ok\":").append(color != null)
                 .append(",\"hasDistance\":").append(colorDistance != null)
                 .append(",\"stream\":").append(colorStream)
@@ -1756,6 +2049,13 @@ public class MechanismTuner extends OpMode {
         out.add(new String[]{cc, "BLUE_OVER_RED", trim(SystemConstants.ColorCheck.BLUE_OVER_RED)});
         out.add(new String[]{cc, "MAX_DIST_CM", trim(SystemConstants.ColorCheck.MAX_DIST_CM)});
         out.add(new String[]{in, "REVERSE_BRAKE_MS", trim(SystemConstants.Intake.REVERSE_BRAKE_MS)});
+        String zn = "zone";
+        out.add(new String[]{zn, "xQuality", Integer.toString(SystemConstants.Zone.xQuality)});
+        out.add(new String[]{zn, "yQuality", Integer.toString(SystemConstants.Zone.yQuality)});
+        out.add(new String[]{zn, "yOffsetPollen", Integer.toString(SystemConstants.Zone.yOffsetPollen)});
+        out.add(new String[]{zn, "yOffsetNectar", Integer.toString(SystemConstants.Zone.yOffsetNectar)});
+        out.add(new String[]{zn, "mapPollen", mapSource(SystemConstants.Zone.mapPollen)});
+        out.add(new String[]{zn, "mapNectar", mapSource(SystemConstants.Zone.mapNectar)});
         for (ServoCal s : servos) {
             for (Map.Entry<String, Double> m : s.marks.entrySet()) {
                 if (m.getValue() != null) {
