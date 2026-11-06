@@ -47,7 +47,6 @@ public class ColorCheck {
         readCache.invalidate();
     }
 
-    /** True when the piece in the intake belongs to the other alliance. No alliance set: never. */
     public boolean reject() {
         if (alliance == null) return false;
         if (readCache.due(SystemConstants.Cache.COLOR_READ_INTERVAL_MS)) {

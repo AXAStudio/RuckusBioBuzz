@@ -56,9 +56,9 @@
 </script>
 
 <div
-  class="flex w-full items-center justify-between gap-2 px-2 py-1 rounded border border-neutral-200 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-900"
+  class="flex flex-wrap w-full items-center justify-between gap-2 px-2 py-1 rounded border border-neutral-200 dark:border-neutral-700 bg-neutral-100 dark:bg-neutral-900"
 >
-  <div class="flex items-center gap-2">
+  <div class="flex flex-wrap min-w-0 items-center gap-2">
     <!-- Drag handle: drop this step into any repeat loop or if block -->
     <span
       role="button"

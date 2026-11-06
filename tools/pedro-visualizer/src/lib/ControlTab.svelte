@@ -2491,7 +2491,7 @@
   on:keydown={handlePathDragCancel}
 />
 
-<div class="flex-1 flex flex-col justify-start items-center gap-2 h-full min-h-0">
+<div class="flex-1 min-w-0 flex flex-col justify-start items-center gap-2 h-full min-h-0">
   <!-- Section tabs: keeps each area one click away instead of one long scroll -->
   <nav
     class="w-full flex flex-wrap gap-1 rounded-lg bg-neutral-50 dark:bg-neutral-900 shadow-md p-1.5"

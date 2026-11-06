@@ -4724,7 +4724,7 @@
 <div
   class="w-screen h-screen pt-20 p-2 flex flex-row justify-center items-center gap-2"
 >
-  <div class="flex h-full justify-center items-center">
+  <div class="flex h-full shrink-0 justify-center items-center">
     <div
       bind:this={twoElement}
       bind:clientWidth={width}
