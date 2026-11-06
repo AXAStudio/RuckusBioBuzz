@@ -9,7 +9,6 @@ import com.bylazar.configurables.annotations.Configurable;
 import com.bylazar.telemetry.PanelsTelemetry;
 import com.bylazar.telemetry.TelemetryManager;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
-import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.Servo;
 
 import java.io.BufferedReader;
@@ -24,7 +23,6 @@ import java.io.FileReader;
  */
 @Config
 @Configurable
-@TeleOp(name = "servoTest", group = "Test")
 public class servoTest extends LinearOpMode {
     public static String SERVO_NAME = "pollenTurretServo";
     public static double position = 0.0;

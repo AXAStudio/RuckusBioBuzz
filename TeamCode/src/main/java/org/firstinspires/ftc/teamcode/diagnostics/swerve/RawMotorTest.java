@@ -5,7 +5,6 @@ import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
 import com.bylazar.configurables.annotations.Configurable;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
-import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorSimple;
 import com.qualcomm.robotcore.util.ElapsedTime;
@@ -24,7 +23,6 @@ import com.qualcomm.robotcore.util.ElapsedTime;
  */
 @Config
 @Configurable
-@TeleOp(name = "Raw Motor Test", group = "Diagnostics")
 public class RawMotorTest extends OpMode {
     public static double POWER = 0;
 

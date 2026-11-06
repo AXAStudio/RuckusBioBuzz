@@ -4,7 +4,6 @@ import org.firstinspires.ftc.teamcode.SystemConstants;
 
 import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
-import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.ColorSensor;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
@@ -49,7 +48,6 @@ import java.util.Map;
  * every actuator stops if no web client has read state or sent a command for
  * {@link #CLIENT_TIMEOUT_MS}.
  */
-@TeleOp(name = "Mechanism Tuner", group = "Diagnostics")
 public class MechanismTuner extends OpMode {
 
     // ------------------------------------------------------------------------- limits

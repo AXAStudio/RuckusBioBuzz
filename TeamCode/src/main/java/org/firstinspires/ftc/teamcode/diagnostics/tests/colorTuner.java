@@ -3,10 +3,8 @@ package org.firstinspires.ftc.teamcode.diagnostics.tests;
 import android.graphics.Color;
 
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
-import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.ColorSensor;
 
-@TeleOp(name = "colorTuner", group = "TeleOp")
 public class colorTuner extends LinearOpMode {
     private ColorSensor colorSensor;
     public static double rThreshRED = 100;

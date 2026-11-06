@@ -1,5 +1,6 @@
 package org.firstinspires.ftc.teamcode.tele;
 
+import org.firstinspires.ftc.teamcode.Config;
 import org.firstinspires.ftc.teamcode.SystemConstants;
 
 import com.acmerobotics.dashboard.FtcDashboard;
@@ -79,7 +80,9 @@ public class TeleOp extends OpMode {
         }
         lastLoopNs = now;
         Pose pose = follower.pose();
-        FieldView.publish(pose, predictor.predictPose());
+        if (Config.telemetryEnabled()) {
+            FieldView.publish(pose, predictor.predictPose());
+        }
         for (LynxModule hub : hubs) {
             hub.clearBulkCache();
         }
@@ -96,7 +99,7 @@ public class TeleOp extends OpMode {
         }
         scoopula.update(gamepad2.left_bumper && gamepad2.right_bumper);
 
-        if (!telemetryCache.due(SystemConstants.Cache.TELEMETRY_INTERVAL_MS)) {
+        if (!Config.telemetryEnabled() || !telemetryCache.due(SystemConstants.Cache.TELEMETRY_INTERVAL_MS)) {
             return;
         }
         out.addData("alliance", alliance);

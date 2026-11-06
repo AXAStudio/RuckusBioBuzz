@@ -19,7 +19,6 @@ import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.hardware.lynx.LynxNackException;
 import com.qualcomm.hardware.lynx.commands.core.LynxGetADCCommand;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
-import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.AnalogInput;
 import com.qualcomm.robotcore.hardware.CRServo;
 import com.qualcomm.robotcore.hardware.DcMotor;
@@ -73,7 +72,6 @@ import java.util.Map;
  * says whether a rising encoder reading means counter-clockwise pod rotation. The dashboard asks
  * the operator to watch one pod turn and answer once.
  */
-@TeleOp(name = "Swerve Bring-Up", group = "Diagnostics")
 public class SwerveBringUp extends OpMode {
 
     // ---------------------------------------------------------------- tuning knobs

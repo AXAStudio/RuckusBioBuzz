@@ -11,7 +11,6 @@ import com.pedropathing.utils.Utils;
 import com.qualcomm.hardware.gobilda.GoBildaPinpointDriver;
 import com.qualcomm.hardware.lynx.LynxModule;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
-import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.util.ElapsedTime;
@@ -69,7 +68,6 @@ import java.util.Locale;
  * X toggles X-lock, BACK toggles field-oriented (turning it on captures the current heading as
  * field forward, same as ticking the dashboard box).
  */
-@TeleOp(name = "Dashboard Drive (bring-up parity)", group = "Diagnostics")
 public class DashboardDriveTeleOp extends OpMode {
 
     private static final int POD_COUNT = 4;

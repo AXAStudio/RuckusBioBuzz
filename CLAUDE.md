@@ -56,6 +56,9 @@ contradicts the code, the code wins — fix this file in the same commit.**
 
 ```
 TeamCode/src/main/java/org/firstinspires/ftc/teamcode/
+├── Config.java / DevOpModes.java   Config.branch 1 or 2 (comp; 2 also skips telemetry + /field) hides every OpMode except tele/TeleOp and the
+│                                        visualizer autos in auto/ (still @TeleOp/@Autonomous). Dev OpModes carry no annotation:
+│                                        add new ones to DevOpModes.register, or they show in comp
 ├── SystemConstants.java                every mechanism / TeleOp / zone / field tunable, one nested @Config +
 │                                        @Configurable class per subsystem (Dashboard + Panels groups). The
 │                                        mechtune.py export splices here. Pedro stays in pedroPathing/Constants.java,

@@ -538,6 +538,9 @@ public class BlueSoloAuto extends OpMode {
     }
 
     private void updateTelemetry(String state) {
+        if (!org.firstinspires.ftc.teamcode.Config.telemetryEnabled()) {
+            return;
+        }
         Pose pose = follower.pose();
 
         telemetry.addData("State", state);

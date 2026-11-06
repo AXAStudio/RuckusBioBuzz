@@ -8,7 +8,6 @@ import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
 import com.bylazar.configurables.annotations.Configurable;
 import com.qualcomm.hardware.rev.RevHubOrientationOnRobot;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
-import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.IMU;
 import com.qualcomm.robotcore.hardware.PwmControl;
 import com.qualcomm.robotcore.hardware.Servo;
@@ -34,7 +33,6 @@ import org.firstinspires.ftc.robotcore.external.navigation.AngleUnit;
  */
 @Config
 @Configurable
-@TeleOp(name = "servoRangeTest", group = "Test")
 public class servoRangeTest extends LinearOpMode {
     public static String SERVO_NAME = "pollenTurretServo";
     public static double POSITION = 0.0;

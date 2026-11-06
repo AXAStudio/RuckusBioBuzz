@@ -8,14 +8,12 @@ import com.pedropathing.math.Pose;
 import com.pedropathing.paths.Path;
 import com.pedropathing.paths.interpolator.Interpolator;
 import com.pedropathing.utils.Angle;
-import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 
 import org.firstinspires.ftc.teamcode.auto.modules.PathStep;
 import org.firstinspires.ftc.teamcode.helpers.PoseStorage;
 import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 
-@Autonomous(name = "ExampleSwerveAuto", group = "Auto")
 public class ExampleSwerveAuto extends OpMode {
     private static final PathStep POSE_SHOOTING_STEP = new PathStep(56.000, 22.000, 112.000);
     private static final PathStep POSE_INTAKE_1_STEP = new PathStep(8.205, 34.947, 0.000);

@@ -10,7 +10,6 @@ import com.pedropathing.math.Pose;
 import com.pedropathing.paths.Path;
 import com.pedropathing.paths.PathSegment;
 import com.pedropathing.paths.interpolator.Interpolator;
-import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 
 import java.util.ArrayList;
@@ -23,7 +22,6 @@ import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 
 @Config
 @Configurable
-@Autonomous(name = "Short RED auto", group = "Auto")
 public class shortAutoRed extends OpMode {
     // PathStep fields are editable from FTC Dashboard; paths are built in init(), so edits apply on the next init.
     private static final double NUMBER_INTAKE_TIME = 1500;

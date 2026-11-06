@@ -5,7 +5,6 @@ import org.firstinspires.ftc.teamcode.SystemConstants;
 import com.pedropathing.drivetrain.DrivePowers;
 import com.pedropathing.follower.Follower;
 import com.pedropathing.math.Pose;
-import com.qualcomm.robotcore.eventloop.opmode.Autonomous;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
 import com.qualcomm.robotcore.hardware.ColorSensor;
 import com.qualcomm.robotcore.hardware.DcMotor;
@@ -26,7 +25,6 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
-@Autonomous(name = "PreMatchSystemCheck", group = "Diagnostics")
 public class PreMatchSystemCheck extends OpMode {
     private static final Pose START_POSE = new Pose(0.0, 0.0, 0.0);
     private static final double CHECK_POWER = 0.30;

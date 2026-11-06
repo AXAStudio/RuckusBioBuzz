@@ -6,7 +6,6 @@ import com.acmerobotics.dashboard.FtcDashboard;
 import com.acmerobotics.dashboard.config.Config;
 import com.acmerobotics.dashboard.telemetry.MultipleTelemetry;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
-import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.Servo;
 
 import org.firstinspires.ftc.teamcode.systems.Turret;
@@ -21,7 +20,6 @@ import org.firstinspires.ftc.teamcode.systems.Turret;
  * SWEEP_PERIOD_S seconds instead. Drives during INIT too.
  */
 @Config
-@TeleOp(name = "Turret Servo Test (port 5)", group = "Test")
 public class turretServoTest extends LinearOpMode {
     public static String SERVO_NAME = "pollenTurretServo";
     public static double POSITION = 0.5;

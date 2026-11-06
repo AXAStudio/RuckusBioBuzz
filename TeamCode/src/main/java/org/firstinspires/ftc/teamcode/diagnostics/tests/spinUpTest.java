@@ -1,12 +1,10 @@
 package org.firstinspires.ftc.teamcode.diagnostics.tests;
 
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
-import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
-@TeleOp(name = "SpinUpTest", group = "TeleOp")
 public class spinUpTest extends LinearOpMode {
     private ElapsedTime runtime = new ElapsedTime();
     private DcMotorEx outtake;

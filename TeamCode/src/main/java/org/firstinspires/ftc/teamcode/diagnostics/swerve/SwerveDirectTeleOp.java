@@ -7,7 +7,6 @@ import com.bylazar.configurables.annotations.Configurable;
 import com.pedropathing.drivetrain.DrivePowers;
 import com.pedropathing.revhub.drivetrains.Swerve;
 import com.qualcomm.robotcore.eventloop.opmode.OpMode;
-import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.util.ElapsedTime;
 
@@ -45,7 +44,6 @@ import org.firstinspires.ftc.teamcode.pedroPathing.Constants;
 @Configurable
 // Diagnostics, not "TeleOp": it must not sit in the Driver Station list beside the competition
 // OpMode, where it is one mis-tap from a match.
-@TeleOp(name = "Swerve TeleOp", group = "Diagnostics")
 public class SwerveDirectTeleOp extends OpMode {
     private static final double DEADBAND = 0.05;
     private static final double SLOW_SPEED = 0.35;

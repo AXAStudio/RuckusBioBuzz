@@ -3,7 +3,6 @@ import com.pedropathing.math.Pose;
 import com.pedropathing.revhub.localizers.PinpointLocalizer;
 import com.qualcomm.robotcore.eventloop.opmode.Disabled;
 import com.qualcomm.robotcore.eventloop.opmode.LinearOpMode;
-import com.qualcomm.robotcore.eventloop.opmode.TeleOp;
 import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 
@@ -12,7 +11,6 @@ import org.firstinspires.ftc.teamcode.helpers.Alliance;
 import org.firstinspires.ftc.teamcode.modules.ZoneCheck;
 import org.firstinspires.ftc.vision.VisionPortal;
 
-@TeleOp(name = "Range Test",group = "TeleOp")
 public class rangeTest extends LinearOpMode {
     DcMotorEx nectarTurret;
     DcMotorEx pollenTurret;
