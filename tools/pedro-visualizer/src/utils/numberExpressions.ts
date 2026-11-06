@@ -1032,13 +1032,17 @@ export function buildJavaIdentifierMap(
   return { scalars, poses };
 }
 
+export function javaNumberLiteral(source: string): string {
+  return source.replace(/^0+(?=\d)/, "");
+}
+
 function renderNodeToJava(
   node: ExpressionNode,
   identifiers: JavaIdentifierMap,
 ): string | null {
   switch (node.type) {
     case "number":
-      return node.source;
+      return javaNumberLiteral(node.source);
 
     case "boolean":
       return node.value ? "true" : "false";

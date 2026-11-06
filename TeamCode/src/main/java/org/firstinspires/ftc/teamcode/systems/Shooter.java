@@ -23,6 +23,7 @@ public class Shooter {
     private Gate shooterGate;
 
     private boolean inZone;
+    private boolean forceZone;
     private final PredictiveAiming predictiveAiming;
 
     private enum states {
@@ -47,12 +48,16 @@ public class Shooter {
         intake.setAlliance(alliance) ;
 
     }
+    public void setForceZone(boolean force) {
+        forceZone = force;
+    }
+
     public boolean shooting(){
         return state == states.SHOOT;
     }
 
     public void update() {
-        inZone = zone.inZone(predictiveAiming.predictPose());
+        inZone = forceZone || zone.inZone(predictiveAiming.predictPose());
         flywheel.update(inZone);
 
         switch (state) {
