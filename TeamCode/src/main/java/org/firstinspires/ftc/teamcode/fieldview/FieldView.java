@@ -26,8 +26,6 @@ public final class FieldView {
             .append(",\"px\":").append(predicted.x())
             .append(",\"py\":").append(predicted.y())
             .append(",\"ph\":").append(predicted.heading())
-            .append(",\"inZonePollen\":").append(ZoneCheck.inZone(robot))
-            .append(",\"predInZonePollen\":").append(ZoneCheck.inZone(predicted))
             .append(",\"predictMs\":").append(SystemConstants.PredictiveAiming.PREDICT_MS)
             .append(",\"field\":").append(SystemConstants.Zone.FIELD_SIZE)
             .append(",\"robotL\":").append(SystemConstants.Zone.ROBOT_LENGTH)

@@ -115,7 +115,6 @@ public final class SystemConstants {
     @Config
     @Configurable
     public static class Zone {
-        public static double ZONE_Y = 39;
         public static double FIELD_SIZE = 141.5;
         public static double ROBOT_LENGTH = 18;
         public static double ROBOT_WIDTH = 18;

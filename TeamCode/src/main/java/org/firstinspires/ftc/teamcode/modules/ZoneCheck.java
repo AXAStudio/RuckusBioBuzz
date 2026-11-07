@@ -7,13 +7,15 @@ import org.firstinspires.ftc.teamcode.helpers.Alliance;
 
 public class ZoneCheck {
     private static Alliance alliance;
-    private static ShooterType shooterType;
-    public enum ShooterType{
-        POLLEN, NECTAR
-    }
+    private static int offset;
+    private static int[][] map;
+    private int xQuadrant;
+    private int yQuadrant;
 
-    public ZoneCheck(Alliance alliance, ShooterType shooterType) {
-        ZoneCheck.shooterType = shooterType;
+
+    public ZoneCheck(Alliance alliance, int offset, int[][] map) {
+        this.offset = offset;
+        this.map = map;
         ZoneCheck.alliance = alliance;
     }
 
@@ -21,22 +23,25 @@ public class ZoneCheck {
         ZoneCheck.alliance = alliance;
     }
 
-    public static boolean inZone(Pose pose) {
-        boolean pollen = shooterType == ShooterType.POLLEN;
-        double offset = pollen ? SystemConstants.Zone.yOffsetPollen : SystemConstants.Zone.yOffsetNectar;
-        double x = pose.x() - offset * Math.sin(pose.heading());
-        double y = pose.y() + offset * Math.cos(pose.heading());
+    public boolean inZone(Pose pose) {
+        double x;
+        double y;
         if (alliance == Alliance.BLUE) {
-            x = SystemConstants.Zone.FIELD_SIZE - x;
-            y = SystemConstants.Zone.FIELD_SIZE - y;
+            x = SystemConstants.Zone.FIELD_SIZE - (pose.x() - offset * Math.sin(pose.heading()));
+            y = SystemConstants.Zone.FIELD_SIZE - (pose.y() + offset * Math.cos(pose.heading()));
+        } else {
+            x = pose.x() - offset * Math.sin(pose.heading());
+            y = pose.y() + offset * Math.cos(pose.heading());
         }
-        int[][] map = pollen ? SystemConstants.Zone.mapPollen : SystemConstants.Zone.mapNectar;
-        int xQuad = (int) Math.floor(x / (SystemConstants.Zone.FIELD_SIZE / SystemConstants.Zone.xQuality));
-        int yQuad = (int) Math.floor(y / (SystemConstants.Zone.FIELD_SIZE / SystemConstants.Zone.yQuality));
-        if (map == null || yQuad < 0 || yQuad >= map.length || map[yQuad] == null
-                || xQuad < 0 || xQuad >= map[yQuad].length) {
+        xQuadrant = (int)Math.floor(x / (SystemConstants.Zone.FIELD_SIZE / SystemConstants.Zone.xQuality));
+        yQuadrant = (int)Math.floor(y / (SystemConstants.Zone.FIELD_SIZE / SystemConstants.Zone.yQuality));
+        if (map == null || yQuadrant < 0 || yQuadrant >= map.length || map[yQuadrant] == null
+                || xQuadrant < 0 || xQuadrant >= map[yQuadrant].length) {
             return false;
         }
-        return map[yQuad][xQuad] == 1;
+        return map[yQuadrant][xQuadrant] == 1;
+    }
+    public int[] getZone(){
+        return new int[]{xQuadrant, yQuadrant};
     }
 }

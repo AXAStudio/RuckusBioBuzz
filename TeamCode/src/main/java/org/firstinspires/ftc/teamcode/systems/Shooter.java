@@ -33,7 +33,7 @@ public class Shooter {
 
     public Shooter(HardwareMap hardwareMap, PredictiveAiming predictor, Alliance alliance) {
         hivePosition = new HivePosition();
-        zone = new ZoneCheck(alliance, ZoneCheck.ShooterType.POLLEN);
+        zone = new ZoneCheck(alliance, SystemConstants.Zone.yOffsetPollen, SystemConstants.Zone.mapPollen);
         aiming = new Turret(hardwareMap, predictor, new HivePosition());
         intake = new Intake(hardwareMap);
         flywheel = new Flywheel(hardwareMap, aiming);

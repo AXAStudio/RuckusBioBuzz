@@ -7,6 +7,7 @@ import com.qualcomm.robotcore.hardware.DcMotor;
 import com.qualcomm.robotcore.hardware.DcMotorEx;
 
 import org.firstinspires.ftc.robotcore.external.hardware.camera.WebcamName;
+import org.firstinspires.ftc.teamcode.SystemConstants;
 import org.firstinspires.ftc.teamcode.helpers.Alliance;
 import org.firstinspires.ftc.teamcode.modules.ZoneCheck;
 import org.firstinspires.ftc.vision.VisionPortal;
@@ -28,7 +29,7 @@ public class rangeTest extends LinearOpMode {
         nectarTurret.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
         pollenTurret.setMode(DcMotor.RunMode.STOP_AND_RESET_ENCODER);
         pollenTurret.setMode(DcMotor.RunMode.RUN_WITHOUT_ENCODER);
-        zoneCheck = new ZoneCheck(Alliance.RED, ZoneCheck.ShooterType.POLLEN);
+        zoneCheck = new ZoneCheck(Alliance.RED, SystemConstants.Zone.yOffsetPollen, SystemConstants.Zone.mapPollen);
 
 
         waitForStart();
